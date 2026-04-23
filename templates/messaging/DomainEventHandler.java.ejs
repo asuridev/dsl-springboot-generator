@@ -1,0 +1,55 @@
+package <%= packageName %>.<%= bc %>.application.usecases;
+
+import <%= packageName %>.<%= bc %>.application.ports.MessageBroker;
+import <%= packageName %>.shared.domain.annotations.ApplicationComponent;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
+<% domainEvents.forEach(event => { %>
+import <%= packageName %>.<%= bc %>.application.events.<%= event.integrationEventClassName %>;
+import <%= packageName %>.<%= bc %>.domain.events.<%= event.name %>Event;
+<% }); %>
+
+/**
+ * <%= bcPascal %>DomainEventHandler — Domain Event Bridge
+ *
+ * Connects the internal Spring event bus (ApplicationEventPublisher) with
+ * the external messaging port ({@link MessageBroker}).
+ *
+ * Architecture:
+ *   {Aggregate}RepositoryImpl.save()
+ *     → eventPublisher.publishEvent(domainEvent)        [internal Spring bus]
+ *       → @TransactionalEventListener(AFTER_COMMIT)     [this class]
+ *         → messageBroker.publish*(integrationEvent)    [port — broker-agnostic]
+ *
+ * AFTER_COMMIT guarantees that external events are published only when the
+ * database transaction committed successfully, preventing ghost events from
+ * rolled-back operations.
+ *
+ * Domain Events  (domain/events/)       — internal signals scoped to this BC.
+ * Integration Events (application/events/) — broker-facing projections; changing
+ *   broker technology only requires changing the MessageBroker adapter.
+ */
+@ApplicationComponent
+public class <%= bcPascal %>DomainEventHandler {
+
+    private final MessageBroker messageBroker;
+
+    public <%= bcPascal %>DomainEventHandler(MessageBroker messageBroker) {
+        this.messageBroker = messageBroker;
+    }
+<% domainEvents.forEach(event => { %>
+    /**
+     * Handles {@link <%= event.name %>Event} after the wrapping transaction commits.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void on<%= event.name %>Event(<%= event.name %>Event event) {
+        messageBroker.publish<%= event.integrationEventClassName %>(
+            new <%= event.integrationEventClassName %>(
+<% event.fields.forEach((f, idx) => { %>
+                event.<%= f.name %>()<%= idx < event.fields.length - 1 ? ',' : '' %>
+<% }); %>
+            )
+        );
+    }
+<% }); %>
+}

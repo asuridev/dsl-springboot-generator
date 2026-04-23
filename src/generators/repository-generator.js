@@ -523,12 +523,20 @@ function buildChildToJpaBody(entity, bcYaml) {
 /**
  * Build the Java method body for a RepositoryImpl method.
  */
-function buildImplMethodBody(normalizedMethod, methodReturnType) {
+function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents) {
   const { name, params } = normalizedMethod;
   const paramNames = (params || []).map((p) => p.name).join(', ');
+  const entityParam = params[0]?.name || 'entity';
+
+  if (name === 'save' && hasDomainEvents) {
+    if (methodReturnType === 'void') {
+      return `jpaRepository.save(toJpa(${entityParam}));\n        ${entityParam}.pullDomainEvents().forEach(eventPublisher::publishEvent);`;
+    }
+    return `${methodReturnType} saved = toDomain(jpaRepository.save(toJpa(${entityParam})));\n        ${entityParam}.pullDomainEvents().forEach(eventPublisher::publishEvent);\n        return saved;`;
+  }
 
   if (methodReturnType === 'void') {
-    return `jpaRepository.save(toJpa(${params[0]?.name || 'entity'}));`;
+    return `jpaRepository.save(toJpa(${entityParam}));`;
   }
 
   if (methodReturnType === 'int') {
@@ -551,7 +559,7 @@ function buildImplMethodBody(normalizedMethod, methodReturnType) {
 
 // ─── Import collection for RepositoryImpl ─────────────────────────────────────
 
-function collectImplImports(aggregateName, aggregate, methods, bc, packageName, bcYaml) {
+function collectImplImports(aggregateName, aggregate, methods, bc, packageName, bcYaml, hasDomainEvents) {
   const imports = new Set();
 
   // Always needed
@@ -605,6 +613,11 @@ function collectImplImports(aggregateName, aggregate, methods, bc, packageName, 
 
   // JpaRepository interface
   imports.add(`${packageName}.${bc}.infrastructure.persistence.repositories.${aggregateName}JpaRepository`);
+
+  // ApplicationEventPublisher (domain events)
+  if (hasDomainEvents) {
+    imports.add('org.springframework.context.ApplicationEventPublisher');
+  }
 
   return [...imports].sort();
 }
@@ -672,7 +685,7 @@ function buildJpaRepoInterfaceContext(aggregateName, normalizedMethods, aggregat
   return { packageName, bc, aggregateName, jpaEntityName, customMethods, imports };
 }
 
-function buildRepoImplContext(aggregateName, normalizedMethods, aggregate, bc, packageName, bcYaml) {
+function buildRepoImplContext(aggregateName, normalizedMethods, aggregate, bc, packageName, bcYaml, hasDomainEvents) {
   const jpaEntityName = `${aggregateName}Jpa`;
 
   const methods = normalizedMethods.map((m) => {
@@ -681,7 +694,7 @@ function buildRepoImplContext(aggregateName, normalizedMethods, aggregate, bc, p
       name: p.name,
       javaType: yamlTypeToJava(p.type),
     }));
-    const body = buildImplMethodBody(m, returnType);
+    const body = buildImplMethodBody(m, returnType, hasDomainEvents);
     return { name: m.name, returnType, params, body };
   });
 
@@ -694,7 +707,7 @@ function buildRepoImplContext(aggregateName, normalizedMethods, aggregate, bc, p
     toJpaBody: buildChildToJpaBody(entity, bcYaml),
   }));
 
-  const imports = collectImplImports(aggregateName, aggregate, methods, bc, packageName, bcYaml);
+  const imports = collectImplImports(aggregateName, aggregate, methods, bc, packageName, bcYaml, hasDomainEvents);
 
   return {
     packageName,
@@ -705,6 +718,7 @@ function buildRepoImplContext(aggregateName, normalizedMethods, aggregate, bc, p
     toDomainBody,
     toJpaBody,
     childEntityMappers,
+    hasDomainEvents: !!hasDomainEvents,
     imports,
   };
 }
@@ -736,6 +750,8 @@ async function generateRepositories(bcYaml, config, outputDir) {
       return { ...normalized, derivedFrom: m.derivedFrom };
     });
 
+    const hasDomainEvents = ((bcYaml.domainEvents || {}).published || []).length > 0;
+
     // 1. Domain repository interface
     const ifaceContext = buildRepoInterfaceContext(aggregateName, normalizedMethods, bc, config.packageName, bcYaml);
     const ifacePath = path.join(
@@ -765,7 +781,7 @@ async function generateRepositories(bcYaml, config, outputDir) {
     );
 
     // 3. Repository implementation (adapter)
-    const implContext = buildRepoImplContext(aggregateName, normalizedMethods, aggregate, bc, config.packageName, bcYaml);
+    const implContext = buildRepoImplContext(aggregateName, normalizedMethods, aggregate, bc, config.packageName, bcYaml, hasDomainEvents);
     const implPath = path.join(
       outputDir, 'src', 'main', 'java',
       packagePath, bc,

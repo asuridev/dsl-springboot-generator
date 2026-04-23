@@ -13,9 +13,14 @@ import org.springframework.stereotype.Component;
 public class <%- aggregateName %>RepositoryImpl implements <%- aggregateName %>Repository {
 
     private final <%- aggregateName %>JpaRepository jpaRepository;
-
-    public <%- aggregateName %>RepositoryImpl(<%- aggregateName %>JpaRepository jpaRepository) {
+<% if (hasDomainEvents) { %>
+    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+<% } %>
+    public <%- aggregateName %>RepositoryImpl(<%- aggregateName %>JpaRepository jpaRepository<% if (hasDomainEvents) { %>, org.springframework.context.ApplicationEventPublisher eventPublisher<% } %>) {
         this.jpaRepository = jpaRepository;
+<% if (hasDomainEvents) { %>
+        this.eventPublisher = eventPublisher;
+<% } %>
     }
 
     // ─── Repository methods ───────────────────────────────────────────────────

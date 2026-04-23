@@ -1,0 +1,43 @@
+package <%= packageName %>.<%= moduleName %>.application.events;
+<%
+  const STANDARD_TYPES = new Set(['String','Integer','Long','Double','Float','Boolean','BigDecimal','LocalDate','LocalDateTime','LocalTime','Instant','UUID','Duration','URI']);
+  const needsBigDecimal = eventFields && eventFields.some(f => f.javaType === 'BigDecimal');
+  const needsLocalDate  = eventFields && eventFields.some(f => ['LocalDate','LocalDateTime','LocalTime'].includes(f.javaType));
+  const needsInstant    = eventFields && eventFields.some(f => f.javaType === 'Instant');
+  const needsUUID       = eventFields && eventFields.some(f => f.javaType === 'UUID');
+  const needsDuration   = eventFields && eventFields.some(f => f.javaType === 'Duration');
+  const needsURI        = eventFields && eventFields.some(f => f.javaType === 'URI');
+  const needsList       = eventFields && eventFields.some(f => f.javaType && f.javaType.startsWith('List'));
+  const customTypes     = eventFields
+    ? [...new Set(eventFields.filter(f => f.importHint && !f.javaType.startsWith('List') && !STANDARD_TYPES.has(f.javaType)).map(f => f.importHint))]
+    : [];
+  const listInnerImports = eventFields
+    ? [...new Set(eventFields.filter(f => f.javaType && f.javaType.startsWith('List') && f.innerImportHint).map(f => f.innerImportHint))]
+    : [];
+%>
+<% if (needsBigDecimal) { %>import java.math.BigDecimal;
+<% } %><% if (needsDuration) { %>import java.time.Duration;
+<% } %><% if (needsInstant) { %>import java.time.Instant;
+<% } %><% if (needsLocalDate) { %>import java.time.LocalDate;
+import java.time.LocalDateTime;
+<% } %><% if (needsURI) { %>import java.net.URI;
+<% } %><% if (needsUUID) { %>import java.util.UUID;
+<% } %><% if (needsList) { %>import java.util.List;
+<% } %><% customTypes.forEach(imp => { %>import <%= imp %>;
+<% }); %><% listInnerImports.forEach(imp => { %>import <%= imp %>;
+<% }); %>
+/**
+ * Integration Event — broker-side projection of the {@link <%= packageName %>.<%= moduleName %>.domain.events.<%= eventName %>Event} domain event.
+ *
+ * Intentionally decoupled from the domain event so that changes in broker
+ * technology or serialization format never affect the domain model.
+ * derived_from: domainEvents.published.<%= eventName %>
+ */
+public record <%= integrationEventClassName %>(
+<% if (eventFields && eventFields.length > 0) { %>
+<% eventFields.forEach((field, idx) => { %>  <%- field.javaType %> <%= field.name %><%= idx < eventFields.length - 1 ? ',' : '' %>
+<% }); %>
+<% } else { %>
+  // TODO: Add event fields
+<% } %>
+) {}

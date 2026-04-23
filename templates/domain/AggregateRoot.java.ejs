@@ -9,7 +9,21 @@ package <%- packageName %>.<%= bc %>.domain.aggregate;
  * <%= description.trim().replace(/\n\s*/g, '\n * ') %>
 <% } %> */
 public class <%= name %> {
+<% if (hasDomainEvents) { %>
+    // ─── Domain Events ────────────────────────────────────────────────────────
 
+    private final List<DomainEvent> _domainEvents = new ArrayList<>();
+
+    protected void raise(DomainEvent event) {
+        _domainEvents.add(event);
+    }
+
+    public List<DomainEvent> pullDomainEvents() {
+        List<DomainEvent> events = Collections.unmodifiableList(new ArrayList<>(_domainEvents));
+        _domainEvents.clear();
+        return events;
+    }
+<% } %>
     // ─── Fields ───────────────────────────────────────────────────────────────
     private final UUID id;
 <% fields.forEach(field => { %>    private <%- field.javaType %> <%= field.name %>;

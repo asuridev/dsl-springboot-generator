@@ -1,0 +1,83 @@
+package <%= packageName %>.<%= moduleName %>.infrastructure.rabbitListener;
+
+import <%= packageName %>.<%= moduleName %>.application.commands.<%= commandClassName %>;
+import <%= packageName %>.shared.infrastructure.configurations.useCaseConfig.UseCaseMediator;
+import <%= packageName %>.shared.infrastructure.eventEnvelope.EventEnvelope;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rabbitmq.client.Channel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+import java.util.Map;
+<% const hasLists = fields && fields.some(f => f.javaType && f.javaType.startsWith('List')); %>
+<% if (hasLists) { %>import java.util.List;
+<% } %>
+<% const needsBigDecimal = fields && fields.some(f => f.javaType === 'BigDecimal'); %>
+<% const needsLocalDate  = fields && fields.some(f => ['LocalDate','LocalDateTime','LocalTime'].includes(f.javaType)); %>
+<% const needsInstant    = fields && fields.some(f => f.javaType === 'Instant'); %>
+<% const needsUUID       = fields && fields.some(f => f.javaType === 'UUID'); %>
+<% if (needsBigDecimal) { %>import java.math.BigDecimal;
+<% } %><% if (needsLocalDate) { %>import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+<% } %><% if (needsInstant) { %>import java.time.Instant;
+<% } %><% if (needsUUID) { %>import java.util.UUID;
+<% } %>
+/**
+ * RabbitMQ listener for queue ${queues.<%= queueKey %>}.
+ * Consumes events produced by: <%= producer %>.
+ * Dispatches to use case: <%= useCase %>.
+ * derived_from: domainEvents.consumed.<%= eventName %>
+ */
+@Component("<%= moduleName %>.<%= listenerClassName %>")
+public class <%= listenerClassName %> {
+
+    private static final Logger log = LoggerFactory.getLogger(<%= listenerClassName %>.class);
+
+    private final UseCaseMediator useCaseMediator;
+    private final ObjectMapper objectMapper;
+
+    public <%= listenerClassName %>(UseCaseMediator useCaseMediator, ObjectMapper objectMapper) {
+        this.useCaseMediator = useCaseMediator;
+        this.objectMapper = objectMapper;
+    }
+
+    @RabbitListener(queues = "${queues.<%= queueKey %>}")
+    public void handle(Message message, Channel channel) throws IOException {
+        long deliveryTag = message.getMessageProperties().getDeliveryTag();
+
+        EventEnvelope<Map<String, Object>> event;
+        try {
+            event = objectMapper.readValue(
+                    message.getBody(),
+                    new TypeReference<EventEnvelope<Map<String, Object>>>() {});
+        } catch (JsonProcessingException e) {
+            log.error("Fatal deserialization error — sending to DLQ: {}", e.getMessage());
+            channel.basicNack(deliveryTag, false, false);
+            return;
+        }
+
+<% (fields || []).forEach(f => { %>
+<%   const listMatch = f.javaType && f.javaType.match(/^List<(.+)>$/); %>
+<%   if (listMatch) { %>
+        <%- f.javaType %> <%= f.name %> = objectMapper.convertValue(
+                event.data().get("<%= f.name %>"),
+                objectMapper.getTypeFactory().constructCollectionType(List.class, <%= listMatch[1] %>.class));
+<%   } else { %>
+        <%- f.javaType %> <%= f.name %> = objectMapper.convertValue(event.data().get("<%= f.name %>"), <%- f.javaType %>.class);
+<%   } %>
+<% }); %>
+        useCaseMediator.dispatch(new <%= commandClassName %>(
+<% (fields || []).forEach((f, i) => { %>
+                <%= f.name %><%= i < fields.length - 1 ? ',' : '' %>
+<% }); %>
+        ));
+        channel.basicAck(deliveryTag, false);
+    }
+}

@@ -1,0 +1,15 @@
+package <%= packageName %>.<%= moduleName %>.application.ports;
+<% events.forEach(event => { %>
+import <%= packageName %>.<%= moduleName %>.application.events.<%= event.integrationEventClassName %>;
+<% }); %>
+/**
+ * MessageBroker — output port (secondary port) for asynchronous messaging.
+ *
+ * Decouples the application layer from any specific broker technology.
+ * Implementations live in infrastructure/adapters/rabbitmqMessageBroker/.
+ */
+public interface MessageBroker {
+<% events.forEach(event => { %>
+  void publish<%= event.integrationEventClassName %>(<%= event.integrationEventClassName %> event);
+<% }); %>
+}

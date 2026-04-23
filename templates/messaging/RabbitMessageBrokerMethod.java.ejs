@@ -1,0 +1,9 @@
+  @Override
+  public void publish<%= integrationEventClassName %>(<%= integrationEventClassName %> event) {
+    EventEnvelope<<%= integrationEventClassName %>> envelope = EventEnvelope.of(
+      <%= topicNameCamel %>RoutingKey,
+      event,
+      MDC.get("correlationId")
+    );
+    rabbitTemplate.convertAndSend(exchange, <%= topicNameCamel %>RoutingKey, envelope);
+  }

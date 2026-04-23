@@ -160,7 +160,7 @@ async function generateBaseProject(config, system, outputDir) {
       await renderAndWrite(
         path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'rabbitmq.yaml.ejs'),
         path.join(paramDir, 'rabbitmq.yaml'),
-        {}
+        { topology: null }
       );
     }
 
@@ -209,6 +209,12 @@ async function generateBaseProject(config, system, outputDir) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'shared', 'domain', 'FullAuditableEntity.java.ejs'),
     path.join(sharedDomainDir, 'FullAuditableEntity.java'),
+    { packageName }
+  );
+
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'shared', 'domain', 'DomainEvent.java.ejs'),
+    path.join(sharedDomainDir, 'DomainEvent.java'),
     { packageName }
   );
 
@@ -304,4 +310,29 @@ async function generateBaseProject(config, system, outputDir) {
   );
 }
 
-module.exports = { generateBaseProject };
+// ─── RabbitMQ topology YAML ───────────────────────────────────────────────────
+
+/**
+ * Re-renders all four rabbitmq.yaml parameter files, appending the
+ * broker topology (exchanges, queues, routing-keys) derived from the BCs.
+ *
+ * This is intentionally a separate step run AFTER all BC processing so that
+ * the complete topology is available before writing the files.
+ *
+ * @param {{ exchanges, queues, routingKeys }} topology
+ * @param {{ packageName, systemName }} config
+ * @param {string} outputDir
+ */
+async function generateRabbitMQTopologyYaml(topology, config, outputDir) {
+  const resourcesDir = path.join(outputDir, 'src', 'main', 'resources');
+  for (const env of ['local', 'develop', 'test', 'production']) {
+    const paramDir = path.join(resourcesDir, 'parameters', env);
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'rabbitmq.yaml.ejs'),
+      path.join(paramDir, 'rabbitmq.yaml'),
+      { topology }
+    );
+  }
+}
+
+module.exports = { generateBaseProject, generateRabbitMQTopologyYaml };

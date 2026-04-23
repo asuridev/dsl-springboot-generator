@@ -64,7 +64,7 @@ function parseMethodSignature(sig) {
 }
 
 // ─── Helper: try to detect state transition for a full-implementation UC ──────
-// Returns { statusField, enumType, targetValue } or null
+// Returns { statusField, enumType, targetValue, emits } or null
 function detectStateTransition(ucId, aggregate, bcEnums) {
   const statusFields = (aggregate.properties || []).filter((p) =>
     (bcEnums || []).some((e) => e.name === p.type)
@@ -75,7 +75,7 @@ function detectStateTransition(ucId, aggregate, bcEnums) {
     for (const valueObj of enumDef.values || []) {
       for (const t of valueObj.transitions || []) {
         if (t && t.triggeredBy && t.triggeredBy.startsWith(ucId + ' ')) {
-          return { statusField: field.name, enumType: field.type, targetValue: t.to };
+          return { statusField: field.name, enumType: field.type, targetValue: t.to, emits: t.emits || null };
         }
       }
     }
@@ -84,7 +84,7 @@ function detectStateTransition(ucId, aggregate, bcEnums) {
 }
 
 // ─── Helper: compute the body string for a business method ───────────────────
-function computeMethodBody(uc, sig, aggregate, bcEnums, bcName) {
+function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents) {
   const scaffoldBody =
     `// TODO: implement business logic — ver ${bcName}-flows.md\n        throw new UnsupportedOperationException("Not implemented yet");`;
 
@@ -96,7 +96,19 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName) {
   if (params.length === 0) {
     const transition = detectStateTransition(uc.id, aggregate, bcEnums);
     if (transition) {
-      return `this.${transition.statusField} = this.${transition.statusField}.transitionTo(${transition.enumType}.${transition.targetValue});`;
+      let body = `this.${transition.statusField} = this.${transition.statusField}.transitionTo(${transition.enumType}.${transition.targetValue});`;
+      if (transition.emits && publishedEvents && publishedEvents.length > 0) {
+        const event = publishedEvents.find((e) => e.name === transition.emits);
+        if (event) {
+          const aggregateCamelId = aggregate.name.charAt(0).toLowerCase() + aggregate.name.slice(1) + 'Id';
+          const args = (event.payload || []).map((p) => {
+            if (p.name === aggregateCamelId) return 'this.getId()';
+            return `this.get${p.name.charAt(0).toUpperCase() + p.name.slice(1)}()`;
+          });
+          body += `\n        raise(new ${event.name}Event(${args.join(', ')}));`;
+        }
+      }
+      return body;
     }
     // No transition detected → scaffold
     return scaffoldBody;
@@ -170,7 +182,7 @@ function isEnumType(type, bcYaml) {
 }
 
 // ─── Helper: build imports for an aggregate class ────────────────────────────
-function buildImports(aggregate, bcYaml, config, businessMethods) {
+function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvents) {
   const bc = bcYaml.bc;
   const pkg = config.packageName;
   const imports = new Set();
@@ -207,6 +219,17 @@ function buildImports(aggregate, bcYaml, config, businessMethods) {
     imports.add('import java.util.ArrayList;');
     for (const entity of aggregate.entities) {
       imports.add(`import ${pkg}.${bc}.domain.entity.${entity.name};`);
+    }
+  }
+
+  // Domain events infrastructure
+  if (publishedEvents && publishedEvents.length > 0) {
+    imports.add('import java.util.List;');
+    imports.add('import java.util.ArrayList;');
+    imports.add('import java.util.Collections;');
+    imports.add(`import ${pkg}.shared.domain.DomainEvent;`);
+    for (const event of publishedEvents) {
+      imports.add(`import ${pkg}.${bc}.domain.events.${event.name}Event;`);
     }
   }
 
@@ -289,6 +312,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
 
   const bcEnums = bcYaml.enums || [];
   const useCases = bcYaml.useCases || [];
+  const publishedEvents = (bcYaml.domainEvents || {}).published || [];
 
   for (const aggregate of aggregates) {
     // ── 1. Build scalar fields (from YAML properties, excluding id and audit) ──
@@ -398,7 +422,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
       }));
 
       const returnType = resolveReturnType(sig.returnType, aggregate.name);
-      const body = computeMethodBody(uc, sig, aggregate, bcEnums, bc);
+      const body = computeMethodBody(uc, sig, aggregate, bcEnums, bc, publishedEvents);
 
       businessMethods.push({
         name: sig.name,
@@ -410,7 +434,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
     }
 
     // ── 6. Build imports (after businessMethods so param types are included) ──
-    const imports = buildImports(aggregate, bcYaml, config, businessMethods);
+    const imports = buildImports(aggregate, bcYaml, config, businessMethods, publishedEvents);
 
     // ── 7. Render aggregate root ───────────────────────────────────────────────
     const context = {
@@ -420,6 +444,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
       description: aggregate.description || '',
       hasAudit: !!aggregate.auditable,
       hasSoftDelete: !!aggregate.softDelete,
+      hasDomainEvents: publishedEvents.length > 0,
       hasChildEntities: childEntities.length > 0,
       imports,
       fields: scalarFields,

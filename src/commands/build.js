@@ -6,7 +6,7 @@ const ora = require('ora');
 const logger = require('../utils/logger');
 const { configExists, readConfig, writeConfig } = require('../utils/config-manager');
 const { readSystemYaml, validateArchDirectory } = require('../utils/system-yaml-reader');
-const { generateBaseProject } = require('../generators/base-project-generator');
+const { generateBaseProject, generateRabbitMQTopologyYaml } = require('../generators/base-project-generator');
 const { generateEnums } = require('../generators/enum-generator');
 const { generateValueObjects } = require('../generators/value-object-generator');
 const { generateAggregates } = require('../generators/aggregate-generator');
@@ -14,7 +14,7 @@ const { generateJpaEntities } = require('../generators/jpa-entity-generator');
 const { generateRepositories } = require('../generators/repository-generator');
 const { generateApplicationLayer } = require('../generators/application-generator');
 const { generateControllerLayer } = require('../generators/controller-generator');
-const { generateMessagingLayer, generateSharedRabbitConfig } = require('../generators/messaging-generator');
+const { generateMessagingLayer, generateSharedRabbitConfig, buildRabbitMQTopology } = require('../generators/messaging-generator');
 const { readBcYaml } = require('../utils/bc-yaml-reader');
 const { readOpenApiYaml, readAsyncApiYaml } = require('../utils/arch-yaml-reader');
 
@@ -114,59 +114,41 @@ async function buildCommand() {
       throw err;
     }
 
-    // ── 5. Per-BC domain layer generation (SP-3) ───────────────────────────
-    const domainSpinner = ora('Generating domain layer…').start();
-    let domainCount = 0;
+    // ── 5. Load all BC YAMLs once — shared across remaining steps ──────────
+    const allBcYamls = [];
     for (const bc of system.boundedContexts) {
-      let bcYaml;
       try {
-        bcYaml = await readBcYaml(bc.name);
+        allBcYamls.push(await readBcYaml(bc.name));
       } catch (err) {
         logger.warn(`Skipping ${bc.name}: ${err.message}`);
-        continue;
       }
+    }
 
+    // ── 6. Per-BC domain layer generation (SP-3) ───────────────────────────
+    const domainSpinner = ora('Generating domain layer…').start();
+    for (const bcYaml of allBcYamls) {
       await generateEnums(bcYaml, resolvedConfig, outputDir);
       await generateValueObjects(bcYaml, resolvedConfig, outputDir);
       await generateAggregates(bcYaml, resolvedConfig, outputDir);
-      domainCount++;
     }
-    domainSpinner.succeed(`Domain layer generated for ${domainCount} bounded context(s)`);
+    domainSpinner.succeed(`Domain layer generated for ${allBcYamls.length} bounded context(s)`);
 
-    // ── 6. Per-BC infrastructure layer generation (SP-4) ───────────────────
+    // ── 7. Per-BC infrastructure layer generation (SP-4) ───────────────────
     const infraSpinner = ora('Generating infrastructure layer…').start();
-    let infraCount = 0;
-    for (const bc of system.boundedContexts) {
-      let bcYaml;
-      try {
-        bcYaml = await readBcYaml(bc.name);
-      } catch (err) {
-        continue; // already warned in domain pass
-      }
-
+    for (const bcYaml of allBcYamls) {
       await generateJpaEntities(bcYaml, resolvedConfig, outputDir);
       await generateRepositories(bcYaml, resolvedConfig, outputDir);
-      infraCount++;
     }
-    infraSpinner.succeed(`Infrastructure layer generated for ${infraCount} bounded context(s)`);
+    infraSpinner.succeed(`Infrastructure layer generated for ${allBcYamls.length} bounded context(s)`);
 
-    // ── 7. Per-BC application layer generation (SP-5) ──────────────────────
+    // ── 8. Per-BC application layer generation (SP-5) ──────────────────────
     const appSpinner = ora('Generating application layer…').start();
-    let appCount = 0;
-    for (const bc of system.boundedContexts) {
-      let bcYaml;
-      try {
-        bcYaml = await readBcYaml(bc.name);
-      } catch (err) {
-        continue; // already warned in domain pass
-      }
-
+    for (const bcYaml of allBcYamls) {
       await generateApplicationLayer(bcYaml, resolvedConfig, outputDir);
-      appCount++;
     }
-    appSpinner.succeed(`Application layer generated for ${appCount} bounded context(s)`);
+    appSpinner.succeed(`Application layer generated for ${allBcYamls.length} bounded context(s)`);
 
-    // ── 8. Shared RabbitMQ config (SP-6b) ───────────────────────────────────
+    // ── 9. Shared RabbitMQ config bean (SP-6b) ──────────────────────────────
     const rabbitSpinner = ora('Generating shared RabbitMQ configuration…').start();
     try {
       await generateSharedRabbitConfig(resolvedConfig, outputDir);
@@ -176,39 +158,45 @@ async function buildCommand() {
       throw err;
     }
 
-    // ── 9. Per-BC REST controllers + messaging (SP-6a, SP-6c) ───────────────
+    // ── 10. Per-BC REST controllers + messaging (SP-6a, SP-6c) ──────────────
     const integrationSpinner = ora('Generating integration layer…').start();
     let controllerCount = 0;
-    let publisherCount = 0;
-    for (const bc of system.boundedContexts) {
-      let bcYaml;
-      try {
-        bcYaml = await readBcYaml(bc.name);
-      } catch (err) {
-        continue;
-      }
-
+    let messagingCount = 0;
+    for (const bcYaml of allBcYamls) {
       // REST controllers
       try {
-        const openApiDoc = await readOpenApiYaml(bc.name);
+        const openApiDoc = await readOpenApiYaml(bcYaml.bc);
         const count = await generateControllerLayer(bcYaml, openApiDoc, resolvedConfig, outputDir);
         controllerCount += count;
       } catch (err) {
-        logger.warn(`Skipping controllers for ${bc.name}: ${err.message}`);
+        logger.warn(`Skipping controllers for ${bcYaml.bc}: ${err.message}`);
       }
 
-      // Messaging (event publishers)
+      // Messaging (integration events + port + adapter + listeners)
       try {
-        const asyncApiDoc = await readAsyncApiYaml(bc.name);
-        if (asyncApiDoc) {
-          const { publisherCount: pc } = await generateMessagingLayer(bcYaml, asyncApiDoc, resolvedConfig, outputDir);
-          publisherCount += pc;
-        }
+        const asyncApiDoc = await readAsyncApiYaml(bcYaml.bc);
+        const { integrationEventCount: iec, listenerCount: lc } =
+          await generateMessagingLayer(bcYaml, asyncApiDoc, resolvedConfig, outputDir);
+        messagingCount += iec + lc;
       } catch (err) {
-        logger.warn(`Skipping messaging for ${bc.name}: ${err.message}`);
+        logger.warn(`Skipping messaging for ${bcYaml.bc}: ${err.message}`);
       }
     }
-    integrationSpinner.succeed(`Integration layer generated: ${controllerCount} controller(s), ${publisherCount} publisher(s)`);
+    integrationSpinner.succeed(`Integration layer generated: ${controllerCount} controller(s), ${messagingCount} messaging artifact(s)`);
+
+    // ── 11. RabbitMQ topology YAML (exchanges / queues / routing-keys) ───────
+    const topologySpinner = ora('Generating RabbitMQ topology parameters…').start();
+    try {
+      const topology = buildRabbitMQTopology(allBcYamls);
+      await generateRabbitMQTopologyYaml(topology, resolvedConfig, outputDir);
+      topologySpinner.succeed(
+        `RabbitMQ topology written: ${topology.exchanges.length} exchange(s), ` +
+        `${topology.queues.length} queue(s), ${topology.routingKeys.length} routing-key(s)`
+      );
+    } catch (err) {
+      topologySpinner.fail(`RabbitMQ topology generation failed: ${err.message}`);
+      throw err;
+    }
 
     console.log('');
     logger.success('Build complete!');

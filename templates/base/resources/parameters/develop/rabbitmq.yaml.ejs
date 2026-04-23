@@ -13,3 +13,18 @@ spring:
           enabled: true
           max-attempts: 3
           initial-interval: 1500
+<% if (topology && topology.exchanges.length > 0) { %>
+exchanges:
+<% topology.exchanges.forEach(e => { %>  <%- e.key %>: <%- e.value %>
+<% }); %>
+<% } %>
+<% if (topology && topology.queues.length > 0) { %>
+queues:
+<% topology.queues.forEach(q => { %>  <%- q.key %>: <%- q.value %>
+<% }); %>
+<% } %>
+<% if (topology && topology.routingKeys.length > 0) { %>
+routing-keys:
+<% topology.routingKeys.forEach(rk => { %>  <%- rk.key %>: <%- rk.value %>
+<% }); %>
+<% } %>

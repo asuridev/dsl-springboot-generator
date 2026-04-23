@@ -1,6 +1,7 @@
 package <%= packageName %>.<%= moduleName %>.domain.events;
 
-<% imports.forEach(function(imp) { %> import <%= imp %>; <% }); %>
+import <%= packageName %>.shared.domain.DomainEvent;
+<% imports.forEach(function(imp) { %>import <%= imp %>;<% }); %>
 
 /**
  * Domain event: <%= eventName %>.
@@ -10,4 +11,4 @@ public record <%= eventName %>Event(
 <% fields.forEach(function(f, i) { %>
         <%- f.type %> <%= f.name %><% if (i < fields.length - 1) { %>,<% } %>
 <% }); %>
-) {}
+) implements DomainEvent {}

@@ -1,7 +1,6 @@
 package <%= packageName %>.shared.infrastructure.configurations.rabbitmqConfig;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.amqp.core.TopicExchange;
 import org.springframework.amqp.rabbit.config.SimpleRabbitListenerContainerFactory;
 import org.springframework.amqp.rabbit.connection.ConnectionFactory;
 import org.springframework.amqp.rabbit.core.RabbitAdmin;
@@ -11,15 +10,15 @@ import org.springframework.amqp.support.converter.MessageConverter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * Shared RabbitMQ infrastructure configuration.
+ *
+ * Exchange and queue declarations are managed per-module in their own
+ * adapter packages to keep configuration co-located with business behaviour.
+ * This class only provides the infrastructure beans required by all modules.
+ */
 @Configuration
 public class RabbitMQConfig {
-
-    public static final String EXCHANGE_NAME = "<%= exchange %>";
-
-    @Bean
-    public TopicExchange domainEventsExchange() {
-        return new TopicExchange(EXCHANGE_NAME, true, false);
-    }
 
     @Bean
     public MessageConverter jsonMessageConverter(ObjectMapper objectMapper) {

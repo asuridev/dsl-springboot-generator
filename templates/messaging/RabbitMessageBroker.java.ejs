@@ -1,0 +1,44 @@
+package <%= packageName %>.<%= moduleName %>.infrastructure.adapters.rabbitmqMessageBroker;
+<% events.forEach(event => { %>
+import <%= packageName %>.<%= moduleName %>.application.events.<%= event.integrationEventClassName %>;
+<% }); %>
+import <%= packageName %>.<%= moduleName %>.application.ports.MessageBroker;
+import <%= packageName %>.shared.infrastructure.eventEnvelope.EventEnvelope;
+import org.slf4j.MDC;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+
+/**
+ * <%= modulePascalCase %>RabbitMessageBroker — RabbitMQ adapter implementing {@link MessageBroker}.
+ *
+ * Exchange and routing keys are resolved at runtime from parameters/{env}/rabbitmq.yaml
+ * via @Value bindings, so no hardcoded strings are present here.
+ * derived_from: domainEvents.published (all entries)
+ */
+@Component("<%= moduleCamelCase %>RabbitMessageBroker")
+public class <%= modulePascalCase %>RabbitMessageBroker implements MessageBroker {
+
+  @Value("${exchanges.<%= moduleName %>}")
+  private String exchange;
+<% events.forEach(event => { %>
+  @Value("${routing-keys.<%= event.topicNameKebab %>}")
+  private String <%= event.topicNameCamel %>RoutingKey;
+<% }); %>
+  private final RabbitTemplate rabbitTemplate;
+
+  public <%= modulePascalCase %>RabbitMessageBroker(RabbitTemplate rabbitTemplate) {
+    this.rabbitTemplate = rabbitTemplate;
+  }
+<% events.forEach(event => { %>
+  @Override
+  public void publish<%= event.integrationEventClassName %>(<%= event.integrationEventClassName %> event) {
+    EventEnvelope<<%= event.integrationEventClassName %>> envelope = EventEnvelope.of(
+      <%= event.topicNameCamel %>RoutingKey,
+      event,
+      MDC.get("correlationId")
+    );
+    rabbitTemplate.convertAndSend(exchange, <%= event.topicNameCamel %>RoutingKey, envelope);
+  }
+<% }); %>
+}
