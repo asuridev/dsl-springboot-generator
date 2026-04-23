@@ -52,6 +52,9 @@ async function readSystemYaml() {
         entities: agg.entities || [],
       })),
     })),
+    infrastructure: doc.infrastructure || {},
+    integrations: doc.integrations || [],
+    externalSystems: doc.externalSystems || [],
   };
 }
 

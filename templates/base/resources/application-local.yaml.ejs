@@ -1,0 +1,7 @@
+spring:
+  config:
+    import:
+      - "classpath:parameters/local/db.yaml"
+      - "classpath:parameters/local/cors.yaml"
+<%- hasMessaging ? '      - "classpath:parameters/local/rabbitmq.yaml"' : '' %>
+<%- hasHttpIntegrations ? '      - "classpath:parameters/local/urls.yaml"' : '' %>

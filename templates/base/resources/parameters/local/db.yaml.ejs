@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/<%= dbName %>
+    username: postgres
+    password: postgres
+    driver-class-name: <%= driverClass %>
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: <%= dialect %>
+
+logging:
+  level:
+    root: INFO
+    <%= packageName %>: DEBUG

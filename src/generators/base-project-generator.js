@@ -6,11 +6,45 @@ const { toPascalCase, toPackagePath, getApplicationClassName } = require('../uti
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
+/** Maps database technology names to JDBC driver class names. */
+const DB_DRIVERS = {
+  postgresql: 'org.postgresql.Driver',
+  mysql:      'com.mysql.cj.jdbc.Driver',
+  h2:         'org.h2.Driver',
+};
+
+/** Maps database technology names to Hibernate dialect class names. */
+const DB_DIALECTS = {
+  postgresql: 'org.hibernate.dialect.PostgreSQLDialect',
+  mysql:      'org.hibernate.dialect.MySQLDialect',
+  h2:         'org.hibernate.dialect.H2Dialect',
+};
+
+/**
+ * Derives HTTP integration entries from system.yaml integrations.
+ * Returns one entry per integration where channel === 'http'.
+ *
+ * @param {object} system — parsed system.yaml (from readSystemYaml)
+ * @returns {Array<{fromBc: string, toService: string, localUrl: string, envVar: string}>}
+ */
+function buildHttpIntegrations(system) {
+  return (system.integrations || []).filter((i) => i.channel === 'http').map((i) => {
+    const toName = i.to;
+    // Convert kebab-case name to SCREAMING_SNAKE for env var: payment-gateway → PAYMENT_GATEWAY_URL
+    const envVar = toName.toUpperCase().replace(/-/g, '_') + '_URL';
+    // Derive a service key name: payment-gateway → payment-gateway-service
+    const toService = `${toName}-service`;
+    const localUrl = `https://api.${toName}.example.com`;
+    return { fromBc: i.from, toService, localUrl, envVar };
+  });
+}
+
 /**
  * Generates the base Spring Boot project structure:
  *   - build.gradle / settings.gradle
  *   - Application.java (main class)
- *   - application.yaml
+ *   - application.yaml + application-{env}.yaml (4 profiles)
+ *   - parameters/{env}/*.yaml (db, cors, rabbitmq, urls per environment)
  *   - Shared infrastructure: custom exceptions, domain base classes, global exception handler
  *
  * @param {object} config
@@ -18,10 +52,19 @@ const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
  * @param {string} config.javaVersion       — e.g. "21"
  * @param {string} config.springBootVersion — e.g. "3.3.x"
  * @param {string} config.systemName        — e.g. "canasta-shop"
- * @param {string} outputDir                — absolute path to the output root (e.g. /cwd/canasta-shop)
+ * @param {object} system                   — parsed system.yaml (from readSystemYaml)
+ * @param {string} outputDir                — absolute path to the output root
  */
-async function generateBaseProject(config, outputDir) {
+async function generateBaseProject(config, system, outputDir) {
   const { packageName, javaVersion, springBootVersion, systemName } = config;
+
+  // ── Derive infrastructure metadata from system.yaml ──────────────────────
+  const dbTech        = (system.infrastructure && system.infrastructure.database && system.infrastructure.database.technology) || 'postgresql';
+  const driverClass   = DB_DRIVERS[dbTech]  || DB_DRIVERS.postgresql;
+  const dialect       = DB_DIALECTS[dbTech] || DB_DIALECTS.postgresql;
+  const hasMessaging  = !!(system.infrastructure && system.infrastructure.messageBroker && system.infrastructure.messageBroker.technology === 'rabbitmq');
+  const httpIntegrations    = buildHttpIntegrations(system);
+  const hasHttpIntegrations = httpIntegrations.length > 0;
 
   // Derive artifact id from system name (kebab-case)
   const artifactId = systemName;
@@ -71,13 +114,65 @@ async function generateBaseProject(config, outputDir) {
     { packageName, applicationClassName, systemName }
   );
 
-  // ── application.yaml ─────────────────────────────────────────────────────
+  // ── application.yaml (base — profile-agnostic) ──────────────────────────
+
+  const dbName = artifactId.replace(/-/g, '_');
+  const envTemplateVars = { artifactId, packageName, dbName, driverClass, dialect, hasMessaging, hasHttpIntegrations, httpIntegrations };
 
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'resources', 'application.yaml.ejs'),
     path.join(resourcesDir, 'application.yaml'),
     { artifactId }
   );
+
+  // ── application-{env}.yaml (Spring profile configs) ───────────────────────
+
+  for (const env of ['local', 'develop', 'test', 'production']) {
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'base', 'resources', `application-${env}.yaml.ejs`),
+      path.join(resourcesDir, `application-${env}.yaml`),
+      { hasMessaging, hasHttpIntegrations }
+    );
+  }
+
+  // ── parameters/{env}/*.yaml (environment-specific parameter files) ────────
+
+  for (const env of ['local', 'develop', 'test', 'production']) {
+    const paramDir = path.join(resourcesDir, 'parameters', env);
+    await fs.ensureDir(paramDir);
+
+    // db.yaml
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'db.yaml.ejs'),
+      path.join(paramDir, 'db.yaml'),
+      envTemplateVars
+    );
+
+    // cors.yaml (static, no template vars but still run through EJS for consistency)
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'cors.yaml.ejs'),
+      path.join(paramDir, 'cors.yaml'),
+      {}
+    );
+
+    // rabbitmq.yaml (only when system uses RabbitMQ)
+    if (hasMessaging) {
+      await renderAndWrite(
+        path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'rabbitmq.yaml.ejs'),
+        path.join(paramDir, 'rabbitmq.yaml'),
+        {}
+      );
+    }
+
+    // urls.yaml (only when system has HTTP integrations)
+    if (hasHttpIntegrations) {
+      await renderAndWrite(
+        path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'urls.yaml.ejs'),
+        path.join(paramDir, 'urls.yaml'),
+        { httpIntegrations }
+      );
+    }
+  }
 
   // ── Shared: custom exceptions ─────────────────────────────────────────────
 

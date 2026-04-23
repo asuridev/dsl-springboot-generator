@@ -107,7 +107,7 @@ async function buildCommand() {
     // ── 4. Generate base project (gradle + shared infra) ───────────────────
     const baseSpinner = ora('Generating base project structure…').start();
     try {
-      await generateBaseProject(resolvedConfig, outputDir);
+      await generateBaseProject(resolvedConfig, system, outputDir);
       baseSpinner.succeed('Base project structure generated');
     } catch (err) {
       baseSpinner.fail(`Base project generation failed: ${err.message}`);

@@ -1,0 +1,4 @@
+<% httpIntegrations.forEach(function(integration) { %>
+<%= integration.fromBc %>:
+  <%= integration.toService %>.base-url: ${<%= integration.envVar %>}
+<% }); %>

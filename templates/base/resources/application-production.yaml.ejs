@@ -1,0 +1,11 @@
+spring:
+  config:
+    import:
+      - "classpath:parameters/production/db.yaml"
+      - "classpath:parameters/production/cors.yaml"
+<%- hasMessaging ? '      - "classpath:parameters/production/rabbitmq.yaml"' : '' %>
+<%- hasHttpIntegrations ? '      - "classpath:parameters/production/urls.yaml"' : '' %>
+
+springdoc:
+  swagger-ui:
+    enabled: false
