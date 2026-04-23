@@ -48,11 +48,20 @@ async function generateBaseProject(config, outputDir) {
     { artifactId }
   );
 
-  // ── Gradle wrapper wrapper stub ───────────────────────────────────────────
-  // Write a minimal gradlew launcher note (actual wrapper must be generated
-  // by `gradle wrapper` or copied from a reference project).
+  // ── Gradle wrapper files ──────────────────────────────────────────────────
+  // Copy gradle-wrapper.jar and gradle-wrapper.properties from templates/base/wrapper/
   const fs = require('fs-extra');
-  await fs.ensureDir(path.join(outputDir, 'gradle', 'wrapper'));
+  const wrapperSrc = path.join(TEMPLATES_DIR, 'base', 'wrapper');
+  const wrapperDest = path.join(outputDir, 'gradle', 'wrapper');
+  await fs.ensureDir(wrapperDest);
+  await fs.copy(wrapperSrc, wrapperDest, { overwrite: true });
+
+  // ── gradlew + gradlew.bat → project root ──────────────────────────────────
+  await fs.copy(path.join(TEMPLATES_DIR, 'base', 'gradle', 'gradlew'),     path.join(outputDir, 'gradlew'),     { overwrite: true });
+  await fs.copy(path.join(TEMPLATES_DIR, 'base', 'gradle', 'gradlew.bat'), path.join(outputDir, 'gradlew.bat'), { overwrite: true });
+
+  // ── .gitignore → project root ─────────────────────────────────────────────
+  await fs.copy(path.join(TEMPLATES_DIR, 'base', 'git', '.gitignore'), path.join(outputDir, '.gitignore'), { overwrite: true });
 
   // ── Application.java ─────────────────────────────────────────────────────
 

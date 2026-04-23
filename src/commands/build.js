@@ -5,7 +5,7 @@ const inquirer = require('inquirer');
 const ora = require('ora');
 const logger = require('../utils/logger');
 const { configExists, readConfig, writeConfig } = require('../utils/config-manager');
-const { readSystemYaml } = require('../utils/system-yaml-reader');
+const { readSystemYaml, validateArchDirectory } = require('../utils/system-yaml-reader');
 const { generateBaseProject } = require('../generators/base-project-generator');
 const { generateEnums } = require('../generators/enum-generator');
 const { generateValueObjects } = require('../generators/value-object-generator');
@@ -65,6 +65,14 @@ async function promptConfig(systemName) {
  */
 async function buildCommand() {
   try {
+    // ── 0. Pre-flight: validate arch/ structure in CWD ─────────────────────
+    try {
+      await validateArchDirectory(process.cwd());
+    } catch (err) {
+      logger.error(err.message);
+      process.exit(1);
+    }
+
     // ── 1. Read system.yaml to discover BCs and system name ────────────────
     const spinner = ora('Reading system architecture…').start();
     let system;
@@ -92,7 +100,7 @@ async function buildCommand() {
     const resolvedConfig = { ...config, springBootVersion: resolvedSpringBootVersion };
 
     // ── 3. Determine output directory ───────────────────────────────────────
-    const outputDir = path.join(process.cwd(), system.name);
+    const outputDir = process.cwd();
     logger.info(`Output directory: ${outputDir}`);
     console.log('');
 

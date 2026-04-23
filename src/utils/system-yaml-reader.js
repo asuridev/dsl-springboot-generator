@@ -55,4 +55,33 @@ async function readSystemYaml() {
   };
 }
 
-module.exports = { readSystemYaml };
+/**
+ * Validates that the given directory is a valid DSL project root.
+ * Checks for the presence of arch/, arch/system/, and arch/system/system.yaml.
+ * Throws a descriptive Error if any check fails.
+ * @param {string} cwd
+ */
+async function validateArchDirectory(cwd) {
+  const archDir = path.join(cwd, 'arch');
+  if (!(await fs.pathExists(archDir)) || !(await fs.stat(archDir)).isDirectory()) {
+    throw new Error(
+      `No se encontró el directorio 'arch/' en:\n  ${cwd}\nEjecuta el comando desde la raíz de tu proyecto DSL.`
+    );
+  }
+
+  const systemDir = path.join(archDir, 'system');
+  if (!(await fs.pathExists(systemDir)) || !(await fs.stat(systemDir)).isDirectory()) {
+    throw new Error(
+      `El directorio 'arch/system/' no existe dentro de:\n  ${archDir}\nEste directorio es requerido para la generación.`
+    );
+  }
+
+  const systemYaml = path.join(systemDir, 'system.yaml');
+  if (!(await fs.pathExists(systemYaml))) {
+    throw new Error(
+      `No se encontró 'arch/system/system.yaml' en:\n  ${systemDir}\nEste archivo es requerido para la generación.`
+    );
+  }
+}
+
+module.exports = { readSystemYaml, validateArchDirectory };
