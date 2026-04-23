@@ -1,0 +1,31 @@
+package <%= packageName %>.shared.domain;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.MappedSuperclass;
+import java.time.Instant;
+
+/**
+ * Extension of AuditableEntity that also tracks soft-deletion timestamp.
+ * Used when aggregate has auditable: true (and optionally softDelete: true).
+ *
+ * Extends AuditableEntity (createdAt + updatedAt) and adds deletedAt for soft-delete support.
+ * The deletedAt column is nullable — null means the record is active.
+ */
+@MappedSuperclass
+public abstract class FullAuditableEntity extends AuditableEntity {
+
+    @Column(name = "deleted_at", nullable = true)
+    private Instant deletedAt;
+
+    public Instant getDeletedAt() {
+        return deletedAt;
+    }
+
+    public void setDeletedAt(Instant deletedAt) {
+        this.deletedAt = deletedAt;
+    }
+
+    public boolean isDeleted() {
+        return deletedAt != null;
+    }
+}

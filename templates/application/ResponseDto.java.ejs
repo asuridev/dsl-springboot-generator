@@ -1,0 +1,13 @@
+package <%= packageName %>.<%= moduleName %>.application.dtos;
+<% if (imports && imports.length > 0) { %>
+<% imports.forEach(imp => { %>import <%- imp %>;
+<% }); %>
+<% } %>
+public record <%= aggregateName %>ResponseDto(
+<%- fields.map((f, i) => {
+  const ann = (f.annotations && f.annotations.length > 0) ? f.annotations.join(' ') + ' ' : '';
+  const comma = i < fields.length - 1 ? ',' : '';
+  return '    ' + ann + f.type + ' ' + f.name + comma;
+}).join('\n') %>
+) {
+}

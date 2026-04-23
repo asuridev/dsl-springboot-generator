@@ -1,0 +1,47 @@
+package <%- packageName %>.<%= bc %>.domain.enums;
+<% if (hasTransitions) { %>
+import <%- packageName %>.shared.domain.customExceptions.InvalidStateTransitionException;
+import java.util.Map;
+import java.util.Set;
+<% } %>
+/**
+ * <%= name %>
+<% if (description) { %> * <%= description.trim().replace(/\n\s*/g, '\n * ') %>
+<% } %> */
+public enum <%= name %> {
+<% values.forEach((value, index) => { %>    <%= value %><%= index < values.length - 1 ? ',' : (hasTransitions ? ';' : '') %>
+<% }); %>
+<% if (hasTransitions) { %>
+<%
+    // Build transition map: { STATE: [TARGET, ...] } — initialise every state (including terminals)
+    const transitionMap = {};
+    values.forEach(v => { transitionMap[v] = []; });
+    transitions.forEach(t => {
+        if (!transitionMap[t.from]) transitionMap[t.from] = [];
+        if (!transitionMap[t.from].includes(t.to)) transitionMap[t.from].push(t.to);
+    });
+    const entries = Object.entries(transitionMap);
+%>
+    private static final Map<<%= name %>, Set<<%= name %>>> VALID_TRANSITIONS = Map.ofEntries(
+<% entries.forEach(([state, targets], idx) => { %>        Map.entry(<%= name %>.<%= state %>, Set.of(<%= targets.map(t => `${name}.${t}`).join(', ') %>))<%= idx < entries.length - 1 ? ',' : '' %>
+<% }); %>    );
+
+    /**
+     * Returns {@code true} if transitioning from the current state to {@code target} is allowed.
+     */
+    public boolean canTransitionTo(<%= name %> target) {
+        return VALID_TRANSITIONS.getOrDefault(this, Set.of()).contains(target);
+    }
+
+    /**
+     * Transitions to {@code target} state.
+     *
+     * @throws InvalidStateTransitionException if the transition is not permitted.
+     */
+    public <%= name %> transitionTo(<%= name %> target) {
+        if (!canTransitionTo(target)) {
+            throw new InvalidStateTransitionException(this.name(), target.name());
+        }
+        return target;
+    }
+<% } %>}

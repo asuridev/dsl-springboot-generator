@@ -1,0 +1,14 @@
+package <%- packageName %>.<%- bc %>.domain.repository;
+
+<% imports.forEach(imp => { %>import <%- imp %>;
+<% }); %>
+
+/**
+ * <%- aggregateName %>Repository — Domain repository port (output port).
+ * Defines the persistence contract for the <%- aggregateName %> aggregate.
+ * Implementations live in the infrastructure layer.
+ */
+public interface <%- aggregateName %>Repository {
+<% methods.forEach(method => { %>
+    <%- method.returnType %> <%- method.name %>(<%- method.params.map(p => p.javaType + ' ' + p.name).join(', ') %>);
+<% }); %>}

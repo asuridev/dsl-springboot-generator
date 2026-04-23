@@ -1,0 +1,53 @@
+package <%= packageName %>.<%= moduleName %>.application.usecases;
+
+import <%= packageName %>.<%= moduleName %>.application.commands.<%= useCaseName %>Command;
+import <%= packageName %>.<%= moduleName %>.domain.repository.<%= repoName %>;
+import <%= packageName %>.shared.domain.annotations.ApplicationComponent;
+import <%= packageName %>.shared.domain.annotations.LogExceptions;
+import <%= packageName %>.shared.domain.interfaces.CommandHandler;
+<% if (fkRepos && fkRepos.length > 0) { %>
+<% fkRepos.forEach(fk => { %>import <%= packageName %>.<%= moduleName %>.domain.repository.<%= fk.repoName %>;
+<% }); %>
+<% } %>
+<% if (imports && imports.length > 0) { %>
+<% imports.forEach(imp => { %>import <%- imp %>;
+<% }); %>
+<% } %>
+import org.springframework.transaction.annotation.Transactional;
+
+@ApplicationComponent
+public class <%= useCaseName %>CommandHandler implements CommandHandler<<%= useCaseName %>Command> {
+
+    private final <%= repoName %> <%= repoFieldName %>;
+<% if (fkRepos && fkRepos.length > 0) { %>
+<% fkRepos.forEach(fk => { %>    private final <%= fk.repoName %> <%= fk.repoFieldName %>;
+<% }); %>
+<% } %>
+<% if (needsMapper) { %>    private final <%= mapperName %> <%= mapperFieldName %>;
+<% } %>
+
+    public <%= useCaseName %>CommandHandler(
+            <%= repoName %> <%= repoFieldName %><% if (fkRepos && fkRepos.length > 0) { %>,
+<% fkRepos.forEach((fk, i) => { %>            <%= fk.repoName %> <%= fk.repoFieldName %><%= i < fkRepos.length - 1 ? ',' : (needsMapper ? ',' : '') %>
+<% }); %><% } %><% if (needsMapper) { %>
+            <%= mapperName %> <%= mapperFieldName %><% } %>) {
+        this.<%= repoFieldName %> = <%= repoFieldName %>;
+<% if (fkRepos && fkRepos.length > 0) { %>
+<% fkRepos.forEach(fk => { %>        this.<%= fk.repoFieldName %> = <%= fk.repoFieldName %>;
+<% }); %>
+<% } %>
+<% if (needsMapper) { %>        this.<%= mapperFieldName %> = <%= mapperFieldName %>;
+<% } %>    }
+
+    @Override
+    @Transactional
+    @LogExceptions
+    public void handle(<%= useCaseName %>Command command) {
+<% if (implementation === 'scaffold') { %>
+        // TODO: implement business logic — ver <%= moduleName %>-flows.md
+        throw new UnsupportedOperationException("Not implemented yet");
+<% } else { %>
+<%- body %>
+<% } %>
+    }
+}

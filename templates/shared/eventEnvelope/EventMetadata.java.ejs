@@ -1,0 +1,24 @@
+package <%= packageName %>.shared.infrastructure.eventEnvelope;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.UUID;
+
+public record EventMetadata(
+    String eventId,
+    String eventType,
+    String timestamp,
+    String correlationId,
+    String source
+) {
+
+    public static EventMetadata create(String eventType, String correlationId) {
+        return new EventMetadata(
+            UUID.randomUUID().toString(),
+            eventType,
+            LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME),
+            correlationId,
+            "<%= projectName %>-api"
+        );
+    }
+}

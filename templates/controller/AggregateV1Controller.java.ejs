@@ -1,0 +1,36 @@
+<%
+const aggPackageName = aggName.charAt(0).toLowerCase() + aggName.slice(1);
+%>
+package <%= packageName %>.<%= moduleName %>.infrastructure.rest.controllers.<%= aggPackageName %>.v1;
+
+<% imports.forEach(function(imp) { %>
+import <%= imp %>;
+<% }); %>
+
+@RestController
+@RequestMapping("<%= requestMapping %>")
+@Slf4j
+@Tag(name = "<%= aggName %>", description = "<%= aggName %> Management API")
+public class <%= controllerName %> {
+
+    private final UseCaseMediator useCaseMediator;
+
+    public <%= controllerName %>(UseCaseMediator useCaseMediator) {
+        this.useCaseMediator = useCaseMediator;
+    }
+<% operations.forEach(function(op) {
+    const pathArg = op.mappingPath ? '"' + op.mappingPath + '"' : '';
+%>
+
+    /**
+     * <%= op.summary %>
+     */
+    @<%- op.httpAnnotation %>(<%- pathArg %>)
+    @ResponseStatus(<%= op.httpStatus %>)
+    @Operation(summary = "<%= op.summary %>")
+    public <%- op.isCommand ? 'void' : op.returnType %> <%= op.methodName %>(<%- op.methodParams %>) {
+        log.info("<%- op.logMessage %>"<%- op.logArgs %>);
+        <%- op.dispatchStatement %>
+    }
+<% }); %>
+}

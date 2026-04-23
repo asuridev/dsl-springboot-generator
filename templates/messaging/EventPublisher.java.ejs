@@ -1,0 +1,25 @@
+package <%= packageName %>.<%= moduleName %>.infrastructure.messaging;
+
+import <%= packageName %>.<%= moduleName %>.domain.events.<%= eventName %>Event;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import org.springframework.stereotype.Component;
+
+@Component
+@Slf4j
+public class <%= eventName %>Publisher {
+
+    private static final String EXCHANGE = "<%= exchange %>";
+    private static final String ROUTING_KEY = "<%= routingKey %>";
+
+    private final RabbitTemplate rabbitTemplate;
+
+    public <%= eventName %>Publisher(RabbitTemplate rabbitTemplate) {
+        this.rabbitTemplate = rabbitTemplate;
+    }
+
+    public void publish(<%= eventName %>Event event) {
+        log.info("Publishing event {} to exchange={} routingKey={}", event, EXCHANGE, ROUTING_KEY);
+        rabbitTemplate.convertAndSend(EXCHANGE, ROUTING_KEY, event);
+    }
+}

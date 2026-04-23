@@ -1,0 +1,10 @@
+package <%= packageName %>.<%= moduleName %>.domain.errors;
+
+import <%= packageName %>.shared.domain.customExceptions.<%= baseException %>;
+
+public class <%= errorType %> extends <%= baseException %> {
+
+    public <%= errorType %>() {
+        super("<%= errorCode %>");
+    }
+}

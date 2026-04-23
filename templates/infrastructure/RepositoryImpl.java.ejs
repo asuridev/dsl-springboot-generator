@@ -1,0 +1,49 @@
+package <%- packageName %>.<%- bc %>.infrastructure.persistence.repositories;
+
+import org.springframework.stereotype.Component;
+<% imports.forEach(imp => { %>import <%- imp %>;
+<% }); %>
+
+/**
+ * <%- aggregateName %>RepositoryImpl — Infrastructure adapter implementing <%- aggregateName %>Repository.
+ * Bridges the domain repository port with Spring Data JPA.
+ * Contains inline mappers: toDomain (JPA → domain) and toJpa (domain → JPA).
+ */
+@Component
+public class <%- aggregateName %>RepositoryImpl implements <%- aggregateName %>Repository {
+
+    private final <%- aggregateName %>JpaRepository jpaRepository;
+
+    public <%- aggregateName %>RepositoryImpl(<%- aggregateName %>JpaRepository jpaRepository) {
+        this.jpaRepository = jpaRepository;
+    }
+
+    // ─── Repository methods ───────────────────────────────────────────────────
+<% methods.forEach(method => { %>
+    @Override
+    public <%- method.returnType %> <%- method.name %>(<%- method.params.map(p => p.javaType + ' ' + p.name).join(', ') %>) {
+        <%- method.body %>
+    }
+<% }); %>
+
+    // ─── Mapper: JPA → Domain ────────────────────────────────────────────────
+
+    private <%- aggregateName %> toDomain(<%- jpaEntityName %> jpa) {
+        <%- toDomainBody %>
+    }
+<% childEntityMappers.forEach(cem => { %>
+    private <%- cem.entityName %> to<%- cem.entityName %>Domain(<%- cem.entityName %>Jpa jpa) {
+        <%- cem.toDomainBody %>
+    }
+<% }); %>
+
+    // ─── Mapper: Domain → JPA ────────────────────────────────────────────────
+
+    private <%- jpaEntityName %> toJpa(<%- aggregateName %> domain) {
+        <%- toJpaBody %>
+    }
+<% childEntityMappers.forEach(cem => { %>
+    private <%- cem.entityName %>Jpa to<%- cem.entityName %>Jpa(<%- cem.entityName %> domain) {
+        <%- cem.toJpaBody %>
+    }
+<% }); %>}

@@ -1,0 +1,44 @@
+package <%- packageName %>.<%= bc %>.domain.entity;
+<% imports.forEach(imp => { %>
+<%- imp %><% }); %>
+
+/**
+ * <%= name %> — Domain Entity (composition)
+ * Owned by and loaded with its aggregate root. No independent repository.
+<% if (immutable) { %> * Immutable: records are insert-only; no updates or deletes on individual entries.
+<% } %><% if (description) { %> *
+ * <%= description.trim().replace(/\n\s*/g, '\n * ') %>
+<% } %> */
+public class <%= name %> {
+
+    // ─── Fields ───────────────────────────────────────────────────────────────
+    private final UUID id;
+<% fields.forEach(field => { %>    private <% if (immutable) { %>final <% } %><%- field.javaType %> <%= field.name %>;
+<% }); %>
+
+    // ─── Full constructor (reconstruction from persistence) ───────────────────
+    public <%= name %>(UUID id<% fields.forEach(field => { %>, <%- field.javaType %> <%= field.name %><% }); %>) {
+        this.id = id;
+<% fields.forEach(field => { %>        this.<%= field.name %> = <%= field.name %>;
+<% }); %>    }
+<% if (!immutable && creationParams.length > 0) { %>
+
+    // ─── Creation constructor (new <%= name %>) ───────────────────────────────
+    public <%= name %>(<% creationParams.forEach((p, idx) => { %><%- p.javaType %> <%= p.name %><%= idx < creationParams.length - 1 ? ', ' : '' %><% }); %>) {
+        this.id = UUID.randomUUID();
+<% creationParams.forEach(p => { %>        this.<%= p.name %> = <%= p.name %>;
+<% }); %>
+<% autoInits.forEach(ai => { %>        this.<%= ai.name %> = <%- ai.value %>;
+<% }); %>    }
+<% } %>
+
+    // ─── Getters ──────────────────────────────────────────────────────────────
+
+    public UUID getId() {
+        return id;
+    }
+<% fields.forEach(field => { %>
+    public <%- field.javaType %> get<%= field.name.charAt(0).toUpperCase() + field.name.slice(1) %>() {
+        return <%= field.name %>;
+    }
+<% }); %>}

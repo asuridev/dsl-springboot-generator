@@ -1,0 +1,27 @@
+package <%= packageName %>.<%= moduleName %>.application.mappers;
+
+import <%= packageName %>.<%= moduleName %>.application.dtos.<%= aggregateName %>ResponseDto;
+import <%= packageName %>.<%= moduleName %>.domain.aggregate.<%= aggregateName %>;
+<% if (imports && imports.length > 0) { %>
+<% imports.forEach(imp => { %>import <%- imp %>;
+<% }); %>
+<% } %>
+import org.springframework.stereotype.Component;
+import java.util.List;
+
+@Component
+public class <%= aggregateName %>ApplicationMapper {
+
+    public <%= aggregateName %>ResponseDto toResponseDto(<%= aggregateName %> domain) {
+        return new <%= aggregateName %>ResponseDto(
+<%- fields.map((f, i) => {
+  const comma = i < fields.length - 1 ? ',' : '';
+  return '            domain.' + f.getter + '()' + comma;
+}).join('\n') %>
+        );
+    }
+
+    public List<<%= aggregateName %>ResponseDto> toResponseDtoList(List<<%= aggregateName %>> list) {
+        return list.stream().map(this::toResponseDto).toList();
+    }
+}

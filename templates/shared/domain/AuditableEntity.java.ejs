@@ -1,0 +1,35 @@
+package <%= packageName %>.shared.domain;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.EntityListeners;
+import jakarta.persistence.MappedSuperclass;
+import java.time.Instant;
+import org.springframework.data.annotation.CreatedDate;
+import org.springframework.data.annotation.LastModifiedDate;
+import org.springframework.data.jpa.domain.support.AuditingEntityListener;
+
+/**
+ * Base class for auditable JPA entities.
+ * Provides automatic tracking of creation and modification timestamps via Spring Data JPA auditing.
+ * Timestamps use Instant (UTC) per BC-YAML-GENERATOR-SPEC §11 (DateTime → Instant).
+ */
+@MappedSuperclass
+@EntityListeners(AuditingEntityListener.class)
+public abstract class AuditableEntity {
+
+    @CreatedDate
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private Instant createdAt;
+
+    @LastModifiedDate
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
+
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+}

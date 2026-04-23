@@ -1,0 +1,47 @@
+package <%- packageName %>.<%= bc %>.domain.valueobject;
+<% imports.forEach(imp => { %>
+<%- imp %><% }); %>
+import java.util.Objects;
+
+/**
+ * <%= name %> — Value Object
+ * Immutable domain value object (pure Java, no Lombok).
+<% if (description) { %> *
+ * <%= description.trim().replace(/\n\s*/g, '\n * ') %>
+<% } %> */
+public final class <%= name %> {
+<% fields.forEach(field => { %>
+    private final <%- field.javaType %> <%= field.name %>;
+<% }); %>
+    public <%= name %>(<% fields.forEach((field, idx) => { %><%- field.javaType %> <%= field.name %><%= idx < fields.length - 1 ? ', ' : '' %><% }); %>) {
+<% fields.forEach(field => { %>        this.<%= field.name %> = <%= field.name %>;
+<% }); %>    }
+
+    // ─── Getters ──────────────────────────────────────────────────────────────
+<% fields.forEach(field => { %>
+    public <%- field.javaType %> get<%= field.name.charAt(0).toUpperCase() + field.name.slice(1) %>() {
+        return <%= field.name %>;
+    }
+<% }); %>
+    // ─── Structural equality ──────────────────────────────────────────────────
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        <%= name %> that = (<%= name %>) o;
+        return <%- fields.map(f => `Objects.equals(${f.name}, that.${f.name})`).join(' &&\n               ') %>;
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(<%= fields.map(f => f.name).join(', ') %>);
+    }
+
+    @Override
+    public String toString() {
+        return "<%= name %>{" +
+<% fields.forEach((field, idx) => { %>               "<%= idx > 0 ? ', ' : '' %><%= field.name %>=" + <%= field.name %> +
+<% }); %>               '}';
+    }
+}

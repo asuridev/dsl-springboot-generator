@@ -1,0 +1,45 @@
+package <%- packageName %>.<%- bc %>.infrastructure.persistence.entities;
+
+import jakarta.persistence.*;
+import lombok.*;
+import java.util.UUID;
+<% imports.forEach(imp => { %>import <%- imp %>;
+<% }); %>
+
+/**
+ * <%- name %>Jpa — JPA Entity for <%- name %> aggregate.
+<% if (description) { %> * <%- description.trim().replace(/\n\s*/g, '\n * ') %>
+<% } %> */
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+@Entity
+@Table(
+    name = "<%- tableName %>"<%
+if (indexes.length > 0) { %>,
+    indexes = {<%
+  indexes.forEach((idx, i) => { %>
+        @Index(name = "<%- idx.name %>", columnList = "<%- idx.columnList %>")<%- i < indexes.length - 1 ? ',' : '' %><%
+  }); %>
+    }<%
+} %>
+)
+<% if (hasSoftDelete) { %>@org.hibernate.annotations.SQLRestriction("deleted_at IS NULL")
+<% } %>public class <%- name %>Jpa<% if (baseClass) { %> extends <%- baseClass %><% } %> {
+
+    @Id
+    @Column(name = "id", nullable = false, updatable = false)
+    private UUID id;
+
+<% fields.forEach(field => { %>    <%- field.columnAnnotation %>
+    private <%- field.javaType %> <%- field.name %>;
+
+<% }); %>
+<% childEntities.forEach(entity => { %>    @<%- entity.immutable ? 'OneToMany(cascade = { CascadeType.PERSIST }, orphanRemoval = false' : 'OneToMany(cascade = CascadeType.ALL, orphanRemoval = true' %>, fetch = FetchType.LAZY)
+    @JoinColumn(name = "<%- entity.joinColumn %>", nullable = false)
+    @Builder.Default
+    private List<<%- entity.jpaName %>> <%- entity.fieldName %> = new ArrayList<>();
+
+<% }); %>}

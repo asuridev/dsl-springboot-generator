@@ -1,0 +1,86 @@
+package <%- packageName %>.<%= bc %>.domain.aggregate;
+<% imports.forEach(imp => { %>
+<%- imp %><% }); %>
+
+/**
+ * <%= name %> — Aggregate Root
+ * Pure domain class (no Lombok, no public setters).
+<% if (description) { %> *
+ * <%= description.trim().replace(/\n\s*/g, '\n * ') %>
+<% } %> */
+public class <%= name %> {
+
+    // ─── Fields ───────────────────────────────────────────────────────────────
+    private final UUID id;
+<% fields.forEach(field => { %>    private <%- field.javaType %> <%= field.name %>;
+<% }); %>
+<% childEntities.forEach(ce => { %>    private <%- ce.javaType %> <%= ce.fieldName %> = new ArrayList<>();
+<% }); %>
+<% if (hasAudit) { %>    private Instant createdAt;
+    private Instant updatedAt;
+<% } %>
+<% if (hasSoftDelete) { %>    private Instant deletedAt;
+<% } %>
+
+    // ─── Full constructor (reconstruction from persistence) ───────────────────
+    public <%= name %>(<% let _ri = 0; %>UUID id<% _ri++; %><% fields.forEach(field => { %>, <%- field.javaType %> <%= field.name %><% _ri++; %><% }); %><% childEntities.forEach(ce => { %>, <%- ce.javaType %> <%= ce.fieldName %><% _ri++; %><% }); %><% if (hasAudit) { %>, Instant createdAt, Instant updatedAt<% } %><% if (hasSoftDelete) { %>, Instant deletedAt<% } %>) {
+        this.id = id;
+<% fields.forEach(field => { %>        this.<%= field.name %> = <%= field.name %>;
+<% }); %>
+<% childEntities.forEach(ce => { %>        this.<%= ce.fieldName %> = new ArrayList<>(<%= ce.fieldName %> != null ? <%= ce.fieldName %> : java.util.Collections.emptyList());
+<% }); %>
+<% if (hasAudit) { %>        this.createdAt = createdAt;
+        this.updatedAt = updatedAt;
+<% } %>
+<% if (hasSoftDelete) { %>        this.deletedAt = deletedAt;
+<% } %>    }
+<% if (creationParams.length > 0 || autoInits.length > 0) { %>
+
+    // ─── Creation constructor (new <%= name %>) ───────────────────────────────
+    public <%= name %>(<% creationParams.forEach((p, idx) => { %><%- p.javaType %> <%= p.name %><%= idx < creationParams.length - 1 ? ', ' : '' %><% }); %>) {
+        this.id = UUID.randomUUID();
+<% creationParams.forEach(p => { %>        this.<%= p.name %> = <%= p.name %>;
+<% }); %>
+<% autoInits.forEach(ai => { %>        this.<%= ai.name %> = <%- ai.value %>;
+<% }); %>    }
+<% } %>
+
+    // ─── Getters ──────────────────────────────────────────────────────────────
+
+    public UUID getId() {
+        return id;
+    }
+<% fields.forEach(field => { %>
+    public <%- field.javaType %> get<%= field.name.charAt(0).toUpperCase() + field.name.slice(1) %>() {
+        return <%= field.name %>;
+    }
+<% }); %>
+<% childEntities.forEach(ce => { %>
+    public <%- ce.javaType %> get<%= ce.fieldName.charAt(0).toUpperCase() + ce.fieldName.slice(1) %>() {
+        return java.util.Collections.unmodifiableList(<%= ce.fieldName %>);
+    }
+<% }); %>
+<% if (hasAudit) { %>
+    public Instant getCreatedAt() {
+        return createdAt;
+    }
+
+    public Instant getUpdatedAt() {
+        return updatedAt;
+    }
+<% } %>
+<% if (hasSoftDelete) { %>
+    public Instant getDeletedAt() {
+        return deletedAt;
+    }
+<% } %>
+<% if (businessMethods.length > 0) { %>
+    // ─── Business methods ─────────────────────────────────────────────────────
+<% businessMethods.forEach(method => { %>
+
+    /** derived_from: <%= method.derivedFrom %> */
+    public <%- method.returnType %> <%= method.name %>(<% method.params.forEach((p, idx) => { %><%- p.javaType %> <%= p.name %><%= idx < method.params.length - 1 ? ', ' : '' %><% }); %>) {
+        <%- method.body %>
+    }
+<% }); %>
+<% } %>}

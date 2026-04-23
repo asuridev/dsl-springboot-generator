@@ -1,0 +1,15 @@
+package <%= packageName %>.<%= moduleName %>.application.commands;
+
+import <%= packageName %>.shared.domain.interfaces.Command;
+<% if (imports && imports.length > 0) { %>
+<% imports.forEach(imp => { %>import <%- imp %>;
+<% }); %>
+<% } %>
+public record <%= useCaseName %>Command(
+<%- fields.map((f, i) => {
+  const ann = (f.annotations && f.annotations.length > 0) ? f.annotations.join(' ') + ' ' : '';
+  const comma = i < fields.length - 1 ? ',' : '';
+  return '    ' + ann + f.type + ' ' + f.name + comma;
+}).join('\n') %>
+) implements Command {
+}

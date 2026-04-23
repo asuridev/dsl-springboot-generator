@@ -1,0 +1,37 @@
+package <%= packageName %>.<%= moduleName %>.application.usecases;
+
+import <%= packageName %>.<%= moduleName %>.application.queries.<%= useCaseName %>Query;
+import <%= packageName %>.<%= moduleName %>.domain.repository.<%= repoName %>;
+import <%= packageName %>.<%= moduleName %>.application.mappers.<%= mapperName %>;
+import <%= packageName %>.shared.domain.annotations.ApplicationComponent;
+import <%= packageName %>.shared.domain.annotations.LogExceptions;
+import <%= packageName %>.shared.domain.interfaces.QueryHandler;
+<% if (imports && imports.length > 0) { %>
+<% imports.forEach(imp => { %>import <%- imp %>;
+<% }); %>
+<% } %>
+import org.springframework.transaction.annotation.Transactional;
+
+@ApplicationComponent
+public class <%= useCaseName %>QueryHandler implements QueryHandler<<%= useCaseName %>Query, <%- returnType %>> {
+
+    private final <%= repoName %> <%= repoFieldName %>;
+    private final <%= mapperName %> <%= mapperFieldName %>;
+
+    public <%= useCaseName %>QueryHandler(<%= repoName %> <%= repoFieldName %>, <%= mapperName %> <%= mapperFieldName %>) {
+        this.<%= repoFieldName %> = <%= repoFieldName %>;
+        this.<%= mapperFieldName %> = <%= mapperFieldName %>;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    @LogExceptions
+    public <%- returnType %> handle(<%= useCaseName %>Query query) {
+<% if (implementation === 'scaffold') { %>
+        // TODO: implement business logic — ver <%= moduleName %>-flows.md
+        throw new UnsupportedOperationException("Not implemented yet");
+<% } else { %>
+<%- body %>
+<% } %>
+    }
+}
