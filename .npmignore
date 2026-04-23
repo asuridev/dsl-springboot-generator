@@ -1,0 +1,6 @@
+.git/
+.agents/
+docs/
+examples/
+*.md
+.gitignore

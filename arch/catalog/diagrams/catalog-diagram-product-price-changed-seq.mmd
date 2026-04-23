@@ -1,0 +1,16 @@
+sequenceDiagram
+    participant Op as Operator
+    participant CatalogAPI as Catalog API
+    participant ProductDomain as Product Domain
+    participant MQ as RabbitMQ
+    participant Orders as orders BC
+
+    Op ->> CatalogAPI: PATCH /products/{id}/price
+    CatalogAPI ->> ProductDomain: updatePrice(newPrice)
+    ProductDomain ->> ProductDomain: verify CAT-RULE-002 (not DISCONTINUED)
+    ProductDomain ->> ProductDomain: create PriceHistory entry (CAT-RULE-009)
+    ProductDomain ->> ProductDomain: update price field
+    ProductDomain -->> CatalogAPI: OK
+    CatalogAPI ->> MQ: publish ProductPriceChanged (catalog.product.price-changed)
+    MQ ->> Orders: ProductPriceChanged consumed - updates CatalogSnapshot price
+    CatalogAPI -->> Op: 204 No Content

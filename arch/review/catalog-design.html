@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>catalog — Design</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <style>
+    body { background: #f5f6f8; }
+    .diagram-wrap {
+      background: #fff;
+      border: 1px solid #dee2e6;
+      border-radius: .5rem;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+      text-align: center;
+    }
+    .seq-wrap { overflow-x: auto; text-align: left; }
+    .diag-target { display: inline-block; max-width: 100%; }
+    .seq-wrap .diag-target { display: block; min-width: 600px; }
+    .diag-error pre {
+      background: #fff8e1; border: 1px solid #ffe082; border-radius: .4rem;
+      padding: 1rem; font-size: .78rem; text-align: left; white-space: pre-wrap; margin: 0;
+    }
+    .diagram-title { color: #495057; font-size: .85rem; font-weight: 600; margin-bottom: .5rem; text-transform: uppercase; letter-spacing: .04em; }
+    .nav-tabs .nav-link { font-size: .9rem; }
+    .loading-spinner { color: #adb5bd; font-size: .85rem; padding: 2rem; }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container-xl d-flex justify-content-between align-items-center flex-wrap gap-2">
+      <div class="d-flex align-items-center gap-3">
+        <a href="index.html" class="text-white-50 text-decoration-none small">&#8592; Dashboard</a>
+        <span class="navbar-brand fw-bold mb-0">catalog — Design</span>
+      </div>
+      <div class="d-flex gap-2"><a href="catalog-openapi.html" class="btn btn-sm btn-outline-success">REST API</a><a href="catalog-asyncapi.html" class="btn btn-sm btn-outline-primary">Events</a></div>
+    </div>
+  </nav>
+
+  <div class="container-xl pb-5">
+    <ul class="nav nav-tabs mb-4" role="tablist">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="tab-overview" data-bs-toggle="tab"
+          data-bs-target="#pane-overview" type="button" role="tab">Overview</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-domain" data-bs-toggle="tab"
+          data-bs-target="#pane-domain" type="button" role="tab">Domain Model</button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-states" data-bs-toggle="tab"
+          data-bs-target="#pane-states" type="button" role="tab">States <span class="badge bg-secondary ms-1">2</span></button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-seq" data-bs-toggle="tab"
+          data-bs-target="#pane-seq" type="button" role="tab">Sequences <span class="badge bg-secondary ms-1">3</span></button>
+      </li>
+    </ul>
+    <div class="tab-content">
+      <div class="tab-pane fade show active" id="pane-overview" role="tabpanel">
+        <div class="diagram-wrap"><div id="diag-0" class="diag-target"></div></div>
+      </div>
+      <div class="tab-pane fade" id="pane-domain" role="tabpanel">
+        <div class="diagram-wrap"><div id="diag-1" class="diag-target"></div></div>
+      </div>
+      <div class="tab-pane fade" id="pane-states" role="tabpanel">
+        <h6 class="diagram-title">Category States</h6><div class="diagram-wrap"><div id="diag-2" class="diag-target"></div></div><h6 class="diagram-title">Product States</h6><div class="diagram-wrap"><div id="diag-3" class="diag-target"></div></div>
+      </div>
+      <div class="tab-pane fade" id="pane-seq" role="tabpanel">
+        <h6 class="diagram-title">Product Activated</h6><div class="diagram-wrap seq-wrap"><div id="diag-4" class="diag-target"></div></div><h6 class="diagram-title">Product Discontinued</h6><div class="diagram-wrap seq-wrap"><div id="diag-5" class="diag-target"></div></div><h6 class="diagram-title">Product Price Changed</h6><div class="diagram-wrap seq-wrap"><div id="diag-6" class="diag-target"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    const DIAGRAMS = [{"id":"diag-0","source":"flowchart LR\r\n    subgraph Actores\r\n        OP([\"Operator\"])\r\n        CU([\"Customer\"])\r\n    end\r\n\r\n    subgraph catalog[\"Bounded Context: catalog\"]\r\n        subgraph Categorias[\"Categorias\"]\r\n            UC01[\"UC-CAT-001 CreateCategory\"]\r\n            UC02[\"UC-CAT-002 UpdateCategory\"]\r\n            UC09[\"UC-CAT-009 DeleteCategory\"]\r\n            UC10[\"UC-CAT-010 DeactivateCategory\"]\r\n            UC11[\"UC-CAT-011 ReactivateCategory\"]\r\n            UC12[\"UC-CAT-012 GetCategoryById\"]\r\n            UC13[\"UC-CAT-013 ListCategories\"]\r\n        end\r\n        subgraph Productos[\"Productos\"]\r\n            UC14[\"UC-CAT-014 CreateProduct\"]\r\n            UC03[\"UC-CAT-003 ActivateProduct\"]\r\n            UC04[\"UC-CAT-004 DiscontinueProduct\"]\r\n            UC05[\"UC-CAT-005 UpdateProductDetails\"]\r\n            UC06[\"UC-CAT-006 UpdateProductPrice\"]\r\n            UC07[\"UC-CAT-007 UpdateProductCategory\"]\r\n            UC08[\"UC-CAT-008 DeleteProduct\"]\r\n            UC17[\"UC-CAT-017 GetProductById\"]\r\n            UC18[\"UC-CAT-018 ListProducts\"]\r\n        end\r\n        subgraph Imagenes[\"Imagenes de Producto\"]\r\n            UC15[\"UC-CAT-015 AddProductImage\"]\r\n            UC16[\"UC-CAT-016 RemoveProductImage\"]\r\n        end\r\n        subgraph Storefront[\"Storefront (Cliente)\"]\r\n            UC19[\"UC-CAT-019 SearchProducts\"]\r\n            UC20[\"UC-CAT-020 GetActiveProductById\"]\r\n        end\r\n    end\r\n\r\n    OP --> UC01\r\n    OP --> UC02\r\n    OP --> UC09\r\n    OP --> UC10\r\n    OP --> UC11\r\n    OP --> UC12\r\n    OP --> UC13\r\n    OP --> UC14\r\n    OP --> UC03\r\n    OP --> UC04\r\n    OP --> UC05\r\n    OP --> UC06\r\n    OP --> UC07\r\n    OP --> UC08\r\n    OP --> UC17\r\n    OP --> UC18\r\n    OP --> UC15\r\n    OP --> UC16\r\n    CU --> UC19\r\n    CU --> UC20\r\n","isSeq":false},{"id":"diag-1","source":"classDiagram\r\n    class Category {\r\n        +Uuid id\r\n        +String name\r\n        +String slug\r\n        +Text description\r\n        +Integer displayOrder\r\n        +CategoryStatus status\r\n        +DateTime createdAt\r\n        +DateTime updatedAt\r\n    }\r\n\r\n    class Product {\r\n        +Uuid id\r\n        +String name\r\n        +String slug\r\n        +Text description\r\n        +String sku\r\n        +Money price\r\n        +Uuid categoryId\r\n        +ProductStatus status\r\n        +DateTime createdAt\r\n        +DateTime updatedAt\r\n    }\r\n\r\n    class ProductImage {\r\n        +Uuid id\r\n        +Url url\r\n        +String altText\r\n        +Integer displayOrder\r\n    }\r\n\r\n    class PriceHistory {\r\n        +Uuid id\r\n        +Money previousPrice\r\n        +Money newPrice\r\n        +DateTime changedAt\r\n    }\r\n\r\n    class Money {\r\n        +Decimal amount\r\n        +String currency\r\n    }\r\n\r\n    class CategoryStatus {\r\n        <<enumeration>>\r\n        ACTIVE\r\n        INACTIVE\r\n    }\r\n\r\n    class ProductStatus {\r\n        <<enumeration>>\r\n        DRAFT\r\n        ACTIVE\r\n        DISCONTINUED\r\n    }\r\n\r\n    Product \"1\" *-- \"0..*\" ProductImage : composition\r\n    Product \"1\" *-- \"0..*\" PriceHistory : composition\r\n    Product \"0..*\" --> \"1\" Category : association\r\n    Product ..> Money : uses\r\n    Category ..> CategoryStatus : uses\r\n    Product ..> ProductStatus : uses\r\n","isSeq":false},{"id":"diag-2","source":"stateDiagram-v2\r\n    [*] --> ACTIVE : UC-CAT-001 CreateCategory\r\n\r\n    ACTIVE --> INACTIVE : UC-CAT-010 DeactivateCategory\r\n    INACTIVE --> ACTIVE : UC-CAT-011 ReactivateCategory\r\n\r\n    ACTIVE : ACTIVE Visible, acepta productos\r\n    INACTIVE : INACTIVE Oculta, productos no asignables\r\n","isSeq":false},{"id":"diag-3","source":"stateDiagram-v2\r\n    [*] --> DRAFT : UC-CAT-014 CreateProduct\r\n\r\n    DRAFT --> ACTIVE : UC-CAT-003 ActivateProduct (CAT-RULE-001)\r\n    ACTIVE --> DISCONTINUED : UC-CAT-004 DiscontinueProduct\r\n\r\n    DRAFT : DRAFT En configuracion, no visible\r\n    ACTIVE : ACTIVE Visible y disponible para compra\r\n    DISCONTINUED : DISCONTINUED Retirado permanentemente\r\n","isSeq":false},{"id":"diag-4","source":"sequenceDiagram\r\n    participant Op as Operator\r\n    participant CatalogAPI as Catalog API\r\n    participant ProductDomain as Product Domain\r\n    participant MQ as RabbitMQ\r\n    participant Inventory as inventory BC\r\n    participant Orders as orders BC\r\n\r\n    Op ->> CatalogAPI: PATCH /products/{id}/activate\r\n    CatalogAPI ->> ProductDomain: activate()\r\n    ProductDomain ->> ProductDomain: verify CAT-RULE-002 (not DISCONTINUED)\r\n    ProductDomain ->> ProductDomain: verify CAT-RULE-001 (category ACTIVE)\r\n    ProductDomain ->> ProductDomain: transition status -> ACTIVE\r\n    ProductDomain -->> CatalogAPI: OK\r\n    CatalogAPI ->> MQ: publish ProductActivated (catalog.product.activated)\r\n    MQ ->> Inventory: ProductActivated consumed\r\n    MQ ->> Orders: ProductActivated consumed\r\n    CatalogAPI -->> Op: 204 No Content\r\n","isSeq":true},{"id":"diag-5","source":"sequenceDiagram\r\n    participant Op as Operator\r\n    participant CatalogAPI as Catalog API\r\n    participant ProductDomain as Product Domain\r\n    participant MQ as RabbitMQ\r\n    participant Inventory as inventory BC\r\n    participant Orders as orders BC\r\n\r\n    Op ->> CatalogAPI: PATCH /products/{id}/discontinue\r\n    CatalogAPI ->> ProductDomain: discontinue()\r\n    ProductDomain ->> ProductDomain: verify CAT-RULE-002 (not already DISCONTINUED)\r\n    ProductDomain ->> ProductDomain: transition status -> DISCONTINUED (terminal)\r\n    ProductDomain -->> CatalogAPI: OK\r\n    CatalogAPI ->> MQ: publish ProductDiscontinued (catalog.product.discontinued)\r\n    MQ ->> Inventory: ProductDiscontinued consumed - closes StockItem\r\n    MQ ->> Orders: ProductDiscontinued consumed - marks product unavailable in CatalogSnapshot\r\n    CatalogAPI -->> Op: 204 No Content\r\n","isSeq":true},{"id":"diag-6","source":"sequenceDiagram\r\n    participant Op as Operator\r\n    participant CatalogAPI as Catalog API\r\n    participant ProductDomain as Product Domain\r\n    participant MQ as RabbitMQ\r\n    participant Orders as orders BC\r\n\r\n    Op ->> CatalogAPI: PATCH /products/{id}/price\r\n    CatalogAPI ->> ProductDomain: updatePrice(newPrice)\r\n    ProductDomain ->> ProductDomain: verify CAT-RULE-002 (not DISCONTINUED)\r\n    ProductDomain ->> ProductDomain: create PriceHistory entry (CAT-RULE-009)\r\n    ProductDomain ->> ProductDomain: update price field\r\n    ProductDomain -->> CatalogAPI: OK\r\n    CatalogAPI ->> MQ: publish ProductPriceChanged (catalog.product.price-changed)\r\n    MQ ->> Orders: ProductPriceChanged consumed - updates CatalogSnapshot price\r\n    CatalogAPI -->> Op: 204 No Content\r\n","isSeq":true}];
+    mermaid.initialize({ theme: 'default' });
+
+    const rendered = new Set();
+
+    async function renderDiagram({ id, source }) {
+      if (rendered.has(id)) return;
+      rendered.add(id);
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.innerHTML = '<span class="loading-spinner">Rendering…</span>';
+      try {
+        const { svg } = await mermaid.render('svg-' + id, source);
+        el.innerHTML = svg;
+      } catch (err) {
+        el.className = 'diag-error';
+        el.innerHTML =
+          '<div class="text-warning small mb-2 fw-semibold">&#9888; Diagram syntax error — raw source:</div>' +
+          '<pre>' + source.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</pre>';
+      }
+    }
+
+    // Render all diagrams in visible tab pane on load
+    async function renderVisible() {
+      for (const d of DIAGRAMS) {
+        const el = document.getElementById(d.id);
+        if (el && el.offsetParent !== null) await renderDiagram(d);
+      }
+    }
+
+    // Re-render when a tab becomes active
+    document.querySelectorAll('[data-bs-toggle="tab"]').forEach((btn) => {
+      btn.addEventListener('shown.bs.tab', () => renderVisible());
+    });
+
+    window.addEventListener('load', renderVisible);
+  </script>
+</body>
+</html>

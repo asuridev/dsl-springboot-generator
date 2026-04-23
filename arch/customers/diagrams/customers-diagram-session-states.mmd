@@ -1,0 +1,7 @@
+stateDiagram-v2
+    [*] --> ACTIVE : UC-CUS-012 Login (creation)
+
+    ACTIVE --> REVOKED : UC-CUS-013 Logout
+
+    ACTIVE : ACTIVE\nSesion valida, token utilizable
+    REVOKED : REVOKED\nSesion invalida, token no aceptado\n(estado terminal)

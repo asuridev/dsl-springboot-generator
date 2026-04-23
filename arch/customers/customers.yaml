@@ -1,0 +1,582 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# BOUNDED CONTEXT: customers
+# Canasta Shop — Paso 2: Diseño Táctico
+# Versión: 1.0.0 | Fecha: 2026-04-23
+# ─────────────────────────────────────────────────────────────────────────────
+
+bc: customers
+type: core
+description: >
+  Manages customer accounts, authentication sessions, and saved delivery
+  addresses. Authoritative source of customer identity and address data
+  for the platform.
+
+
+# ─── ENUMS ───────────────────────────────────────────────────────────────────
+
+enums:
+
+  - name: CustomerStatus
+    description: Lifecycle of a customer account.
+    values:
+      - value: ACTIVE
+        description: Account is active; customer can log in and place orders.
+        transitions:
+          - to: SUSPENDED
+            triggeredBy: UC-CUS-005 SuspendCustomer
+            condition: none
+            emits: null
+
+      - value: SUSPENDED
+        description: Account has been administratively suspended; customer cannot log in.
+        transitions:
+          - to: ACTIVE
+            triggeredBy: UC-CUS-006 ReactivateCustomer
+            condition: none
+            emits: null
+
+  - name: SessionStatus
+    description: Lifecycle of an authenticated session.
+    values:
+      - value: ACTIVE
+        description: Session is valid and can be used to authenticate requests.
+        transitions:
+          - to: REVOKED
+            triggeredBy: UC-CUS-013 Logout
+            condition: none
+            emits: null
+
+      - value: REVOKED
+        description: Session has been explicitly invalidated by the customer via logout.
+        transitions: []
+
+
+# ─── VALUE OBJECTS ───────────────────────────────────────────────────────────
+
+valueObjects: []
+
+
+# ─── AGGREGATES ──────────────────────────────────────────────────────────────
+
+aggregates:
+
+  # ── Customer ───────────────────────────────────────────────────────────────
+  - name: Customer
+    root: Customer
+    auditable: true
+    description: >
+      A registered end consumer on the platform. The central invariant is that
+      each Customer has a unique email address. A Customer owns a collection of
+      saved delivery addresses used during checkout.
+
+    properties:
+      - name: id
+        type: Uuid
+        required: true
+        readOnly: true
+        defaultValue: generated
+        description: Unique identifier of the customer.
+
+      - name: email
+        type: Email
+        required: true
+        unique: true
+        description: Customer login email. Must be unique across all customers.
+
+      - name: firstName
+        type: String(100)
+        required: true
+        description: Customer's first name.
+
+      - name: lastName
+        type: String(100)
+        required: true
+        description: Customer's last name.
+
+      - name: phone
+        type: String(20)
+        required: false
+        description: Optional contact phone number.
+
+      - name: passwordHash
+        type: String
+        required: true
+        internal: true
+        description: >
+          Bcrypt hash of the customer's password. Never exposed in requests or
+          responses — stored in DB only. Derived from the raw password provided
+          at registration.
+
+      - name: status
+        type: CustomerStatus
+        required: true
+        readOnly: true
+        defaultValue: ACTIVE
+        indexed: true
+        description: Account lifecycle status. Set to ACTIVE on registration.
+
+    entities:
+      - name: Address
+        relationship: composition
+        cardinality: oneToMany
+        description: A saved delivery address belonging to this customer.
+        properties:
+          - name: id
+            type: Uuid
+            required: true
+            readOnly: true
+            defaultValue: generated
+            description: Unique identifier of the address.
+
+          - name: label
+            type: String(100)
+            required: false
+            description: Optional customer-assigned label (e.g. "Casa", "Oficina").
+
+          - name: street
+            type: String(300)
+            required: true
+            description: Full street address including number.
+
+          - name: district
+            type: String(100)
+            required: true
+            description: Neighborhood or district.
+
+          - name: city
+            type: String(100)
+            required: true
+            description: City name.
+
+          - name: postalCode
+            type: String(10)
+            required: false
+            description: Optional postal code.
+
+          - name: notes
+            type: Text
+            required: false
+            description: Optional delivery instructions for the driver.
+
+          - name: isDefault
+            type: Boolean
+            required: true
+            description: Whether this is the customer's default delivery address.
+
+    domainRules:
+      - id: CUS-RULE-001
+        type: uniqueness
+        errorCode: EMAIL_ALREADY_REGISTERED
+        description: Email must be unique across all customers.
+
+      - id: CUS-RULE-002
+        type: statePrecondition
+        errorCode: CUSTOMER_ACCOUNT_SUSPENDED
+        description: A customer must be in ACTIVE status to create a new session (log in).
+
+      - id: CUS-RULE-003
+        type: sideEffect
+        description: >
+          When an address is set as default (isDefault: true), all other
+          addresses of the same customer are automatically set to isDefault: false.
+
+
+  # ── Session ────────────────────────────────────────────────────────────────
+  - name: Session
+    root: Session
+    auditable: true
+    description: >
+      An authenticated session representing a logged-in customer. Created on
+      successful login; revoked on explicit logout. Holds an opaque session
+      token and an expiry timestamp.
+
+    properties:
+      - name: id
+        type: Uuid
+        required: true
+        readOnly: true
+        defaultValue: generated
+        description: Unique identifier of the session.
+
+      - name: customerId
+        type: Uuid
+        required: true
+        readOnly: true
+        references: Customer
+        relationship: association
+        cardinality: manyToOne
+        description: >
+          The customer this session belongs to. Resolved from email during login;
+          not supplied by the client in the request.
+
+      - name: token
+        type: String
+        required: true
+        readOnly: true
+        description: >
+          Cryptographically secure opaque session token returned to the client
+          on login. Server-generated; not accepted in any request body.
+
+      - name: expiresAt
+        type: DateTime
+        required: true
+        readOnly: true
+        description: >
+          Timestamp when this session expires. Set by the server on creation
+          (now() + 24h) and updated on each successful refresh.
+
+      - name: status
+        type: SessionStatus
+        required: true
+        readOnly: true
+        defaultValue: ACTIVE
+        indexed: true
+        description: Lifecycle status of the session.
+
+    domainRules:
+      - id: CUS-RULE-004
+        type: statePrecondition
+        errorCode: SESSION_ALREADY_REVOKED
+        description: A session can only be refreshed if its status is ACTIVE.
+
+      - id: CUS-RULE-005
+        type: terminalState
+        description: >
+          REVOKED is a terminal SessionStatus. A revoked session cannot be
+          reactivated or used to authenticate requests.
+
+      - id: CUS-RULE-006
+        type: statePrecondition
+        errorCode: SESSION_EXPIRED
+        description: >
+          A session can only be refreshed if expiresAt is in the future
+          (expiresAt > now()). An expired session must log in again.
+
+
+# ─── INTEGRATIONS ────────────────────────────────────────────────────────────
+
+integrations:
+  outbound: []
+  inbound: []
+
+
+# ─── DOMAIN EVENTS ───────────────────────────────────────────────────────────
+
+domainEvents:
+  published: []
+  consumed: []
+
+
+# ─── USE CASES ───────────────────────────────────────────────────────────────
+
+useCases:
+
+  # ── Customer Use Cases ──────────────────────────────────────────────────────
+
+  - id: UC-CUS-001
+    name: RegisterCustomer
+    type: command
+    actor: customer
+    trigger:
+      kind: http
+      operationId: registerCustomer
+    aggregate: Customer
+    method: create(email, firstName, lastName, phone?, password): Customer
+    repositoryMethod: save(Customer)
+    rules:
+      - CUS-RULE-001
+    emits: null
+    implementation: scaffold
+    fkValidations: []
+    notFoundError: null
+
+  - id: UC-CUS-002
+    name: ListCustomers
+    type: query
+    actor: operator
+    trigger:
+      kind: http
+      operationId: listCustomers
+    aggregate: Customer
+    repositoryMethod: list(status?, PageRequest)
+    rules: []
+    implementation: full
+
+  - id: UC-CUS-003
+    name: GetCustomerById
+    type: query
+    actor: operator
+    trigger:
+      kind: http
+      operationId: getCustomerById
+    aggregate: Customer
+    repositoryMethod: findById(Uuid)
+    rules: []
+    notFoundError: CUSTOMER_NOT_FOUND
+    implementation: full
+
+  - id: UC-CUS-004
+    name: UpdateCustomer
+    type: command
+    actor: customer
+    trigger:
+      kind: http
+      operationId: updateCustomer
+    aggregate: Customer
+    method: update(firstName?, lastName?, phone?): void
+    repositoryMethod: save(Customer)
+    rules: []
+    emits: null
+    notFoundError: CUSTOMER_NOT_FOUND
+    implementation: full
+    fkValidations: []
+
+  - id: UC-CUS-005
+    name: SuspendCustomer
+    type: command
+    actor: operator
+    trigger:
+      kind: http
+      operationId: suspendCustomer
+    aggregate: Customer
+    method: suspend(): void
+    repositoryMethod: save(Customer)
+    rules: []
+    emits: null
+    notFoundError: CUSTOMER_NOT_FOUND
+    implementation: full
+    fkValidations: []
+
+  - id: UC-CUS-006
+    name: ReactivateCustomer
+    type: command
+    actor: operator
+    trigger:
+      kind: http
+      operationId: reactivateCustomer
+    aggregate: Customer
+    method: reactivate(): void
+    repositoryMethod: save(Customer)
+    rules: []
+    emits: null
+    notFoundError: CUSTOMER_NOT_FOUND
+    implementation: full
+    fkValidations: []
+
+  # ── Address Use Cases ───────────────────────────────────────────────────────
+
+  - id: UC-CUS-007
+    name: AddAddress
+    type: command
+    actor: customer
+    trigger:
+      kind: http
+      operationId: addAddress
+    aggregate: Customer
+    method: addAddress(label?, street, district, city, postalCode?, notes?, isDefault): void
+    repositoryMethod: save(Customer)
+    rules: []
+    emits: null
+    notFoundError: CUSTOMER_NOT_FOUND
+    implementation: scaffold
+    fkValidations: []
+
+  - id: UC-CUS-008
+    name: ListAddresses
+    type: query
+    actor: customer
+    trigger:
+      kind: http
+      operationId: listAddresses
+    aggregate: Customer
+    repositoryMethod: findById(Uuid)
+    rules: []
+    notFoundError: CUSTOMER_NOT_FOUND
+    implementation: full
+
+  - id: UC-CUS-009
+    name: GetAddressById
+    type: query
+    actor: customer
+    trigger:
+      kind: http
+      operationId: getAddressById
+    aggregate: Customer
+    repositoryMethod: findById(Uuid)
+    rules: []
+    notFoundError:
+      - CUSTOMER_NOT_FOUND
+      - ADDRESS_NOT_FOUND
+    implementation: full
+
+  - id: UC-CUS-010
+    name: UpdateAddress
+    type: command
+    actor: customer
+    trigger:
+      kind: http
+      operationId: updateAddress
+    aggregate: Customer
+    method: updateAddress(addressId, label?, street?, district?, city?, postalCode?, notes?, isDefault?): void
+    repositoryMethod: save(Customer)
+    rules: []
+    emits: null
+    notFoundError:
+      - CUSTOMER_NOT_FOUND
+      - ADDRESS_NOT_FOUND
+    implementation: scaffold
+    fkValidations: []
+
+  - id: UC-CUS-011
+    name: RemoveAddress
+    type: command
+    actor: customer
+    trigger:
+      kind: http
+      operationId: removeAddress
+    aggregate: Customer
+    method: removeAddress(addressId): void
+    repositoryMethod: save(Customer)
+    rules: []
+    emits: null
+    notFoundError:
+      - CUSTOMER_NOT_FOUND
+      - ADDRESS_NOT_FOUND
+    implementation: full
+    fkValidations: []
+
+  # ── Session Use Cases ───────────────────────────────────────────────────────
+
+  - id: UC-CUS-012
+    name: Login
+    type: command
+    actor: customer
+    trigger:
+      kind: http
+      operationId: login
+    aggregate: Session
+    method: create(customerId, token, expiresAt): Session
+    repositoryMethod: save(Session)
+    rules:
+      - CUS-RULE-002
+    emits: null
+    implementation: scaffold
+    fkValidations: []
+    notFoundError: null
+
+  - id: UC-CUS-013
+    name: Logout
+    type: command
+    actor: customer
+    trigger:
+      kind: http
+      operationId: logout
+    aggregate: Session
+    method: revoke(): void
+    repositoryMethod: save(Session)
+    rules: []
+    emits: null
+    notFoundError: SESSION_NOT_FOUND
+    implementation: full
+    fkValidations: []
+
+  - id: UC-CUS-014
+    name: RefreshSession
+    type: command
+    actor: customer
+    trigger:
+      kind: http
+      operationId: refreshSession
+    aggregate: Session
+    method: refresh(): void
+    repositoryMethod: save(Session)
+    rules:
+      - CUS-RULE-004
+      - CUS-RULE-006
+    emits: null
+    notFoundError: SESSION_NOT_FOUND
+    implementation: scaffold
+    fkValidations: []
+
+  - id: UC-CUS-015
+    name: GetSessionById
+    type: query
+    actor: customer
+    trigger:
+      kind: http
+      operationId: getSessionById
+    aggregate: Session
+    repositoryMethod: findById(Uuid)
+    rules: []
+    notFoundError: SESSION_NOT_FOUND
+    implementation: full
+
+
+# ─── REPOSITORIES ────────────────────────────────────────────────────────────
+
+repositories:
+
+  - aggregate: Customer
+    methods:
+      - name: findById
+        signature: findById(Uuid): Customer?
+        derivedFrom: implicit
+
+      - name: save
+        signature: save(Customer)
+        derivedFrom: implicit
+
+      - name: findByEmail
+        signature: findByEmail(Email): Customer?
+        derivedFrom: CUS-RULE-001
+
+      - name: list
+        signature: list(status?: CustomerStatus, PageRequest): Page[Customer]
+        derivedFrom: openapi:listCustomers
+
+  - aggregate: Session
+    methods:
+      - name: findById
+        signature: findById(Uuid): Session?
+        derivedFrom: implicit
+
+      - name: save
+        signature: save(Session)
+        derivedFrom: implicit
+
+
+# ─── ERRORS ──────────────────────────────────────────────────────────────────
+
+errors:
+
+  - code: EMAIL_ALREADY_REGISTERED
+    httpStatus: 409
+    errorType: EmailAlreadyRegisteredError
+
+  - code: CUSTOMER_NOT_FOUND
+    httpStatus: 404
+    errorType: CustomerNotFoundError
+
+  - code: CUSTOMER_ACCOUNT_SUSPENDED
+    httpStatus: 422
+    errorType: CustomerAccountSuspendedError
+
+  - code: ADDRESS_NOT_FOUND
+    httpStatus: 404
+    errorType: AddressNotFoundError
+
+  - code: INVALID_CREDENTIALS
+    httpStatus: 401
+    errorType: InvalidCredentialsError
+
+  - code: SESSION_NOT_FOUND
+    httpStatus: 404
+    errorType: SessionNotFoundError
+
+  - code: SESSION_ALREADY_REVOKED
+    httpStatus: 422
+    errorType: SessionAlreadyRevokedError
+
+  - code: SESSION_EXPIRED
+    httpStatus: 422
+    errorType: SessionExpiredError

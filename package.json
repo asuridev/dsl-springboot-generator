@@ -1,0 +1,40 @@
+{
+  "name": "@dsl/springboot-generator",
+  "version": "0.1.0",
+  "description": "CLI for generating Spring Boot projects with modular hexagonal architecture",
+  "main": "bin/dsl-springboot.js",
+  "bin": {
+    "dsl-springboot": "./bin/dsl-springboot.js"
+  },
+  "scripts": {
+    "start": "node bin/dsl-springboot.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "cli",
+    "spring-boot",
+    "java",
+    "gradle",
+    "scaffolding",
+    "generator",
+    "hexagonal-architecture",
+    "clean-architecture",
+    "cqrs",
+    "modular-monolith",
+    "code-generator"
+  ],
+  "author": "",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "commander": "^11.1.0",
+    "ejs": "^3.1.9",
+    "fs-extra": "^11.2.0",
+    "inquirer": "^8.2.6",
+    "js-yaml": "^4.1.0",
+    "ora": "^5.4.1"
+  }
+}

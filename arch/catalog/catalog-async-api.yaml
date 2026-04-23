@@ -1,0 +1,161 @@
+asyncapi: "2.6.0"
+info:
+  title: Catalog BC — Async API
+  version: "1.0.0"
+  description: >
+    Async contracts for the catalog bounded context. Publishes product lifecycle
+    and pricing events consumed by inventory and orders.
+
+defaultContentType: application/json
+
+servers:
+  rabbitmq:
+    url: amqp://rabbitmq:5672
+    protocol: amqp
+    description: RabbitMQ message broker.
+
+channels:
+
+  # ── Published Events ────────────────────────────────────────────────────────
+
+  catalog.product.activated:
+    description: >
+      Published when a product transitions from DRAFT to ACTIVE.
+      Consumed by inventory (create StockItem) and orders (update CatalogSnapshot).
+    publish:
+      operationId: publishProductActivated
+      summary: Product activated
+      message:
+        $ref: "#/components/messages/ProductActivated"
+
+  catalog.product.discontinued:
+    description: >
+      Published when a product transitions to DISCONTINUED permanently.
+      Consumed by inventory (close StockItem) and orders (mark unavailable in CatalogSnapshot).
+    publish:
+      operationId: publishProductDiscontinued
+      summary: Product discontinued
+      message:
+        $ref: "#/components/messages/ProductDiscontinued"
+
+  catalog.product.price-changed:
+    description: >
+      Published when a product's price is updated.
+      Consumed by orders (update price in CatalogSnapshot).
+    publish:
+      operationId: publishProductPriceChanged
+      summary: Product price changed
+      message:
+        $ref: "#/components/messages/ProductPriceChanged"
+
+components:
+
+  messages:
+
+    ProductActivated:
+      name: ProductActivated
+      title: Product Activated
+      summary: A product has transitioned to ACTIVE status.
+      headers:
+        $ref: "#/components/schemas/EventHeaders"
+      payload:
+        $ref: "#/components/schemas/ProductActivatedPayload"
+
+    ProductDiscontinued:
+      name: ProductDiscontinued
+      title: Product Discontinued
+      summary: A product has been permanently discontinued.
+      headers:
+        $ref: "#/components/schemas/EventHeaders"
+      payload:
+        $ref: "#/components/schemas/ProductDiscontinuedPayload"
+
+    ProductPriceChanged:
+      name: ProductPriceChanged
+      title: Product Price Changed
+      summary: A product price has been updated.
+      headers:
+        $ref: "#/components/schemas/EventHeaders"
+      payload:
+        $ref: "#/components/schemas/ProductPriceChangedPayload"
+
+  schemas:
+
+    EventHeaders:
+      type: object
+      required: [eventId, eventType, occurredAt, sourceBC]
+      properties:
+        eventId:
+          type: string
+          format: uuid
+          description: Unique identifier of this event instance.
+        eventType:
+          type: string
+          description: Event type name (e.g. ProductActivated).
+        occurredAt:
+          type: string
+          format: date-time
+          description: UTC timestamp when the event occurred.
+        sourceBC:
+          type: string
+          description: Bounded context that emitted the event.
+          example: catalog
+        correlationId:
+          type: string
+          format: uuid
+          description: Optional correlation identifier for distributed tracing.
+
+    Money:
+      type: object
+      required: [amount, currency]
+      properties:
+        amount:
+          type: string
+          description: Decimal amount string with 4-digit precision.
+          example: "3500.0000"
+        currency:
+          type: string
+          description: ISO 4217 currency code.
+          example: COP
+
+    ProductActivatedPayload:
+      type: object
+      required: [productId, categoryId, sku, name, price]
+      properties:
+        productId:
+          type: string
+          format: uuid
+        categoryId:
+          type: string
+          format: uuid
+        sku:
+          type: string
+          maxLength: 100
+        name:
+          type: string
+          maxLength: 200
+        price:
+          $ref: "#/components/schemas/Money"
+
+    ProductDiscontinuedPayload:
+      type: object
+      required: [productId, sku]
+      properties:
+        productId:
+          type: string
+          format: uuid
+        sku:
+          type: string
+          maxLength: 100
+
+    ProductPriceChangedPayload:
+      type: object
+      required: [productId, previousPrice, newPrice]
+      properties:
+        productId:
+          type: string
+          format: uuid
+        previousPrice:
+          $ref: "#/components/schemas/Money"
+        newPrice:
+          $ref: "#/components/schemas/Money"

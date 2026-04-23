@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>canasta-shop — Design Review</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+  <style>
+    body { background: #f5f6f8; }
+    .bc-card { transition: transform .15s, box-shadow .15s; }
+    .bc-card:hover { transform: translateY(-3px); box-shadow: 0 6px 16px rgba(0,0,0,.12); }
+    .bg-purple { background-color: #6f42c1 !important; }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-dark bg-dark mb-4">
+    <div class="container-xl d-flex justify-content-between align-items-center">
+      <span class="navbar-brand fw-bold fs-5">canasta-shop — Design Review</span>
+      <span class="text-muted small">23/4/2026, 8:37:00 a. m.</span>
+    </div>
+  </nav>
+
+  <div class="container-xl pb-5">
+    <div class="alert alert-secondary mb-4" style="font-size:.9rem">B2C e-commerce platform for selling family basket products (groceries and household essentials). The company owns the inventory, manages its own delivery fleet, and sells directly to end consumers with card and cash-on-delivery payment options.
+</div>
+    
+      <section class="mb-5">
+        <h5 class="mb-3">System Architecture</h5>
+        <div class="bg-white rounded border p-4 overflow-auto">
+          <div class="mermaid">C4Container
+    title Canasta Shop — C4 Contenedores (L2)
+
+    Person(customer, &quot;Cliente&quot;, &quot;Consumidor final que compra productos de canasta familiar&quot;)
+    Person(operator, &quot;Operador Interno&quot;, &quot;Administrador que gestiona catálogo, stock y repartidores&quot;)
+
+    System_Ext(paymentGateway, &quot;Payment Gateway&quot;, &quot;Procesador externo de pagos con tarjeta (ej: Stripe, Mercado Pago)&quot;)
+
+    Boundary(b0, &quot;Canasta Shop&quot;) {
+        Container(catalog, &quot;catalog&quot;, &quot;Core Domain&quot;, &quot;Gestión de productos, categorías y precios. Fuente autoritativa del catálogo.&quot;)
+        Container(orders, &quot;orders&quot;, &quot;Core Domain&quot;, &quot;Ciclo de vida del pedido: carrito, checkout, tracking. Orquesta el CheckoutSaga.&quot;)
+        Container(customers, &quot;customers&quot;, &quot;Core Domain&quot;, &quot;Perfiles de clientes, autenticación y direcciones de entrega.&quot;)
+        Container(inventory, &quot;inventory&quot;, &quot;Supporting Domain&quot;, &quot;Control de stock en tiempo real. Reserva y libera unidades por pedido.&quot;)
+        Container(payments, &quot;payments&quot;, &quot;Supporting Domain&quot;, &quot;Procesamiento de cobros con tarjeta y registro de pagos en efectivo.&quot;)
+        Container(delivery, &quot;delivery&quot;, &quot;Supporting Domain&quot;, &quot;Gestión de entregas a domicilio con flota propia.&quot;)
+        Container(notifications, &quot;notifications&quot;, &quot;Supporting Domain&quot;, &quot;Despacho de notificaciones transaccionales por email, SMS y push.&quot;)
+    }
+
+    Rel(customer, orders, &quot;Navega catálogo, gestiona carrito y hace checkout&quot;)
+    Rel(customer, customers, &quot;Se registra e inicia sesión&quot;)
+    Rel(operator, catalog, &quot;Gestiona productos, categorías y precios&quot;)
+    Rel(operator, inventory, &quot;Ajusta niveles de stock manualmente&quot;)
+    Rel(operator, delivery, &quot;Gestiona repartidores y monitorea entregas&quot;)
+
+    Rel(catalog, inventory, &quot;ProductActivated / ProductDiscontinued&quot;, &quot;Event / Message Broker&quot;)
+    Rel(catalog, orders, &quot;ProductPriceChanged / ProductActivated / ProductDiscontinued&quot;, &quot;Event / Message Broker&quot;)
+    Rel(orders, inventory, &quot;OrderPlaced / OrderCancelled&quot;, &quot;Event / Message Broker&quot;)
+    Rel(inventory, orders, &quot;StockReserved / StockReservationFailed / StockReleased&quot;, &quot;Event / Message Broker&quot;)
+    Rel(orders, payments, &quot;OrderPaymentRequired / OrderCancelled&quot;, &quot;Event / Message Broker&quot;)
+    Rel(payments, orders, &quot;PaymentApproved / PaymentFailed&quot;, &quot;Event / Message Broker&quot;)
+    Rel(orders, delivery, &quot;OrderConfirmed / OrderCancelled&quot;, &quot;Event / Message Broker&quot;)
+    Rel(delivery, orders, &quot;OrderDelivered&quot;, &quot;Event / Message Broker&quot;)
+    Rel(orders, notifications, &quot;OrderConfirmed / OrderCancelled&quot;, &quot;Event / Message Broker&quot;)
+    Rel(delivery, notifications, &quot;DeliveryAssigned / OrderDelivered&quot;, &quot;Event / Message Broker&quot;)
+    Rel(payments, paymentGateway, &quot;processCardPayment / refundPayment&quot;, &quot;ACL / HTTPS&quot;)
+
+    %% ── Conexiones por evento → naranja ─────────────────────────
+    UpdateRelStyle(catalog, inventory, $lineColor=&quot;orange&quot;, $textColor=&quot;darkorange&quot;)
+    UpdateRelStyle(catalog, orders, $lineColor=&quot;orange&quot;, $textColor=&quot;darkorange&quot;)
+    UpdateRelStyle(orders, inventory, $lineColor=&quot;orange&quot;, $textColor=&quot;darkorange&quot;)
+    UpdateRelStyle(inventory, orders, $lineColor=&quot;orange&quot;, $textColor=&quot;darkorange&quot;)
+    UpdateRelStyle(orders, payments, $lineColor=&quot;orange&quot;, $textColor=&quot;darkorange&quot;)
+    UpdateRelStyle(payments, orders, $lineColor=&quot;orange&quot;, $textColor=&quot;darkorange&quot;)
+    UpdateRelStyle(orders, delivery, $lineColor=&quot;orange&quot;, $textColor=&quot;darkorange&quot;)
+    UpdateRelStyle(delivery, orders, $lineColor=&quot;orange&quot;, $textColor=&quot;darkorange&quot;)
+    UpdateRelStyle(orders, notifications, $lineColor=&quot;orange&quot;, $textColor=&quot;darkorange&quot;)
+    UpdateRelStyle(delivery, notifications, $lineColor=&quot;orange&quot;, $textColor=&quot;darkorange&quot;)
+</div>
+        </div>
+      </section>
+
+    <section>
+      <h5 class="mb-3">
+        Bounded Contexts
+        <span class="badge bg-secondary ms-1">7</span>
+      </h5>
+      <div class="row g-3">
+      <div class="col-sm-6 col-lg-4">
+        <div class="card h-100 bc-card">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <h6 class="card-title mb-0 fw-semibold">catalog</h6>
+              <span class="badge bg-primary">core</span>
+            </div>
+            <p class="card-text text-muted" style="font-size:.82rem">Manages the product catalog — products, categories, pricing and availability status. It is the authoritative source of product data and prices across the entire platform.
+</p>
+            <p class="small mb-2"><strong>Aggregates:</strong> Product, Category</p>
+          </div>
+          <div class="card-footer bg-transparent border-top-0 pb-3"><div class="d-flex gap-2 flex-wrap"><a href="catalog-design.html" class="btn btn-sm btn-outline-dark">Diagrams</a><a href="catalog-openapi.html" class="btn btn-sm btn-outline-success">REST API</a><a href="catalog-asyncapi.html" class="btn btn-sm btn-outline-primary">Events</a></div></div>
+        </div>
+      </div>
+      <div class="col-sm-6 col-lg-4">
+        <div class="card h-100 bc-card">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <h6 class="card-title mb-0 fw-semibold">orders</h6>
+              <span class="badge bg-primary">core</span>
+            </div>
+            <p class="card-text text-muted" style="font-size:.82rem">Manages the full order lifecycle from cart/checkout to delivery confirmation. It orchestrates the checkout flow and is the source of truth for order state and order line prices (snapshot at write time).
+</p>
+            <p class="small mb-2"><strong>Aggregates:</strong> Cart, Order, CatalogSnapshot</p>
+          </div>
+          <div class="card-footer bg-transparent border-top-0 pb-3"><span class="badge bg-warning text-dark">Pending tactical design</span></div>
+        </div>
+      </div>
+      <div class="col-sm-6 col-lg-4">
+        <div class="card h-100 bc-card">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <h6 class="card-title mb-0 fw-semibold">customers</h6>
+              <span class="badge bg-primary">core</span>
+            </div>
+            <p class="card-text text-muted" style="font-size:.82rem">Manages customer profiles, authentication and delivery addresses. Provides identity and address resolution to the orders flow.
+</p>
+            <p class="small mb-2"><strong>Aggregates:</strong> Customer, Session</p>
+          </div>
+          <div class="card-footer bg-transparent border-top-0 pb-3"><div class="d-flex gap-2 flex-wrap"><a href="customers-design.html" class="btn btn-sm btn-outline-dark">Diagrams</a><a href="customers-openapi.html" class="btn btn-sm btn-outline-success">REST API</a><a href="customers-asyncapi.html" class="btn btn-sm btn-outline-primary">Events</a></div></div>
+        </div>
+      </div>
+      <div class="col-sm-6 col-lg-4">
+        <div class="card h-100 bc-card">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <h6 class="card-title mb-0 fw-semibold">inventory</h6>
+              <span class="badge bg-purple">supporting</span>
+            </div>
+            <p class="card-text text-muted" style="font-size:.82rem">Tracks real-time stock levels for each product. Reserves stock when an order is placed and releases it on cancellation. Reacts to catalog lifecycle events to create or close stock items.
+</p>
+            <p class="small mb-2"><strong>Aggregates:</strong> StockItem</p>
+          </div>
+          <div class="card-footer bg-transparent border-top-0 pb-3"><span class="badge bg-warning text-dark">Pending tactical design</span></div>
+        </div>
+      </div>
+      <div class="col-sm-6 col-lg-4">
+        <div class="card h-100 bc-card">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <h6 class="card-title mb-0 fw-semibold">payments</h6>
+              <span class="badge bg-purple">supporting</span>
+            </div>
+            <p class="card-text text-muted" style="font-size:.82rem">Processes card payments via external gateway and records cash-on-delivery payment intents. Maintains a local read model of order totals fed by order events to avoid reading order data at payment time.
+</p>
+            <p class="small mb-2"><strong>Aggregates:</strong> Payment, OrderAmountSnapshot</p>
+          </div>
+          <div class="card-footer bg-transparent border-top-0 pb-3"><span class="badge bg-warning text-dark">Pending tactical design</span></div>
+        </div>
+      </div>
+      <div class="col-sm-6 col-lg-4">
+        <div class="card h-100 bc-card">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <h6 class="card-title mb-0 fw-semibold">delivery</h6>
+              <span class="badge bg-purple">supporting</span>
+            </div>
+            <p class="card-text text-muted" style="font-size:.82rem">Manages delivery orders assigned to the company's own delivery fleet. Tracks delivery status from assignment to completion and notifies relevant parties on state changes.
+</p>
+            <p class="small mb-2"><strong>Aggregates:</strong> DeliveryOrder, DeliveryDriver</p>
+          </div>
+          <div class="card-footer bg-transparent border-top-0 pb-3"><span class="badge bg-warning text-dark">Pending tactical design</span></div>
+        </div>
+      </div>
+      <div class="col-sm-6 col-lg-4">
+        <div class="card h-100 bc-card">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <h6 class="card-title mb-0 fw-semibold">notifications</h6>
+              <span class="badge bg-purple">supporting</span>
+            </div>
+            <p class="card-text text-muted" style="font-size:.82rem">Sends transactional notifications to customers (email, SMS, push) in response to key order and delivery lifecycle events. It does not own business logic — it only formats and dispatches messages.
+</p>
+            <p class="small mb-2"><strong>Aggregates:</strong> Notification, NotificationTemplate</p>
+          </div>
+          <div class="card-footer bg-transparent border-top-0 pb-3"><span class="badge bg-warning text-dark">Pending tactical design</span></div>
+        </div>
+      </div></div>
+    </section>
+  </div>
+
+  <script>mermaid.initialize({ startOnLoad: true, theme: 'default' });</script>
+</body>
+</html>

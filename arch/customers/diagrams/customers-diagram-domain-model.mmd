@@ -1,0 +1,49 @@
+classDiagram
+    class Customer {
+        +Uuid id
+        +Email email
+        +String firstName
+        +String lastName
+        +String phone
+        +CustomerStatus status
+        +DateTime createdAt
+        +DateTime updatedAt
+    }
+
+    class Address {
+        +Uuid id
+        +String label
+        +String street
+        +String district
+        +String city
+        +String postalCode
+        +Text notes
+        +Boolean isDefault
+    }
+
+    class Session {
+        +Uuid id
+        +Uuid customerId
+        +String token
+        +DateTime expiresAt
+        +SessionStatus status
+        +DateTime createdAt
+        +DateTime updatedAt
+    }
+
+    class CustomerStatus {
+        <<enumeration>>
+        ACTIVE
+        SUSPENDED
+    }
+
+    class SessionStatus {
+        <<enumeration>>
+        ACTIVE
+        REVOKED
+    }
+
+    Customer "1" *-- "0..*" Address : composition
+    Customer "1" --> "0..*" Session : association
+    Customer ..> CustomerStatus : status
+    Session ..> SessionStatus : status

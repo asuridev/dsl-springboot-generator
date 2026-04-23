@@ -1,0 +1,48 @@
+flowchart LR
+    subgraph Actores
+        CU(["customer"])
+        OP(["operator"])
+    end
+
+    subgraph customers["Bounded Context: customers"]
+        subgraph Cuenta["Cuenta de Cliente"]
+            UC01["UC-CUS-001\nRegisterCustomer"]
+            UC02["UC-CUS-002\nListCustomers"]
+            UC03["UC-CUS-003\nGetCustomerById"]
+            UC04["UC-CUS-004\nUpdateCustomer"]
+            UC05["UC-CUS-005\nSuspendCustomer"]
+            UC06["UC-CUS-006\nReactivateCustomer"]
+        end
+
+        subgraph Direcciones["Direcciones de Entrega"]
+            UC07["UC-CUS-007\nAddAddress"]
+            UC08["UC-CUS-008\nListAddresses"]
+            UC09["UC-CUS-009\nGetAddressById"]
+            UC10["UC-CUS-010\nUpdateAddress"]
+            UC11["UC-CUS-011\nRemoveAddress"]
+        end
+
+        subgraph Sesiones["Autenticacion"]
+            UC12["UC-CUS-012\nLogin"]
+            UC13["UC-CUS-013\nLogout"]
+            UC14["UC-CUS-014\nRefreshSession"]
+            UC15["UC-CUS-015\nGetSessionById"]
+        end
+    end
+
+    CU --> UC01
+    CU --> UC04
+    CU --> UC07
+    CU --> UC08
+    CU --> UC09
+    CU --> UC10
+    CU --> UC11
+    CU --> UC12
+    CU --> UC13
+    CU --> UC14
+    CU --> UC15
+
+    OP --> UC02
+    OP --> UC03
+    OP --> UC05
+    OP --> UC06

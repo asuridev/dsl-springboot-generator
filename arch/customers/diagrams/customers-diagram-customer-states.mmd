@@ -1,0 +1,8 @@
+stateDiagram-v2
+    [*] --> ACTIVE : UC-CUS-001 RegisterCustomer
+
+    ACTIVE --> SUSPENDED : UC-CUS-005 SuspendCustomer
+    SUSPENDED --> ACTIVE : UC-CUS-006 ReactivateCustomer
+
+    ACTIVE : ACTIVE\nCuenta activa, puede iniciar sesion
+    SUSPENDED : SUSPENDED\nCuenta suspendida, no puede iniciar sesion

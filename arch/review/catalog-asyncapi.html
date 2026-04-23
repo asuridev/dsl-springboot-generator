@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>catalog — Events</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f5f6f8; }
+  </style>
+</head>
+<body>
+  <nav class="navbar navbar-dark mb-4" style="background:#1a1a2e">
+    <div class="container-xl d-flex justify-content-between align-items-center">
+      <span class="navbar-brand fw-bold">catalog — Events</span>
+      <a href="index.html" class="text-white-50 text-decoration-none small">&#8592; Dashboard</a>
+    </div>
+  </nav>
+
+  <div class="container-xl pb-5">
+    <div class="alert alert-dark d-flex align-items-center gap-3 mb-4">
+      <div>
+        <strong>Catalog BC — Async API</strong>
+        <span class="badge bg-secondary ms-2">v1.0.0</span>
+      </div>
+      <span class="text-muted small ms-2">Async contracts for the catalog bounded context. Publishes product lifecycle and pricing events consumed by inventory and orders.
+</span>
+    </div>
+
+    <div class="d-flex align-items-center gap-3 mb-3">
+      <h5 class="mb-0">
+        Channels
+        <span class="badge bg-secondary ms-1">3</span>
+      </h5>
+      <span class="badge bg-success">&#11014; PUBLISH — BC emits</span>
+      <span class="badge bg-primary">&#11015; SUBSCRIBE — BC receives</span>
+    </div>
+
+    
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <code style="font-size:.9rem">catalog.product.activated</code>
+        <span class="badge bg-success text-white">&#11014; PUBLISH</span>
+      </div>
+      <div class="card-body pb-2">
+        <p class="text-muted small mb-2">Product activated</p>
+        <p class="mb-1 small"><strong>Message:</strong> ProductActivated</p>
+        <p class="text-muted small mb-2">A product has transitioned to ACTIVE status.</p>
+        
+    <table class="table table-sm table-hover mt-2 mb-0" style="font-size:.85rem">
+      <thead class="table-light">
+        <tr><th style="width:28%">Field</th><th style="width:16%">Type</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td class="font-monospace" style="font-size:.85rem">productId <span class="text-danger fw-bold" title="required">*</span></td>
+        <td><span class="badge bg-light text-dark border" style="font-size:.73rem">string</span></td>
+        <td class="text-muted" style="font-size:.82rem"></td>
+      </tr>
+      <tr>
+        <td class="font-monospace" style="font-size:.85rem">categoryId <span class="text-danger fw-bold" title="required">*</span></td>
+        <td><span class="badge bg-light text-dark border" style="font-size:.73rem">string</span></td>
+        <td class="text-muted" style="font-size:.82rem"></td>
+      </tr>
+      <tr>
+        <td class="font-monospace" style="font-size:.85rem">sku <span class="text-danger fw-bold" title="required">*</span></td>
+        <td><span class="badge bg-light text-dark border" style="font-size:.73rem">string</span></td>
+        <td class="text-muted" style="font-size:.82rem"></td>
+      </tr>
+      <tr>
+        <td class="font-monospace" style="font-size:.85rem">name <span class="text-danger fw-bold" title="required">*</span></td>
+        <td><span class="badge bg-light text-dark border" style="font-size:.73rem">string</span></td>
+        <td class="text-muted" style="font-size:.82rem"></td>
+      </tr>
+      <tr>
+        <td class="font-monospace" style="font-size:.85rem">price <span class="text-danger fw-bold" title="required">*</span></td>
+        <td><span class="badge bg-light text-dark border" style="font-size:.73rem">object</span></td>
+        <td class="text-muted" style="font-size:.82rem"></td>
+      </tr></tbody>
+    </table>
+      </div>
+    </div>
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <code style="font-size:.9rem">catalog.product.discontinued</code>
+        <span class="badge bg-success text-white">&#11014; PUBLISH</span>
+      </div>
+      <div class="card-body pb-2">
+        <p class="text-muted small mb-2">Product discontinued</p>
+        <p class="mb-1 small"><strong>Message:</strong> ProductDiscontinued</p>
+        <p class="text-muted small mb-2">A product has been permanently discontinued.</p>
+        
+    <table class="table table-sm table-hover mt-2 mb-0" style="font-size:.85rem">
+      <thead class="table-light">
+        <tr><th style="width:28%">Field</th><th style="width:16%">Type</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td class="font-monospace" style="font-size:.85rem">productId <span class="text-danger fw-bold" title="required">*</span></td>
+        <td><span class="badge bg-light text-dark border" style="font-size:.73rem">string</span></td>
+        <td class="text-muted" style="font-size:.82rem"></td>
+      </tr>
+      <tr>
+        <td class="font-monospace" style="font-size:.85rem">sku <span class="text-danger fw-bold" title="required">*</span></td>
+        <td><span class="badge bg-light text-dark border" style="font-size:.73rem">string</span></td>
+        <td class="text-muted" style="font-size:.82rem"></td>
+      </tr></tbody>
+    </table>
+      </div>
+    </div>
+    <div class="card mb-3">
+      <div class="card-header d-flex justify-content-between align-items-center py-2">
+        <code style="font-size:.9rem">catalog.product.price-changed</code>
+        <span class="badge bg-success text-white">&#11014; PUBLISH</span>
+      </div>
+      <div class="card-body pb-2">
+        <p class="text-muted small mb-2">Product price changed</p>
+        <p class="mb-1 small"><strong>Message:</strong> ProductPriceChanged</p>
+        <p class="text-muted small mb-2">A product price has been updated.</p>
+        
+    <table class="table table-sm table-hover mt-2 mb-0" style="font-size:.85rem">
+      <thead class="table-light">
+        <tr><th style="width:28%">Field</th><th style="width:16%">Type</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+      <tr>
+        <td class="font-monospace" style="font-size:.85rem">productId <span class="text-danger fw-bold" title="required">*</span></td>
+        <td><span class="badge bg-light text-dark border" style="font-size:.73rem">string</span></td>
+        <td class="text-muted" style="font-size:.82rem"></td>
+      </tr>
+      <tr>
+        <td class="font-monospace" style="font-size:.85rem">previousPrice <span class="text-danger fw-bold" title="required">*</span></td>
+        <td><span class="badge bg-light text-dark border" style="font-size:.73rem">object</span></td>
+        <td class="text-muted" style="font-size:.82rem"></td>
+      </tr>
+      <tr>
+        <td class="font-monospace" style="font-size:.85rem">newPrice <span class="text-danger fw-bold" title="required">*</span></td>
+        <td><span class="badge bg-light text-dark border" style="font-size:.73rem">object</span></td>
+        <td class="text-muted" style="font-size:.82rem"></td>
+      </tr></tbody>
+    </table>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

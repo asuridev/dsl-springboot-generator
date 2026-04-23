@@ -1,0 +1,1860 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>customers — REST API</title>
+  <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
+  <style>
+    .topbar { display: none; }
+    .back-bar { background: #1b1b1b; color: #ccc; padding: 8px 20px; font-size: 13px; }
+    .back-bar a { color: #90caf9; text-decoration: none; }
+    .back-bar a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="back-bar">
+    <a href="index.html">&#8592; Dashboard</a> &nbsp;/&nbsp; customers — REST API
+  </div>
+  <div id="swagger-ui"></div>
+  <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script>
+    SwaggerUIBundle({
+      spec: {
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Customers BC — API",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/api/customers/v1"
+    }
+  ],
+  "tags": [
+    {
+      "name": "customers",
+      "description": "Customer account management"
+    },
+    {
+      "name": "addresses",
+      "description": "Customer delivery addresses"
+    },
+    {
+      "name": "auth",
+      "description": "Authentication and session management"
+    }
+  ],
+  "paths": {
+    "/customers": {
+      "post": {
+        "operationId": "registerCustomer",
+        "summary": "Register a new customer account",
+        "tags": [
+          "customers"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "firstName",
+                  "lastName",
+                  "password"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email",
+                    "description": "Login email address. Must be unique."
+                  },
+                  "firstName": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "lastName": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "phone": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "description": "Optional contact phone number."
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password",
+                    "minLength": 8,
+                    "description": "Plain-text password. Stored as bcrypt hash; never returned."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Customer registered successfully.",
+            "headers": {
+              "Location": {
+                "description": "URL of the newly created customer.",
+                "schema": {
+                  "type": "string",
+                  "example": "/api/customers/v1/customers/550e8400-e29b-41d4-a716-446655440000"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Business rule conflict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "description": "Machine-readable error code."
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Human-readable error description."
+                    }
+                  }
+                },
+                "example": {
+                  "code": "EMAIL_ALREADY_REGISTERED",
+                  "message": "Email is already registered."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business rule violation or invalid state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "description": "Machine-readable error code."
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Human-readable error description."
+                    }
+                  }
+                },
+                "examples": {
+                  "CustomerAccountSuspended": {
+                    "value": {
+                      "code": "CUSTOMER_ACCOUNT_SUSPENDED",
+                      "message": "Customer account is suspended."
+                    }
+                  },
+                  "SessionAlreadyRevoked": {
+                    "value": {
+                      "code": "SESSION_ALREADY_REVOKED",
+                      "message": "Session has already been revoked."
+                    }
+                  },
+                  "SessionExpired": {
+                    "value": {
+                      "code": "SESSION_EXPIRED",
+                      "message": "Session has expired. Please log in again."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listCustomers",
+        "summary": "List customers (operator use)",
+        "tags": [
+          "customers"
+        ],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ACTIVE",
+                "SUSPENDED"
+              ],
+              "description": "Lifecycle status of a customer account."
+            }
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 1,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 20,
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Paginated list of customers.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "format": "uuid"
+                          },
+                          "email": {
+                            "type": "string",
+                            "format": "email"
+                          },
+                          "firstName": {
+                            "type": "string"
+                          },
+                          "lastName": {
+                            "type": "string"
+                          },
+                          "phone": {
+                            "type": "string",
+                            "nullable": true
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "ACTIVE",
+                              "SUSPENDED"
+                            ],
+                            "description": "Lifecycle status of a customer account."
+                          },
+                          "createdAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          },
+                          "updatedAt": {
+                            "type": "string",
+                            "format": "date-time"
+                          }
+                        }
+                      }
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "page": {
+                      "type": "integer"
+                    },
+                    "size": {
+                      "type": "integer"
+                    },
+                    "pages": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/customers/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Customer unique identifier.",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getCustomerById",
+        "summary": "Get customer profile by ID (operator use)",
+        "tags": [
+          "customers"
+        ],
+        "responses": {
+          "200": {
+            "description": "Customer profile.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "email": {
+                      "type": "string",
+                      "format": "email"
+                    },
+                    "firstName": {
+                      "type": "string"
+                    },
+                    "lastName": {
+                      "type": "string"
+                    },
+                    "phone": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "status": {
+                      "$ref": "#/components/schemas/CustomerStatus"
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "updatedAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "description": "Machine-readable error code."
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Human-readable error description."
+                    }
+                  }
+                },
+                "examples": {
+                  "CustomerNotFound": {
+                    "value": {
+                      "code": "CUSTOMER_NOT_FOUND",
+                      "message": "Customer not found."
+                    }
+                  },
+                  "AddressNotFound": {
+                    "value": {
+                      "code": "ADDRESS_NOT_FOUND",
+                      "message": "Address not found."
+                    }
+                  },
+                  "SessionNotFound": {
+                    "value": {
+                      "code": "SESSION_NOT_FOUND",
+                      "message": "Session not found."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateCustomer",
+        "summary": "Update customer profile fields",
+        "tags": [
+          "customers"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "minProperties": 1,
+                "properties": {
+                  "firstName": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "lastName": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "phone": {
+                    "type": "string",
+                    "maxLength": 20
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Customer updated successfully."
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerNotFound": {
+                    "value": {
+                      "code": "CUSTOMER_NOT_FOUND",
+                      "message": "Customer not found."
+                    }
+                  },
+                  "AddressNotFound": {
+                    "value": {
+                      "code": "ADDRESS_NOT_FOUND",
+                      "message": "Address not found."
+                    }
+                  },
+                  "SessionNotFound": {
+                    "value": {
+                      "code": "SESSION_NOT_FOUND",
+                      "message": "Session not found."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business rule violation or invalid state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerAccountSuspended": {
+                    "value": {
+                      "code": "CUSTOMER_ACCOUNT_SUSPENDED",
+                      "message": "Customer account is suspended."
+                    }
+                  },
+                  "SessionAlreadyRevoked": {
+                    "value": {
+                      "code": "SESSION_ALREADY_REVOKED",
+                      "message": "Session has already been revoked."
+                    }
+                  },
+                  "SessionExpired": {
+                    "value": {
+                      "code": "SESSION_EXPIRED",
+                      "message": "Session has expired. Please log in again."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/customers/{id}/suspend": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Customer unique identifier.",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "suspendCustomer",
+        "summary": "Suspend a customer account (operator use)",
+        "tags": [
+          "customers"
+        ],
+        "responses": {
+          "204": {
+            "description": "Customer suspended."
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerNotFound": {
+                    "value": {
+                      "code": "CUSTOMER_NOT_FOUND",
+                      "message": "Customer not found."
+                    }
+                  },
+                  "AddressNotFound": {
+                    "value": {
+                      "code": "ADDRESS_NOT_FOUND",
+                      "message": "Address not found."
+                    }
+                  },
+                  "SessionNotFound": {
+                    "value": {
+                      "code": "SESSION_NOT_FOUND",
+                      "message": "Session not found."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/customers/{id}/reactivate": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Customer unique identifier.",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "reactivateCustomer",
+        "summary": "Reactivate a suspended customer account (operator use)",
+        "tags": [
+          "customers"
+        ],
+        "responses": {
+          "204": {
+            "description": "Customer reactivated."
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerNotFound": {
+                    "value": {
+                      "code": "CUSTOMER_NOT_FOUND",
+                      "message": "Customer not found."
+                    }
+                  },
+                  "AddressNotFound": {
+                    "value": {
+                      "code": "ADDRESS_NOT_FOUND",
+                      "message": "Address not found."
+                    }
+                  },
+                  "SessionNotFound": {
+                    "value": {
+                      "code": "SESSION_NOT_FOUND",
+                      "message": "Session not found."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/customers/{id}/addresses": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Customer unique identifier.",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "post": {
+        "operationId": "addAddress",
+        "summary": "Add a delivery address to a customer",
+        "tags": [
+          "addresses"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "street",
+                  "district",
+                  "city",
+                  "isDefault"
+                ],
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "description": "Optional customer-assigned label (e.g. \"Casa\", \"Oficina\")."
+                  },
+                  "street": {
+                    "type": "string",
+                    "maxLength": 300,
+                    "description": "Full street address including number."
+                  },
+                  "district": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "description": "Neighborhood or district."
+                  },
+                  "city": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "postalCode": {
+                    "type": "string",
+                    "maxLength": 10
+                  },
+                  "notes": {
+                    "type": "string",
+                    "description": "Optional delivery instructions."
+                  },
+                  "isDefault": {
+                    "type": "boolean",
+                    "description": "Set to true to make this the default delivery address."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Address added successfully.",
+            "headers": {
+              "Location": {
+                "description": "URL of the newly created address.",
+                "schema": {
+                  "type": "string",
+                  "example": "/api/customers/v1/customers/{id}/addresses/550e8400-e29b-41d4-a716-446655440001"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerNotFound": {
+                    "value": {
+                      "code": "CUSTOMER_NOT_FOUND",
+                      "message": "Customer not found."
+                    }
+                  },
+                  "AddressNotFound": {
+                    "value": {
+                      "code": "ADDRESS_NOT_FOUND",
+                      "message": "Address not found."
+                    }
+                  },
+                  "SessionNotFound": {
+                    "value": {
+                      "code": "SESSION_NOT_FOUND",
+                      "message": "Session not found."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business rule violation or invalid state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerAccountSuspended": {
+                    "value": {
+                      "code": "CUSTOMER_ACCOUNT_SUSPENDED",
+                      "message": "Customer account is suspended."
+                    }
+                  },
+                  "SessionAlreadyRevoked": {
+                    "value": {
+                      "code": "SESSION_ALREADY_REVOKED",
+                      "message": "Session has already been revoked."
+                    }
+                  },
+                  "SessionExpired": {
+                    "value": {
+                      "code": "SESSION_EXPIRED",
+                      "message": "Session has expired. Please log in again."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listAddresses",
+        "summary": "List all delivery addresses for a customer",
+        "tags": [
+          "addresses"
+        ],
+        "responses": {
+          "200": {
+            "description": "List of addresses.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid"
+                      },
+                      "label": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "street": {
+                        "type": "string"
+                      },
+                      "district": {
+                        "type": "string"
+                      },
+                      "city": {
+                        "type": "string"
+                      },
+                      "postalCode": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "notes": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "isDefault": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerNotFound": {
+                    "value": {
+                      "code": "CUSTOMER_NOT_FOUND",
+                      "message": "Customer not found."
+                    }
+                  },
+                  "AddressNotFound": {
+                    "value": {
+                      "code": "ADDRESS_NOT_FOUND",
+                      "message": "Address not found."
+                    }
+                  },
+                  "SessionNotFound": {
+                    "value": {
+                      "code": "SESSION_NOT_FOUND",
+                      "message": "Session not found."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/customers/{id}/addresses/{addressId}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Customer unique identifier.",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        {
+          "name": "addressId",
+          "in": "path",
+          "required": true,
+          "description": "Address unique identifier.",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getAddressById",
+        "summary": "Get a specific delivery address",
+        "tags": [
+          "addresses"
+        ],
+        "responses": {
+          "200": {
+            "description": "Address details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "label": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "street": {
+                      "type": "string"
+                    },
+                    "district": {
+                      "type": "string"
+                    },
+                    "city": {
+                      "type": "string"
+                    },
+                    "postalCode": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "notes": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "isDefault": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerNotFound": {
+                    "value": {
+                      "code": "CUSTOMER_NOT_FOUND",
+                      "message": "Customer not found."
+                    }
+                  },
+                  "AddressNotFound": {
+                    "value": {
+                      "code": "ADDRESS_NOT_FOUND",
+                      "message": "Address not found."
+                    }
+                  },
+                  "SessionNotFound": {
+                    "value": {
+                      "code": "SESSION_NOT_FOUND",
+                      "message": "Session not found."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "operationId": "updateAddress",
+        "summary": "Update a delivery address",
+        "tags": [
+          "addresses"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "minProperties": 1,
+                "properties": {
+                  "label": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "street": {
+                    "type": "string",
+                    "maxLength": 300
+                  },
+                  "district": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "city": {
+                    "type": "string",
+                    "maxLength": 100
+                  },
+                  "postalCode": {
+                    "type": "string",
+                    "maxLength": 10
+                  },
+                  "notes": {
+                    "type": "string"
+                  },
+                  "isDefault": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Address updated."
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerNotFound": {
+                    "value": {
+                      "code": "CUSTOMER_NOT_FOUND",
+                      "message": "Customer not found."
+                    }
+                  },
+                  "AddressNotFound": {
+                    "value": {
+                      "code": "ADDRESS_NOT_FOUND",
+                      "message": "Address not found."
+                    }
+                  },
+                  "SessionNotFound": {
+                    "value": {
+                      "code": "SESSION_NOT_FOUND",
+                      "message": "Session not found."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business rule violation or invalid state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerAccountSuspended": {
+                    "value": {
+                      "code": "CUSTOMER_ACCOUNT_SUSPENDED",
+                      "message": "Customer account is suspended."
+                    }
+                  },
+                  "SessionAlreadyRevoked": {
+                    "value": {
+                      "code": "SESSION_ALREADY_REVOKED",
+                      "message": "Session has already been revoked."
+                    }
+                  },
+                  "SessionExpired": {
+                    "value": {
+                      "code": "SESSION_EXPIRED",
+                      "message": "Session has expired. Please log in again."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "removeAddress",
+        "summary": "Remove a delivery address",
+        "tags": [
+          "addresses"
+        ],
+        "responses": {
+          "204": {
+            "description": "Address removed."
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerNotFound": {
+                    "value": {
+                      "code": "CUSTOMER_NOT_FOUND",
+                      "message": "Customer not found."
+                    }
+                  },
+                  "AddressNotFound": {
+                    "value": {
+                      "code": "ADDRESS_NOT_FOUND",
+                      "message": "Address not found."
+                    }
+                  },
+                  "SessionNotFound": {
+                    "value": {
+                      "code": "SESSION_NOT_FOUND",
+                      "message": "Session not found."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sessions": {
+      "post": {
+        "operationId": "login",
+        "summary": "Create a new session (login)",
+        "tags": [
+          "auth"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "email",
+                  "password"
+                ],
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "password": {
+                    "type": "string",
+                    "format": "password"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Session created. Retrieve token via GET /auth/sessions/{id}.",
+            "headers": {
+              "Location": {
+                "description": "URL of the created session.",
+                "schema": {
+                  "type": "string",
+                  "example": "/api/customers/v1/auth/sessions/550e8400-e29b-41d4-a716-446655440002"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "description": "Machine-readable error code."
+                    },
+                    "message": {
+                      "type": "string",
+                      "description": "Human-readable error description."
+                    }
+                  }
+                },
+                "example": {
+                  "code": "INVALID_CREDENTIALS",
+                  "message": "Invalid email or password."
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business rule violation or invalid state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerAccountSuspended": {
+                    "value": {
+                      "code": "CUSTOMER_ACCOUNT_SUSPENDED",
+                      "message": "Customer account is suspended."
+                    }
+                  },
+                  "SessionAlreadyRevoked": {
+                    "value": {
+                      "code": "SESSION_ALREADY_REVOKED",
+                      "message": "Session has already been revoked."
+                    }
+                  },
+                  "SessionExpired": {
+                    "value": {
+                      "code": "SESSION_EXPIRED",
+                      "message": "Session has expired. Please log in again."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sessions/{id}": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Session unique identifier.",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getSessionById",
+        "summary": "Get session details including token",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "200": {
+            "description": "Session details.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "customerId": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "token": {
+                      "type": "string",
+                      "description": "Opaque session token to use in authenticated requests."
+                    },
+                    "expiresAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "ACTIVE",
+                        "REVOKED"
+                      ],
+                      "description": "Lifecycle status of an authentication session."
+                    },
+                    "createdAt": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerNotFound": {
+                    "value": {
+                      "code": "CUSTOMER_NOT_FOUND",
+                      "message": "Customer not found."
+                    }
+                  },
+                  "AddressNotFound": {
+                    "value": {
+                      "code": "ADDRESS_NOT_FOUND",
+                      "message": "Address not found."
+                    }
+                  },
+                  "SessionNotFound": {
+                    "value": {
+                      "code": "SESSION_NOT_FOUND",
+                      "message": "Session not found."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "logout",
+        "summary": "Revoke a session (logout)",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "204": {
+            "description": "Session revoked."
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerNotFound": {
+                    "value": {
+                      "code": "CUSTOMER_NOT_FOUND",
+                      "message": "Customer not found."
+                    }
+                  },
+                  "AddressNotFound": {
+                    "value": {
+                      "code": "ADDRESS_NOT_FOUND",
+                      "message": "Address not found."
+                    }
+                  },
+                  "SessionNotFound": {
+                    "value": {
+                      "code": "SESSION_NOT_FOUND",
+                      "message": "Session not found."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/sessions/{id}/refresh": {
+      "parameters": [
+        {
+          "name": "id",
+          "in": "path",
+          "required": true,
+          "description": "Session unique identifier.",
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "patch": {
+        "operationId": "refreshSession",
+        "summary": "Extend the expiry of an active session",
+        "tags": [
+          "auth"
+        ],
+        "responses": {
+          "204": {
+            "description": "Session expiry extended by 24 hours."
+          },
+          "404": {
+            "description": "Resource not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerNotFound": {
+                    "value": {
+                      "code": "CUSTOMER_NOT_FOUND",
+                      "message": "Customer not found."
+                    }
+                  },
+                  "AddressNotFound": {
+                    "value": {
+                      "code": "ADDRESS_NOT_FOUND",
+                      "message": "Address not found."
+                    }
+                  },
+                  "SessionNotFound": {
+                    "value": {
+                      "code": "SESSION_NOT_FOUND",
+                      "message": "Session not found."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Business rule violation or invalid state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                },
+                "examples": {
+                  "CustomerAccountSuspended": {
+                    "value": {
+                      "code": "CUSTOMER_ACCOUNT_SUSPENDED",
+                      "message": "Customer account is suspended."
+                    }
+                  },
+                  "SessionAlreadyRevoked": {
+                    "value": {
+                      "code": "SESSION_ALREADY_REVOKED",
+                      "message": "Session has already been revoked."
+                    }
+                  },
+                  "SessionExpired": {
+                    "value": {
+                      "code": "SESSION_EXPIRED",
+                      "message": "Session has expired. Please log in again."
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "CustomerId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Customer unique identifier.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "AddressId": {
+        "name": "addressId",
+        "in": "path",
+        "required": true,
+        "description": "Address unique identifier.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "SessionId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Session unique identifier.",
+        "schema": {
+          "type": "string",
+          "format": "uuid"
+        }
+      },
+      "Page": {
+        "name": "page",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "default": 1,
+          "minimum": 1
+        }
+      },
+      "Size": {
+        "name": "size",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    },
+    "responses": {
+      "NotFound": {
+        "description": "Resource not found.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "examples": {
+              "CustomerNotFound": {
+                "value": {
+                  "code": "CUSTOMER_NOT_FOUND",
+                  "message": "Customer not found."
+                }
+              },
+              "AddressNotFound": {
+                "value": {
+                  "code": "ADDRESS_NOT_FOUND",
+                  "message": "Address not found."
+                }
+              },
+              "SessionNotFound": {
+                "value": {
+                  "code": "SESSION_NOT_FOUND",
+                  "message": "Session not found."
+                }
+              }
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "Business rule conflict.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "example": {
+              "code": "EMAIL_ALREADY_REGISTERED",
+              "message": "Email is already registered."
+            }
+          }
+        }
+      },
+      "UnprocessableEntity": {
+        "description": "Business rule violation or invalid state.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            },
+            "examples": {
+              "CustomerAccountSuspended": {
+                "value": {
+                  "code": "CUSTOMER_ACCOUNT_SUSPENDED",
+                  "message": "Customer account is suspended."
+                }
+              },
+              "SessionAlreadyRevoked": {
+                "value": {
+                  "code": "SESSION_ALREADY_REVOKED",
+                  "message": "Session has already been revoked."
+                }
+              },
+              "SessionExpired": {
+                "value": {
+                  "code": "SESSION_EXPIRED",
+                  "message": "Session has expired. Please log in again."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "CustomerStatus": {
+        "type": "string",
+        "enum": [
+          "ACTIVE",
+          "SUSPENDED"
+        ],
+        "description": "Lifecycle status of a customer account."
+      },
+      "SessionStatus": {
+        "type": "string",
+        "enum": [
+          "ACTIVE",
+          "REVOKED"
+        ],
+        "description": "Lifecycle status of an authentication session."
+      },
+      "RegisterCustomerRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "firstName",
+          "lastName",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "description": "Login email address. Must be unique."
+          },
+          "firstName": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "lastName": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "phone": {
+            "type": "string",
+            "maxLength": 20,
+            "description": "Optional contact phone number."
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "minLength": 8,
+            "description": "Plain-text password. Stored as bcrypt hash; never returned."
+          }
+        }
+      },
+      "UpdateCustomerRequest": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "firstName": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "lastName": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "phone": {
+            "type": "string",
+            "maxLength": 20
+          }
+        }
+      },
+      "CustomerResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "firstName": {
+            "type": "string"
+          },
+          "lastName": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
+          "status": {
+            "$ref": "#/components/schemas/CustomerStatus"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CustomerPage": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CustomerResponse"
+            }
+          },
+          "total": {
+            "type": "integer"
+          },
+          "page": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "integer"
+          },
+          "pages": {
+            "type": "integer"
+          }
+        }
+      },
+      "AddressRequest": {
+        "type": "object",
+        "required": [
+          "street",
+          "district",
+          "city",
+          "isDefault"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Optional customer-assigned label (e.g. \"Casa\", \"Oficina\")."
+          },
+          "street": {
+            "type": "string",
+            "maxLength": 300,
+            "description": "Full street address including number."
+          },
+          "district": {
+            "type": "string",
+            "maxLength": 100,
+            "description": "Neighborhood or district."
+          },
+          "city": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "postalCode": {
+            "type": "string",
+            "maxLength": 10
+          },
+          "notes": {
+            "type": "string",
+            "description": "Optional delivery instructions."
+          },
+          "isDefault": {
+            "type": "boolean",
+            "description": "Set to true to make this the default delivery address."
+          }
+        }
+      },
+      "UpdateAddressRequest": {
+        "type": "object",
+        "minProperties": 1,
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "street": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "district": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "city": {
+            "type": "string",
+            "maxLength": 100
+          },
+          "postalCode": {
+            "type": "string",
+            "maxLength": 10
+          },
+          "notes": {
+            "type": "string"
+          },
+          "isDefault": {
+            "type": "boolean"
+          }
+        }
+      },
+      "AddressResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "street": {
+            "type": "string"
+          },
+          "district": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "postalCode": {
+            "type": "string",
+            "nullable": true
+          },
+          "notes": {
+            "type": "string",
+            "nullable": true
+          },
+          "isDefault": {
+            "type": "boolean"
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "password": {
+            "type": "string",
+            "format": "password"
+          }
+        }
+      },
+      "SessionResponse": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "customerId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "token": {
+            "type": "string",
+            "description": "Opaque session token to use in authenticated requests."
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SessionStatus"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Machine-readable error code."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable error description."
+          }
+        }
+      }
+    }
+  }
+},
+      dom_id: '#swagger-ui',
+      presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+      layout: 'BaseLayout',
+      deepLinking: true,
+      tryItOutEnabled: false,
+      validatorUrl: null,
+    });
+  </script>
+</body>
+</html>
