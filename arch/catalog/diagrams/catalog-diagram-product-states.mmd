@@ -1,9 +1,0 @@
-stateDiagram-v2
-    [*] --> DRAFT : UC-CAT-014 CreateProduct
-
-    DRAFT --> ACTIVE : UC-CAT-003 ActivateProduct (CAT-RULE-001)
-    ACTIVE --> DISCONTINUED : UC-CAT-004 DiscontinueProduct
-
-    DRAFT : DRAFT\nEn configuracion, no visible
-    ACTIVE : ACTIVE\nVisible y disponible para compra
-    DISCONTINUED : DISCONTINUED\nRetirado permanentemente

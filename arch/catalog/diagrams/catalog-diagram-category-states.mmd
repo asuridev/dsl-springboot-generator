@@ -1,8 +1,0 @@
-stateDiagram-v2
-    [*] --> ACTIVE : UC-CAT-001 CreateCategory
-
-    ACTIVE --> INACTIVE : UC-CAT-010 DeactivateCategory
-    INACTIVE --> ACTIVE : UC-CAT-011 ReactivateCategory
-
-    ACTIVE : ACTIVE\nVisible, acepta productos
-    INACTIVE : INACTIVE\nOculta, productos no asignables
