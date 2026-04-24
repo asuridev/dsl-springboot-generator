@@ -24,6 +24,14 @@ function isMoneyType(type) {
   return type === 'Money';
 }
 
+function isValueObjectType(type, bcYaml) {
+  return (bcYaml.valueObjects || []).some((vo) => vo.name === type);
+}
+
+function getVoDef(type, bcYaml) {
+  return (bcYaml.valueObjects || []).find((vo) => vo.name === type) || null;
+}
+
 /**
  * Build the @Column annotation string for a YAML property in a JPA entity.
  * Does NOT handle Money (expanded separately) or enum fields (caller adds @Enumerated).
@@ -56,11 +64,40 @@ function buildColumnAnnotation(prop, bcYaml, { forceNullable } = {}) {
   const lines = [`@Column(${attrs.join(', ')})`];
 
   // Enum fields need @Enumerated
-  if (isEnumType(type, bcYaml)) {
+  const enumWrapperMatch = /^Enum<(.+)>$/.exec(type);
+  if (enumWrapperMatch || isEnumType(type, bcYaml)) {
     lines.push('@Enumerated(EnumType.STRING)');
   }
 
   return lines.join('\n    ');
+}
+
+/**
+ * Expand a multi-property VO into individual JPA columns with a prefixed name.
+ * e.g. deliveryAddress: AddressSnapshot → deliveryAddressStreet, deliveryAddressCity, ...
+ * This keeps infrastructure free of domain VO types.
+ */
+function expandMultiPropertyVoField(prop, voDef, bcYaml) {
+  const prefix = prop.name;
+  const fields = [];
+  for (const voProp of (voDef.properties || [])) {
+    const fieldName = `${prefix}${capitalize(voProp.name)}`;
+    let javaType;
+    try {
+      javaType = mapType(voProp.type, voProp).javaType;
+    } catch (_) {
+      javaType = 'String';
+    }
+    fields.push({
+      name: fieldName,
+      javaType,
+      columnAnnotation: buildColumnAnnotation(
+        { ...voProp, name: fieldName, required: prop.required === true && voProp.required === true },
+        bcYaml
+      ),
+    });
+  }
+  return fields;
 }
 
 /**
@@ -120,19 +157,35 @@ function buildJpaFields(properties, aggregate, bcYaml) {
       continue;
     }
 
-    // Map type
-    let javaType;
-    try {
-      javaType = mapType(prop.type, prop).javaType;
-    } catch (_) {
-      javaType = 'String'; // fallback
+    // Map type — flatten single-property VOs; expand multi-property VOs to individual columns
+    const voDef = getVoDef(prop.type, bcYaml);
+    if (voDef && (voDef.properties || []).length === 1) {
+      let javaType;
+      try {
+        javaType = mapType(voDef.properties[0].type, voDef.properties[0]).javaType;
+      } catch (_) {
+        javaType = 'String';
+      }
+      fields.push({
+        name: prop.name,
+        javaType,
+        columnAnnotation: buildColumnAnnotation(prop, bcYaml),
+      });
+    } else if (voDef && (voDef.properties || []).length > 1) {
+      fields.push(...expandMultiPropertyVoField(prop, voDef, bcYaml));
+    } else {
+      let javaType;
+      try {
+        javaType = mapType(prop.type, prop).javaType;
+      } catch (_) {
+        javaType = 'String'; // fallback
+      }
+      fields.push({
+        name: prop.name,
+        javaType,
+        columnAnnotation: buildColumnAnnotation(prop, bcYaml),
+      });
     }
-
-    fields.push({
-      name: prop.name,
-      javaType,
-      columnAnnotation: buildColumnAnnotation(prop, bcYaml),
-    });
   }
 
   return fields;
@@ -159,8 +212,29 @@ function buildJpaEntityImports(aggregate, bcYaml, config) {
       continue;
     }
 
-    if (isEnumType(prop.type, bcYaml)) {
-      imports.add(`${config.packageName}.${bc}.domain.enums.${prop.type}`);
+    const ewm = /^Enum<(.+)>$/.exec(prop.type);
+    const resolvedEnum = ewm ? ewm[1] : prop.type;
+    if (ewm || isEnumType(resolvedEnum, bcYaml)) {
+      imports.add(`${config.packageName}.${bc}.domain.enums.${resolvedEnum}`);
+      continue;
+    }
+
+    const voDef = getVoDef(prop.type, bcYaml);
+    if (voDef) {
+      if ((voDef.properties || []).length === 1) {
+        try {
+          const { importHint } = mapType(voDef.properties[0].type, voDef.properties[0]);
+          if (importHint) imports.add(importHint);
+        } catch (_) { /* ignore */ }
+      } else {
+        // Multi-property VO expanded to scalar columns — collect scalar imports
+        for (const voProp of (voDef.properties || [])) {
+          try {
+            const { importHint } = mapType(voProp.type, voProp);
+            if (importHint) imports.add(importHint);
+          } catch (_) { /* ignore */ }
+        }
+      }
       continue;
     }
 
@@ -197,18 +271,34 @@ function buildJpaChildFields(entity, bcYaml) {
       continue;
     }
 
-    let javaType;
-    try {
-      javaType = mapType(prop.type, prop).javaType;
-    } catch (_) {
-      javaType = 'String';
+    const voDef = getVoDef(prop.type, bcYaml);
+    if (voDef && (voDef.properties || []).length === 1) {
+      let javaType;
+      try {
+        javaType = mapType(voDef.properties[0].type, voDef.properties[0]).javaType;
+      } catch (_) {
+        javaType = 'String';
+      }
+      fields.push({
+        name: prop.name,
+        javaType,
+        columnAnnotation: buildColumnAnnotation(prop, bcYaml),
+      });
+    } else if (voDef && (voDef.properties || []).length > 1) {
+      fields.push(...expandMultiPropertyVoField(prop, voDef, bcYaml));
+    } else {
+      let javaType;
+      try {
+        javaType = mapType(prop.type, prop).javaType;
+      } catch (_) {
+        javaType = 'String';
+      }
+      fields.push({
+        name: prop.name,
+        javaType,
+        columnAnnotation: buildColumnAnnotation(prop, bcYaml),
+      });
     }
-
-    fields.push({
-      name: prop.name,
-      javaType,
-      columnAnnotation: buildColumnAnnotation(prop, bcYaml),
-    });
   }
 
   return fields;
@@ -229,8 +319,29 @@ function buildJpaChildEntityImports(entity, bcYaml, config) {
       continue;
     }
 
-    if (isEnumType(prop.type, bcYaml)) {
-      imports.add(`${config.packageName}.${bc}.domain.enums.${prop.type}`);
+    const ewm = /^Enum<(.+)>$/.exec(prop.type);
+    const resolvedEnum = ewm ? ewm[1] : prop.type;
+    if (ewm || isEnumType(resolvedEnum, bcYaml)) {
+      imports.add(`${config.packageName}.${bc}.domain.enums.${resolvedEnum}`);
+      continue;
+    }
+
+    const voDef = getVoDef(prop.type, bcYaml);
+    if (voDef) {
+      if ((voDef.properties || []).length === 1) {
+        try {
+          const { importHint } = mapType(voDef.properties[0].type, voDef.properties[0]);
+          if (importHint) imports.add(importHint);
+        } catch (_) { /* ignore */ }
+      } else {
+        // Multi-property VO expanded to scalar columns — collect scalar imports
+        for (const voProp of (voDef.properties || [])) {
+          try {
+            const { importHint } = mapType(voProp.type, voProp);
+            if (importHint) imports.add(importHint);
+          } catch (_) { /* ignore */ }
+        }
+      }
       continue;
     }
 

@@ -9,6 +9,10 @@ import <%= packageName %>.shared.domain.interfaces.CommandHandler;
 <% fkRepos.forEach(fk => { %>import <%= packageName %>.<%= moduleName %>.domain.repository.<%= fk.repoName %>;
 <% }); %>
 <% } %>
+<% if (fkPorts && fkPorts.length > 0) { %>
+<% fkPorts.forEach(p => { %>import <%= p.importPath %>;
+<% }); %>
+<% } %>
 <% if (imports && imports.length > 0) { %>
 <% imports.forEach(imp => { %>import <%- imp %>;
 <% }); %>
@@ -23,17 +27,36 @@ public class <%= useCaseName %>CommandHandler implements CommandHandler<<%= useC
 <% fkRepos.forEach(fk => { %>    private final <%= fk.repoName %> <%= fk.repoFieldName %>;
 <% }); %>
 <% } %>
+<% if (fkPorts && fkPorts.length > 0) { %>
+<% fkPorts.forEach(p => { %>    private final <%= p.portName %> <%= p.portFieldName %>;
+<% }); %>
+<% } %>
 <% if (needsMapper) { %>    private final <%= mapperName %> <%= mapperFieldName %>;
 <% } %>
-
+<%
+  const hasFkRepos  = fkRepos  && fkRepos.length  > 0;
+  const hasFkPorts  = fkPorts  && fkPorts.length   > 0;
+  const hasExtra    = hasFkRepos || hasFkPorts || needsMapper;
+%>
     public <%= useCaseName %>CommandHandler(
-            <%= repoName %> <%= repoFieldName %><% if (fkRepos && fkRepos.length > 0) { %>,
-<% fkRepos.forEach((fk, i) => { %>            <%= fk.repoName %> <%= fk.repoFieldName %><%= i < fkRepos.length - 1 ? ',' : (needsMapper ? ',' : '') %>
-<% }); %><% } %><% if (needsMapper) { %>
-            <%= mapperName %> <%= mapperFieldName %><% } %>) {
+            <%= repoName %> <%= repoFieldName %><%= hasExtra ? ',' : '' %>
+<% if (hasFkRepos) { %>
+<% fkRepos.forEach((fk, i) => { %>            <%= fk.repoName %> <%= fk.repoFieldName %><%= (i < fkRepos.length - 1 || hasFkPorts || needsMapper) ? ',' : '' %>
+<% }); %>
+<% } %>
+<% if (hasFkPorts) { %>
+<% fkPorts.forEach((p, i) => { %>            <%= p.portName %> <%= p.portFieldName %><%= (i < fkPorts.length - 1 || needsMapper) ? ',' : '' %>
+<% }); %>
+<% } %>
+<% if (needsMapper) { %>            <%= mapperName %> <%= mapperFieldName %>
+<% } %>) {
         this.<%= repoFieldName %> = <%= repoFieldName %>;
-<% if (fkRepos && fkRepos.length > 0) { %>
+<% if (hasFkRepos) { %>
 <% fkRepos.forEach(fk => { %>        this.<%= fk.repoFieldName %> = <%= fk.repoFieldName %>;
+<% }); %>
+<% } %>
+<% if (hasFkPorts) { %>
+<% fkPorts.forEach(p => { %>        this.<%= p.portFieldName %> = <%= p.portFieldName %>;
 <% }); %>
 <% } %>
 <% if (needsMapper) { %>        this.<%= mapperFieldName %> = <%= mapperFieldName %>;

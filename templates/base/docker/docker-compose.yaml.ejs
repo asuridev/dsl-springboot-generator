@@ -1,0 +1,44 @@
+name: <%= systemName %>-cluster
+
+services:
+<% if (databaseType === 'postgresql') { %>
+  postgres:
+    image: <%= postgresImage %>
+    container_name: <%= systemName %>-postgres
+    environment:
+      POSTGRES_DB: <%= databaseName %>
+      POSTGRES_USER: <%= databaseUsername %>
+      POSTGRES_PASSWORD: <%= databasePassword %>
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - <%= systemName %>-network
+<% } else if (databaseType === 'mysql') { %>
+  mysql:
+    image: <%= mysqlImage %>
+    container_name: <%= systemName %>-mysql
+    environment:
+      MYSQL_DATABASE: <%= databaseName %>
+      MYSQL_USER: <%= databaseUsername %>
+      MYSQL_PASSWORD: <%= databasePassword %>
+      MYSQL_ROOT_PASSWORD: <%= databasePassword %>
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    networks:
+      - <%= systemName %>-network
+<% } %>
+
+volumes:
+<% if (databaseType === 'postgresql') { %>
+  postgres-data:
+<% } else if (databaseType === 'mysql') { %>
+  mysql-data:
+<% } %>
+
+networks:
+  <%= systemName %>-network:
+    driver: bridge

@@ -36,23 +36,23 @@ function javaTypeForEventField(payloadField, packageName, moduleName) {
 
   try {
     const mapped = mapType(type, payloadField);
-    // Value Objects (e.g. Money) may have importHint: null in type-mapper.
-    // Derive the import from the domain valueobject package.
+    // Value Objects (e.g. Money) and other domain types (e.g. AddressSnapshot) may have
+    // importHint: null in type-mapper. Derive the import from the domain valueobject package.
     const importHint = mapped.importHint
-      || (mapped.isValueObject
+      || (mapped.isValueObject || mapped.isDomainType
         ? `${packageName}.${moduleName}.domain.valueobject.${mapped.javaType}`
         : null);
     return {
       javaType: mapped.javaType,
       importHint,
       innerImportHint: null,
-      isValueObject: mapped.isValueObject || false,
+      isValueObject: mapped.isValueObject || mapped.isDomainType || false,
     };
   } catch (_) {
-    // Unknown/domain type (Value Object, enum, etc.) — treat as same-module reference
+    // Unknown/domain type (Value Object, etc.) — treat as same-module reference
     return {
       javaType: type,
-      importHint: `${packageName}.${moduleName}.domain.models.valueObjects.${type}`,
+      importHint: `${packageName}.${moduleName}.domain.valueobject.${type}`,
       innerImportHint: null,
       isValueObject: true,
     };
@@ -104,6 +104,7 @@ async function generateDomainEvent(event, packageName, moduleName, eventsDir) {
   const fields = (event.payload || []).map((p) => {
     const mapped = javaTypeForEventField(p, packageName, moduleName);
     if (mapped.importHint) imports.add(mapped.importHint);
+    if (mapped.innerImportHint) imports.add(mapped.innerImportHint);
     return { type: mapped.javaType, name: p.name };
   });
 
@@ -210,9 +211,15 @@ async function generateRabbitListener(consumedEvent, packageName, moduleName, li
   const commandClassName = `${toPascalCase(consumedEvent.command)}Command`;
   const queueKey = consumedEvent.queueKey || `${moduleName}-${toRoutingKeyKebab(consumedEvent.name)}`;
 
-  const fields = (consumedEvent.payload || []).map((p) =>
-    Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName))
-  );
+  const fields = (consumedEvent.payload || []).map((p) => {
+    const mapped = Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName));
+    // Commands use String for UUID fields (for validation); normalize to match command signature
+    if (mapped.javaType === 'UUID') {
+      mapped.javaType = 'String';
+      mapped.importHint = null;
+    }
+    return mapped;
+  });
 
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'messaging', 'RabbitListener.java.ejs'),
@@ -253,21 +260,173 @@ async function generateSharedRabbitConfig(config, outputDir) {
   );
 }
 
+// ─── Per-BC RabbitMQ config (exchanges, queues, bindings, DLQs) ──────────────
+
+/**
+ * Derives the producer BC name from an AsyncAPI channel path.
+ * e.g. "inventory.stock-item.reserved" → "inventory"
+ */
+function producerBcFromChannel(channel) {
+  if (!channel) return null;
+  return channel.split('.')[0];
+}
+
+/**
+ * Generates {BcPascal}RabbitMQConfig.java for a single BC.
+ * Declares TopicExchange, Queue, Binding, DLX and DLQ beans for all published
+ * and consumed events in this BC so RabbitAdmin auto-declares topology on startup.
+ *
+ * @param {Array} publishedEventCtxs - contexts built by buildEventContext() for published events
+ * @param {Array} resolvedConsumedEvents - resolved consumed events with {name, channel, queueKey}
+ * @param {string} packageName
+ * @param {string} moduleName
+ * @param {string} adaptersDir - path to infrastructure/adapters/
+ */
+async function generateBcRabbitMQConfig(
+  publishedEventCtxs,
+  resolvedConsumedEvents,
+  packageName,
+  moduleName,
+  adaptersDir
+) {
+  const modulePascalCase = toPascalCase(moduleName);
+  const moduleCamelCase  = toCamelCase(moduleName);
+
+  // Build per-published-event context
+  const publishedForConfig = publishedEventCtxs.map((ctx) => ({
+    name:      ctx.name,
+    queueKey:  ctx.topicNameKebab,
+    fieldName: ctx.topicNameCamel,
+  }));
+
+  // Group consumed events by producer BC
+  const producerMap = new Map(); // producerBc → [{name, queueKey, fieldName}]
+  for (const ev of resolvedConsumedEvents) {
+    const producerBc = producerBcFromChannel(ev.channel) || ev.producer || 'unknown';
+    if (!producerMap.has(producerBc)) producerMap.set(producerBc, []);
+    const eventKebab  = toKebabCase(ev.name);
+    const queueKey    = ev.queueKey || `${moduleName}-${eventKebab}`;
+    const fieldName   = toCamelCase(queueKey);
+    producerMap.get(producerBc).push({ name: ev.name, queueKey, fieldName });
+  }
+
+  const consumersByProducer = [...producerMap.entries()].map(([producerBc, events]) => ({
+    producerBc,
+    producerCamel: toCamelCase(producerBc),
+    events,
+  }));
+
+  const adapterDir = path.join(adaptersDir, 'rabbitmqMessageBroker');
+
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'messaging', 'BcRabbitMQConfig.java.ejs'),
+    path.join(adapterDir, `${modulePascalCase}RabbitMQConfig.java`),
+    {
+      packageName,
+      moduleName,
+      modulePascalCase,
+      moduleCamelCase,
+      publishedEvents:    publishedForConfig,
+      consumersByProducer,
+    }
+  );
+}
+
+// ─── Shared Kafka config ──────────────────────────────────────────────────────
+
+/**
+ * Generates the shared KafkaConfig.java (infrastructure bean — topic definitions read from YAML).
+ */
+async function generateSharedKafkaConfig(config, outputDir) {
+  const packageName = config.packageName;
+
+  const sharedDir = path.join(
+    outputDir,
+    'src', 'main', 'java',
+    ...toPackagePath(packageName).split('/'),
+    'shared'
+  );
+
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'messaging', 'KafkaConfig.java.ejs'),
+    path.join(sharedDir, 'infrastructure', 'configurations', 'kafkaConfig', 'KafkaConfig.java'),
+    { packageName }
+  );
+}
+
+/**
+ * Shared entry-point: dispatches to the correct broker-specific config generator.
+ */
+async function generateSharedBrokerConfig(config, outputDir) {
+  if (config.broker === 'rabbitmq') {
+    return generateSharedRabbitConfig(config, outputDir);
+  }
+  if (config.broker === 'kafka') {
+    return generateSharedKafkaConfig(config, outputDir);
+  }
+}
+
 // ─── Main messaging layer generator ──────────────────────────────────────────
 
 /**
- * Generates the complete messaging layer for one BC:
- *   1. Domain event records       (domain/events/)
- *   2. Integration event records  (application/events/)
- *   3. MessageBroker port         (application/ports/MessageBroker.java)
- *   4. RabbitMQ adapter           (infrastructure/adapters/rabbitmqMessageBroker/)
- *   5. DomainEventHandler bridge  (application/usecases/)
- *   6. RabbitMQ listeners         (infrastructure/rabbitListener/)
+ * Generates {BcPascal}KafkaMessageBroker.java adapter in
+ * infrastructure/adapters/kafkaMessageBroker/.
+ */
+async function generateKafkaMessageBrokerAdapter(publishedEventCtxs, packageName, moduleName, adaptersDir) {
+  const modulePascalCase = toPascalCase(moduleName);
+  const moduleCamelCase  = toCamelCase(moduleName);
+  const adapterDir = path.join(adaptersDir, 'kafkaMessageBroker');
+
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'messaging', 'KafkaMessageBroker.java.ejs'),
+    path.join(adapterDir, `${modulePascalCase}KafkaMessageBroker.java`),
+    {
+      packageName,
+      moduleName,
+      modulePascalCase,
+      moduleCamelCase,
+      events: publishedEventCtxs,
+    }
+  );
+}
+
+/**
+ * Generates one {MessageName}KafkaListener.java per consumed event.
+ */
+async function generateKafkaListener(consumedEvent, packageName, moduleName, listenersDir) {
+  const listenerClassName = `${toPascalCase(consumedEvent.name)}KafkaListener`;
+  const commandClassName  = `${toPascalCase(consumedEvent.command)}Command`;
+  const topicKey = consumedEvent.topicKey || `${moduleName}-${toRoutingKeyKebab(consumedEvent.name)}`;
+
+  const fields = (consumedEvent.payload || []).map((p) =>
+    Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName))
+  );
+
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'messaging', 'KafkaListener.java.ejs'),
+    path.join(listenersDir, `${listenerClassName}.java`),
+    {
+      packageName,
+      moduleName,
+      listenerClassName,
+      commandClassName,
+      topicKey,
+      producer: consumedEvent.producer || 'unknown',
+      useCase:  consumedEvent.useCase  || consumedEvent.command,
+      eventName: consumedEvent.name,
+      fields,
+    }
+  );
+}
+
+/**
+ * Generates the complete messaging layer for one BC.
+ * Dispatches to RabbitMQ or Kafka implementations based on config.broker.
  *
- * @param {object} bcYaml    - Parsed {bc}.yaml
+ * @param {object} bcYaml
  * @param {object} _asyncApiDoc - Ignored (kept for API compatibility)
- * @param {object} config    - { packageName, systemName }
- * @param {string} outputDir - Root of the output project
+ * @param {object} config       - { packageName, systemName, broker }
+ * @param {string} outputDir
  * @returns {{ eventCount, integrationEventCount, listenerCount }}
  */
 async function generateMessagingLayer(bcYaml, _asyncApiDoc, config, outputDir) {
@@ -277,7 +436,76 @@ async function generateMessagingLayer(bcYaml, _asyncApiDoc, config, outputDir) {
   const publishedEvents = (bcYaml.domainEvents || {}).published || [];
   const consumedEvents  = (bcYaml.domainEvents || {}).consumed  || [];
 
-  if (publishedEvents.length === 0 && consumedEvents.length === 0) {
+  // ── Resolve consumed events ──────────────────────────────────────────────
+  // Consumed events may come in two forms:
+  //   A) Full form: { name, channel, command, useCase, queueKey, payload, producer }
+  //      → used directly by generateRabbitListener
+  //   B) Lightweight form: { name, channel, description }  (no command/payload)
+  //      → listener must be derived from use cases with trigger.kind: event
+  //
+  // We normalise both forms into resolvedConsumedEvents for listener generation
+  // and per-BC config topology.
+
+  // Build a lookup: eventName → useCase (for trigger.kind === 'event')
+  const ucByEventName = new Map();
+  for (const uc of bcYaml.useCases || []) {
+    if (uc.trigger && uc.trigger.kind === 'event' && uc.trigger.event) {
+      ucByEventName.set(uc.trigger.event, uc);
+    }
+  }
+
+  // Attach channel from consumed event entry to the UC, if not already present
+  const channelByEventName = new Map();
+  for (const ev of consumedEvents) {
+    channelByEventName.set(ev.name, ev.channel || null);
+  }
+
+  const resolvedConsumedEvents = consumedEvents.map((ev) => {
+    // Already full form — return as-is
+    if (ev.command) return ev;
+
+    // Lightweight form — derive from matching use case
+    const uc = ucByEventName.get(ev.name);
+    if (!uc) return ev; // no matching UC; listener cannot be generated
+
+    const queueKey = ev.queueKey || `${moduleName}-${toRoutingKeyKebab(ev.name)}`;
+
+    // Derive payload from UC method params + aggregate property types.
+    // e.g. method: "create(id, customerId, street, city, postalCode?, notes?)"
+    // → payload: [{ name:'id', type:'Uuid' }, { name:'customerId', type:'Uuid' }, ...]
+    const methodMatch = (uc.method || '').match(/^\w+\(([^)]*)\)/);
+    const paramNames = methodMatch && methodMatch[1].trim()
+      ? methodMatch[1].split(',').map((p) => p.trim().replace('?', ''))
+      : [];
+    const agg = (bcYaml.aggregates || []).find((a) => a.name === uc.aggregate);
+    const aggProps = (agg && agg.properties) ? agg.properties : [];
+    const payload = paramNames.map((paramName) => {
+      const prop = aggProps.find((ap) => ap.name === paramName);
+      return { name: paramName, type: prop ? prop.type : 'String' };
+    });
+
+    // Non-create commands with notFoundError get an auto-injected 'id' field in the command
+    // (mirrors buildCommandFields logic). For event-triggered listeners the id must come from
+    // the event payload — prepend it here when not already present.
+    const isCreate = /^create\(/.test(uc.method || '');
+    const hasNotFoundError = !!(uc.notFoundError &&
+      (Array.isArray(uc.notFoundError) ? uc.notFoundError.length > 0 : true));
+    if (!isCreate && hasNotFoundError && !payload.some((p) => p.name === 'id')) {
+      payload.unshift({ name: 'id', type: 'Uuid' });
+    }
+
+    return {
+      name:      ev.name,
+      channel:   ev.channel || null,
+      producer:  ev.channel ? ev.channel.split('.')[0] : 'unknown',
+      command:   uc.name,   // use case name becomes the command class base
+      useCase:   uc.id,
+      queueKey,
+      payload,
+    };
+  });
+
+  if (publishedEvents.length === 0 && resolvedConsumedEvents.length === 0) {
     return { eventCount: 0, integrationEventCount: 0, listenerCount: 0 };
   }
 
@@ -292,7 +520,6 @@ async function generateMessagingLayer(bcYaml, _asyncApiDoc, config, outputDir) {
   const portsDir        = path.join(bcBase, 'application',   'ports');
   const usecasesDir     = path.join(bcBase, 'application',   'usecases');
   const adaptersDir     = path.join(bcBase, 'infrastructure', 'adapters');
-  const listenersDir    = path.join(bcBase, 'infrastructure', 'rabbitListener');
 
   const publishedEventCtxs = publishedEvents.map((e) =>
     buildEventContext(e, packageName, moduleName)
@@ -313,13 +540,39 @@ async function generateMessagingLayer(bcYaml, _asyncApiDoc, config, outputDir) {
 
   if (publishedEventCtxs.length > 0) {
     await generateMessageBrokerPort(publishedEventCtxs, packageName, moduleName, portsDir);
-    await generateRabbitMessageBrokerAdapter(publishedEventCtxs, packageName, moduleName, adaptersDir);
     await generateDomainEventHandler(publishedEventCtxs, packageName, moduleName, usecasesDir);
+
+    if (config.broker === 'kafka') {
+      await generateKafkaMessageBrokerAdapter(publishedEventCtxs, packageName, moduleName, adaptersDir);
+    } else {
+      // Default: rabbitmq
+      await generateRabbitMessageBrokerAdapter(publishedEventCtxs, packageName, moduleName, adaptersDir);
+    }
+  }
+
+  // ── Per-BC RabbitMQ config (exchanges, queues, bindings, DLQs) ──────────
+  if (config.broker === 'rabbitmq' && (publishedEventCtxs.length > 0 || resolvedConsumedEvents.length > 0)) {
+    await generateBcRabbitMQConfig(
+      publishedEventCtxs,
+      resolvedConsumedEvents,
+      packageName,
+      moduleName,
+      adaptersDir
+    );
   }
 
   let listenerCount = 0;
-  for (const consumed of consumedEvents) {
-    await generateRabbitListener(consumed, packageName, moduleName, listenersDir);
+  for (const consumed of resolvedConsumedEvents) {
+    // Only generate listener if we have a command to dispatch to
+    if (!consumed.command) continue;
+
+    if (config.broker === 'kafka') {
+      const listenersDir = path.join(bcBase, 'infrastructure', 'kafkaListener');
+      await generateKafkaListener(consumed, packageName, moduleName, listenersDir);
+    } else {
+      const listenersDir = path.join(bcBase, 'infrastructure', 'rabbitListener');
+      await generateRabbitListener(consumed, packageName, moduleName, listenersDir);
+    }
     listenerCount++;
   }
 
@@ -369,6 +622,12 @@ function buildRabbitMQTopology(allBcYamls) {
       const queueKey   = event.queueKey || `${bcName}-${eventKebab}`;
       queueMap.set(queueKey, `${bcName}.${eventKebab}`);
       rkMap.set(queueKey,    dotCase);
+      // Add producer BC exchange derived from channel (e.g. "inventory.stock-item.reserved" → "inventory")
+      // This ensures external producer exchanges are declared even if that BC is not in allBcYamls.
+      const producerBc = event.channel ? event.channel.split('.')[0] : null;
+      if (producerBc && !exchangeMap.has(producerBc)) {
+        exchangeMap.set(producerBc, `${producerBc}.events`);
+      }
     }
   }
 
@@ -379,14 +638,57 @@ function buildRabbitMQTopology(allBcYamls) {
   };
 }
 
+// ─── Kafka topology builder ───────────────────────────────────────────────────
+
+/**
+ * Aggregates Kafka topic topology from ALL BCs' domain events.
+ *
+ * Derivation rules:
+ *   topics: published → key = {event-kebab}, value = {bcName}.{event-kebab}
+ *           consumed  → key = {consumerBc}-{event-kebab}, value = {bcName}.{event-kebab}
+ *
+ * @param {Array<object>} allBcYamls
+ * @returns {{ topics: Array<{key, value}> }}
+ */
+function buildKafkaTopology(allBcYamls) {
+  const topicMap = new Map();
+
+  for (const bcYaml of allBcYamls) {
+    const bcName    = bcYaml.bc;
+    const published = (bcYaml.domainEvents || {}).published || [];
+    const consumed  = (bcYaml.domainEvents || {}).consumed  || [];
+
+    for (const event of published) {
+      const eventKebab = toKebabCase(event.name);
+      topicMap.set(eventKebab, `${bcName}.${eventKebab}`);
+    }
+
+    for (const event of consumed) {
+      const eventKebab = toKebabCase(event.name);
+      const topicKey   = event.topicKey || `${bcName}-${eventKebab}`;
+      topicMap.set(topicKey, `${bcName}.${eventKebab}`);
+    }
+  }
+
+  return {
+    topics: [...topicMap.entries()].map(([key, value]) => ({ key, value })),
+  };
+}
+
 module.exports = {
   generateMessagingLayer,
+  generateSharedBrokerConfig,
   generateSharedRabbitConfig,
+  generateSharedKafkaConfig,
   generateDomainEvent,
   generateIntegrationEvent,
   generateMessageBrokerPort,
   generateRabbitMessageBrokerAdapter,
+  generateKafkaMessageBrokerAdapter,
+  generateBcRabbitMQConfig,
   generateDomainEventHandler,
   generateRabbitListener,
+  generateKafkaListener,
   buildRabbitMQTopology,
+  buildKafkaTopology,
 };

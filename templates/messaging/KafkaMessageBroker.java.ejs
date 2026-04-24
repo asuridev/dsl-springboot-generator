@@ -1,0 +1,40 @@
+package <%= packageName %>.<%= moduleName %>.infrastructure.adapters.kafkaMessageBroker;
+<% events.forEach(event => { %>
+import <%= packageName %>.<%= moduleName %>.application.events.<%= event.integrationEventClassName %>;
+<% }); %>
+import <%= packageName %>.<%= moduleName %>.application.ports.MessageBroker;
+import <%= packageName %>.shared.infrastructure.eventEnvelope.EventEnvelope;
+import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.stereotype.Component;
+
+/**
+ * <%= modulePascalCase %>KafkaMessageBroker — Kafka adapter implementing {@link MessageBroker}.
+ *
+ * Topics are resolved at runtime from parameters/{env}/kafka.yaml via @Value bindings.
+ * derived_from: domainEvents.published (all entries)
+ */
+@Component("<%= moduleCamelCase %>KafkaMessageBroker")
+public class <%= modulePascalCase %>KafkaMessageBroker implements MessageBroker {
+<% events.forEach(event => { %>
+  @Value("${topics.<%= event.topicNameKebab %>}")
+  private String <%= event.topicNameCamel %>Topic;
+<% }); %>
+  private final KafkaTemplate<String, Object> kafkaTemplate;
+
+  public <%= modulePascalCase %>KafkaMessageBroker(KafkaTemplate<String, Object> kafkaTemplate) {
+    this.kafkaTemplate = kafkaTemplate;
+  }
+<% events.forEach(event => { %>
+  @Override
+  public void publish<%= event.integrationEventClassName %>(<%= event.integrationEventClassName %> event) {
+    EventEnvelope<<%= event.integrationEventClassName %>> envelope = EventEnvelope.of(
+      <%= event.topicNameCamel %>Topic,
+      event,
+      MDC.get("correlationId")
+    );
+    kafkaTemplate.send(<%= event.topicNameCamel %>Topic, envelope);
+  }
+<% }); %>
+}

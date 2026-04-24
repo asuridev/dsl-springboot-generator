@@ -1,0 +1,85 @@
+package <%= packageName %>.<%= moduleName %>.infrastructure.kafkaListener;
+
+import <%= packageName %>.<%= moduleName %>.application.commands.<%= commandClassName %>;
+import <%= packageName %>.shared.infrastructure.configurations.useCaseConfig.UseCaseMediator;
+import <%= packageName %>.shared.infrastructure.eventEnvelope.EventEnvelope;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.kafka.support.Acknowledgment;
+import org.springframework.stereotype.Component;
+
+import java.util.Map;
+<% const hasLists = fields && fields.some(f => f.javaType && f.javaType.startsWith('List')); %>
+<% if (hasLists) { %>import java.util.List;
+<% } %>
+<% const needsBigDecimal = fields && fields.some(f => f.javaType === 'BigDecimal'); %>
+<% const needsLocalDate  = fields && fields.some(f => ['LocalDate','LocalDateTime','LocalTime'].includes(f.javaType)); %>
+<% const needsInstant    = fields && fields.some(f => f.javaType === 'Instant'); %>
+<% const needsUUID       = fields && fields.some(f => f.javaType === 'UUID'); %>
+<% if (needsBigDecimal) { %>import java.math.BigDecimal;
+<% } %><% if (needsLocalDate) { %>import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
+<% } %><% if (needsInstant) { %>import java.time.Instant;
+<% } %><% if (needsUUID) { %>import java.util.UUID;
+<% } %>
+/**
+ * Kafka listener for topic ${topics.<%= topicKey %>}.
+ * Consumes events produced by: <%= producer %>.
+ * Dispatches to use case: <%= useCase %>.
+ * derived_from: domainEvents.consumed.<%= eventName %>
+ */
+@Component("<%= moduleName %>.<%= listenerClassName %>")
+public class <%= listenerClassName %> {
+
+    private static final Logger log = LoggerFactory.getLogger(<%= listenerClassName %>.class);
+
+    private final UseCaseMediator useCaseMediator;
+    private final ObjectMapper objectMapper;
+
+    public <%= listenerClassName %>(UseCaseMediator useCaseMediator, ObjectMapper objectMapper) {
+        this.useCaseMediator = useCaseMediator;
+        this.objectMapper = objectMapper;
+    }
+
+    @KafkaListener(topics = "${topics.<%= topicKey %>}", groupId = "${spring.kafka.consumer.group-id}")
+    public void handle(ConsumerRecord<String, String> record, Acknowledgment acknowledgment) {
+        EventEnvelope<Map<String, Object>> event;
+        try {
+            event = objectMapper.readValue(
+                    record.value(),
+                    new TypeReference<EventEnvelope<Map<String, Object>>>() {});
+        } catch (JsonProcessingException e) {
+            log.error("Fatal deserialization error — skipping message: {}", e.getMessage());
+            acknowledgment.acknowledge();
+            return;
+        }
+
+<% (fields || []).forEach(f => { %>
+<%   const listMatch = f.javaType && f.javaType.match(/^List<(.+)>$/); %>
+<%   if (listMatch) { %>
+        <%- f.javaType %> <%= f.name %> = objectMapper.convertValue(
+                event.data().get("<%= f.name %>"),
+                objectMapper.getTypeFactory().constructCollectionType(List.class, <%= listMatch[1] %>.class));
+<%   } else { %>
+        <%- f.javaType %> <%= f.name %> = objectMapper.convertValue(event.data().get("<%= f.name %>"), <%- f.javaType %>.class);
+<%   } %>
+<% }); %>
+        try {
+            useCaseMediator.dispatch(new <%= commandClassName %>(
+<% (fields || []).forEach((f, i) => { %>
+                    <%= f.name %><%= i < fields.length - 1 ? ',' : '' %>
+<% }); %>
+            ));
+            acknowledgment.acknowledge();
+        } catch (Exception e) {
+            log.error("Error dispatching <%= commandClassName %>: {}", e.getMessage(), e);
+            // Do not acknowledge — allow retry according to consumer configuration
+        }
+    }
+}

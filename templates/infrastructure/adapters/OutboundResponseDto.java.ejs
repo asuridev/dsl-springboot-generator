@@ -1,0 +1,34 @@
+package <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>.dtos;
+<%
+const needsBigDecimal = fields && fields.some(f => f.javaType === 'BigDecimal');
+const needsInstant    = fields && fields.some(f => f.javaType === 'Instant');
+const needsUUID       = fields && fields.some(f => f.javaType === 'UUID');
+const needsList       = fields && fields.some(f => f.javaType && f.javaType.startsWith('List'));
+%>
+<%_ if (needsBigDecimal) { _%>
+import java.math.BigDecimal;
+<%_ } _%>
+<%_ if (needsInstant) { _%>
+import java.time.Instant;
+<%_ } _%>
+<%_ if (needsUUID) { _%>
+import java.util.UUID;
+<%_ } _%>
+<%_ if (needsList) { _%>
+import java.util.List;
+<%_ } _%>
+<%_ (nestedDtoImports || []).forEach(imp => { _%>
+import <%- imp %>;
+<%_ }); _%>
+
+/**
+ * Infrastructure DTO — shape of the <%- dtoName %> response from <%- targetBc %> BC.
+ * Only used inside the adapter layer; never exposed to application or domain layers.
+ */
+public record <%- dtoName %>(
+<%_ if (fields && fields.length > 0) { _%>
+<%_   fields.forEach((f, i) => { _%>
+    <%- f.javaType %> <%- f.name %><%- i < fields.length - 1 ? ',' : '' %>
+<%_   }); _%>
+<%_ } _%>
+) {}

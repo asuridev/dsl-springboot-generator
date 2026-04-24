@@ -1,0 +1,55 @@
+package <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>;
+
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.*;
+<%
+const allOps = operations || [];
+const hasAnyList = allOps.some(op => op.returnList);
+const needsBigDecimal = allOps.some(op => op.infraDtoFields && op.infraDtoFields.some(f => f.javaType === 'BigDecimal'));
+const needsInstant    = allOps.some(op => op.infraDtoFields && op.infraDtoFields.some(f => f.javaType === 'Instant'));
+const needsUUID       = false; // path variables are always String
+const uniqueInfraDtos = [...new Set(allOps.filter(op => op.hasResponse).map(op => op.infraDtoName))];
+const uniqueReqDtos   = [...new Set(allOps.filter(op => op.hasBody).map(op => op.requestDtoName))];
+%>
+<%_ if (hasAnyList) { _%>
+import java.util.List;
+<%_ } _%>
+<%_ if (needsBigDecimal) { _%>
+import java.math.BigDecimal;
+<%_ } _%>
+<%_ if (needsInstant) { _%>
+import java.time.Instant;
+<%_ } _%>
+<%_ uniqueInfraDtos.forEach(dto => { _%>
+import <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>.dtos.<%- dto %>;
+<%_ }); _%>
+<%_ uniqueReqDtos.forEach(dto => { _%>
+import <%- packageName %>.<%- moduleName %>.application.dtos.<%- dto %>;
+<%_ }); _%>
+
+/**
+ * Feign client for the <%- targetBc %> BC internal API.
+ * Returns infrastructure DTOs — never domain models directly.
+ * Mapped to domain models by {@link <%- aclMapperClassName %>}.
+ */
+@FeignClient(
+    name = "<%- feignClientName %>",
+    url = "${<%- baseUrlProperty %>}",
+    configuration = <%- feignConfigClassName %>.class
+)
+public interface <%- feignClientClassName %> {
+<%_ allOps.forEach(op => { _%>
+
+<%_   const feignReturnType = !op.hasResponse ? 'void'
+        : op.returnList ? `List<${op.infraDtoName}>`
+        : op.infraDtoName;
+      const paramList = [];
+      op.pathVariables.forEach(pv => paramList.push(`@PathVariable("${pv}") String ${pv}`));
+      if (op.hasBody) paramList.push(`@RequestBody ${op.requestDtoName} body`);
+      const verbCap = op.httpVerb.charAt(0).toUpperCase() + op.httpVerb.slice(1).toLowerCase();
+      const mappingAnnotation = `@${verbCap}Mapping("${op.httpPath}")`;
+_%>
+    <%- mappingAnnotation %>
+    <%- feignReturnType %> <%- op.feignMethodName %>(<%- paramList.join(', ') %>);
+<%_ }); _%>
+}

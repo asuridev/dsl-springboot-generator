@@ -1,0 +1,53 @@
+package <%- packageName %>.<%- moduleName %>.application.ports;
+
+import java.util.UUID;
+<%
+const needsBigDecimal = domainModels.some(dm => dm.fields.some(f => f.javaType === 'BigDecimal'));
+const needsInstant    = domainModels.some(dm => dm.fields.some(f => f.javaType === 'Instant'));
+const needsList       = operations.some(op => op.returnList);
+const uniqueDomainTypes = [...new Set(operations.filter(op => op.hasDomainReturn).map(op => op.domainType))];
+%>
+<%_ if (needsBigDecimal) { _%>
+import java.math.BigDecimal;
+<%_ } _%>
+<%_ if (needsInstant) { _%>
+import java.time.Instant;
+<%_ } _%>
+<%_ if (needsList) { _%>
+import java.util.List;
+<%_ } _%>
+<%_ uniqueDomainTypes.forEach(dt => { _%>
+import <%- packageName %>.<%- moduleName %>.domain.models.<%- targetBcPackage %>.<%- dt %>;
+<%_ }); _%>
+
+/**
+ * Output port — anti-corruption boundary to the <%- targetBc %> bounded context.
+ * Implementations live in infrastructure/adapters/<%- targetBcPackage %>/.
+ *
+ * <p>This interface is the single dependency point for all <%- targetBc %> interactions:
+ * business operations (from <%- targetBc %>-internal-api.yaml) and FK validations.
+ */
+public interface <%- portInterfaceName %> {
+
+<%_ operations.forEach(op => { _%>
+    /**
+     * <%- op.description %>
+     */
+<%_   const returnType = !op.hasDomainReturn ? 'void'
+        : op.returnList ? `List<${op.domainType}>`
+        : op.domainType; _%>
+<%_   const params = [];
+      op.pathVariables.forEach(pv => params.push(`String ${pv}`));
+      if (op.hasBody) params.push(`${op.requestDtoName} body`); _%>
+    <%- returnType %> <%- op.methodName %>(<%- params.join(', ') %>);
+
+<%_ }); _%>
+<%_ fkMethods.forEach(fk => { _%>
+    /**
+     * Returns true if a <%- fk.aggregate %> with the given id exists and is active in <%- targetBc %>.
+     * Used for FK validation before persisting aggregates that reference cross-BC entities.
+     */
+    boolean <%- fk.methodName %>(UUID id);
+
+<%_ }); _%>
+}

@@ -23,12 +23,27 @@ function isMoneyType(type) {
   return type === 'Money';
 }
 
+function isVoType(type, bcYaml) {
+  if (type === 'Money') return false;
+  return (bcYaml.valueObjects || []).some((vo) => vo.name === type);
+}
+
+function getVoInnerProp(type, bcYaml) {
+  const voDef = (bcYaml.valueObjects || []).find((vo) => vo.name === type);
+  if (voDef && (voDef.properties || []).length === 1) return voDef.properties[0].name;
+  return null;
+}
+
+function getVoDef(type, bcYaml) {
+  return (bcYaml.valueObjects || []).find((vo) => vo.name === type) || null;
+}
+
 /**
  * Map a YAML canonical type to a Java type string for use in repo/impl code.
  * PageRequest → Pageable (Spring Data)
  */
 function yamlTypeToJava(type) {
-  if (!type) return 'void';
+  if (!type) return 'String';
   if (type === 'Uuid') return 'UUID';
   if (type === 'PageRequest') return 'Pageable';
   if (type === 'String' || type === 'Text' || type === 'Email') return 'String';
@@ -41,6 +56,9 @@ function yamlTypeToJava(type) {
   if (type === 'Date') return 'LocalDate';
   if (type === 'Url') return 'URI';
   if (type === 'Money') return 'Money';
+  // Enum<X> → X
+  const enumMatch = type.match(/^Enum<(.+)>$/);
+  if (enumMatch) return enumMatch[1];
   const listMatch = type.match(/^List\[(.+)\]$/);
   if (listMatch) return `List<${yamlTypeToJava(listMatch[1])}>`;
   // Enum, aggregate, or VO name — use as-is
@@ -57,6 +75,8 @@ function yamlReturnToJava(returns) {
   if (optionalMatch) return `Optional<${optionalMatch[1]}>`;
   const pageMatch = returns.match(/^Page\[(.+)\]$/);
   if (pageMatch) return `Page<${pageMatch[1]}>`;
+  const listMatch = returns.match(/^List\[(.+)\]$/);
+  if (listMatch) return `List<${listMatch[1]}>`;
   return returns;
 }
 
@@ -134,13 +154,20 @@ function parseSignatureFormat(sig, methodName) {
 
 /**
  * Parse a repo method in "params/returns" format (catalog YAML style).
+ * Handles both structured form ({ name, type }) and inline flow form ({ paramName: 'Type' }).
  */
 function parseParamsFormat(method) {
-  const params = (method.params || []).map((p) => ({
-    type: p.type,
-    name: p.name,
-    required: p.required !== false,
-  }));
+  const params = (method.params || []).map((p) => {
+    // Inline YAML flow form: [id: Uuid] is parsed as [{id: 'Uuid'}]
+    if (typeof p === 'object' && p !== null && !('name' in p) && !('type' in p)) {
+      const entries = Object.entries(p);
+      if (entries.length === 1) {
+        const [name, type] = entries[0];
+        return { type: String(type), name, required: true };
+      }
+    }
+    return { type: p.type, name: p.name, required: p.required !== false };
+  });
   return { name: method.name, params, returns: method.returns || 'void' };
 }
 
@@ -171,23 +198,48 @@ function buildListQuery(jpaEntityName, optionalParams, alias) {
  * Params: [{name, type}] — FK param + optional filter
  */
 function buildCountQuery(methodName, params, bcYaml) {
-  // Extract entity plural from method name: countProductsInCategory → Products → Product
+  // Extract entity plural from method name: countActiveProductsByCategoryId → ActiveProducts
   const match = methodName.match(/^count([A-Z][a-zA-Z]+?)(?:In|By|With)/);
   if (!match) {
     return `// TODO: write @Query for ${methodName}`;
   }
   const entityPlural = match[1];
-  // Try to find matching aggregate name
-  const aggregate = (bcYaml.aggregates || []).find(
+
+  // 1. Try direct aggregate match: countProductsBy... → Products → Product
+  let aggregate = (bcYaml.aggregates || []).find(
     (a) => a.name === entityPlural || pluralizeWord(a.name) === entityPlural
   );
+
+  const extraConditions = [];
+
+  // 2. Suffix match: countActiveProductsBy... → prefix="Active", entity="Products" → Product
+  //    Adds a status condition automatically (e.g. p.status = 'ACTIVE').
+  if (!aggregate) {
+    for (const agg of (bcYaml.aggregates || [])) {
+      const plural = pluralizeWord(agg.name);
+      if (entityPlural.endsWith(plural) && entityPlural.length > plural.length) {
+        const statusValue = entityPlural.slice(0, entityPlural.length - plural.length).toUpperCase();
+        aggregate = agg;
+        const statusProp = (agg.properties || []).find(
+          (p) => p.name === 'status' || (p.type && p.type.endsWith('Status'))
+        );
+        const statusField = statusProp ? statusProp.name : 'status';
+        extraConditions.push(`${statusField} = '${statusValue}'`);
+        break;
+      }
+    }
+  }
+
   const jpaName = aggregate ? `${aggregate.name}Jpa` : `${entityPlural.replace(/s$/, '')}Jpa`;
   const a = jpaName.charAt(0).toLowerCase();
 
-  const conditions = params.map((p) => {
-    if (/^List\[/.test(p.type)) return `${a}.${p.name.replace(/s$/, '')} IN :${p.name}`;
-    return `${a}.${p.name} = :${p.name}`;
-  });
+  const conditions = [
+    ...extraConditions.map((c) => `${a}.${c}`),
+    ...params.map((p) => {
+      if (/^List\[/.test(p.type)) return `${a}.${p.name.replace(/s$/, '')} IN :${p.name}`;
+      return `${a}.${p.name} = :${p.name}`;
+    }),
+  ];
   const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
   return `SELECT COUNT(${a}) FROM ${jpaName} ${a}${where}`;
 }
@@ -244,8 +296,20 @@ function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
     return buildListQuery(jpaEntityName, optionalParams);
   }
 
-  if (returns === 'Int') {
+  if (returns === 'Int' || returns === 'Integer') {
     return buildCountQuery(name, params || [], bcYaml);
+  }
+
+  if (returns && returns.startsWith('List[')) {
+    const a = jpaEntityName.charAt(0).toLowerCase();
+    const conditions = (params || [])
+      .filter((p) => p.type !== 'PageRequest' && p.name !== 'pageable')
+      .map((p) => {
+        if (/^List\[/.test(p.type)) return `${a}.${p.name.replace(/s$/, '')} IN :${p.name}`;
+        return `${a}.${p.name} = :${p.name}`;
+      });
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+    return `SELECT ${a} FROM ${jpaEntityName} ${a}${where}`;
   }
 
   return null;
@@ -260,10 +324,10 @@ function buildJpaMethodSignature(method, jpaEntityName) {
     if (p.type === 'PageRequest') {
       return `Pageable ${p.name}`;
     }
-    if (method.returns && (method.returns.startsWith('Page[') || method.returns === 'Int') && p.required === false) {
+    if (method.returns && (method.returns.startsWith('Page[') || method.returns === 'Int' || method.returns === 'Integer') && p.required === false) {
       return `@Param("${p.name}") ${javaType} ${p.name}`;
     }
-    if ((method.returns && method.returns.startsWith('Page[')) || method.returns === 'Int') {
+    if ((method.returns && method.returns.startsWith('Page[')) || method.returns === 'Int' || method.returns === 'Integer') {
       return `@Param("${p.name}") ${javaType} ${p.name}`;
     }
     return `${javaType} ${p.name}`;
@@ -273,7 +337,8 @@ function buildJpaMethodSignature(method, jpaEntityName) {
   // For JPA repo: use Jpa entity type instead of domain type
   returnType = returnType
     .replace(new RegExp(`Optional<${method.aggregateName}>`), `Optional<${jpaEntityName}>`)
-    .replace(new RegExp(`Page<${method.aggregateName}>`), `Page<${jpaEntityName}>`);
+    .replace(new RegExp(`Page<${method.aggregateName}>`), `Page<${jpaEntityName}>`)
+    .replace(new RegExp(`List<${method.aggregateName}>`), `List<${jpaEntityName}>`);
 
   return { returnType, paramsStr: params.join(', ') };
 }
@@ -319,7 +384,8 @@ function collectRepoInterfaceImports(methods, bc, packageName) {
     }
 
     // Return type imports
-    const aggMatch = rt.match(/^(?:Optional|Page)<(.+)>$/);
+    if (rt.startsWith('List<')) imports.add('java.util.List');
+    const aggMatch = rt.match(/^(?:Optional|Page|List)<(.+)>$/);
     if (aggMatch) {
       const inner = aggMatch[1];
       // Aggregate domain class
@@ -343,6 +409,7 @@ function collectJpaRepoImports(customMethods, aggregate, jpaEntityName, bc, pack
 
   for (const method of customMethods) {
     if (method.returnType.startsWith('Page<')) { hasPage = true; hasPageable = true; }
+    if (method.returnType.startsWith('List<')) imports.add('java.util.List');
 
     // Parse param types from paramsStr for imports
     const params = method._params || [];
@@ -390,9 +457,14 @@ function buildToDomainBody(aggregate, bcYaml) {
   const moneyProps = getMoneyVoProps(bcYaml);
   const [amountProp, currencyProp] = moneyProps;
 
-  const props = (aggregate.properties || []).filter(
-    (p) => p.name !== 'id' && !AUDIT_FIELD_NAMES.has(p.name)
-  );
+  const props = (aggregate.properties || []).filter((p) => {
+    if (p.name === 'id') return false;
+    if (p.name === 'createdAt' || p.name === 'updatedAt') return false;
+    // deletedAt is excluded only when softDelete=true (handled at end of constructor)
+    // When declared explicitly as a prop (e.g. LRM with softDelete=false), include it
+    if (p.name === 'deletedAt' && aggregate.softDelete === true) return false;
+    return true;
+  });
 
   const args = ['jpa.getId()'];
 
@@ -401,6 +473,27 @@ function buildToDomainBody(aggregate, bcYaml) {
       const amountField = `${prop.name}${capitalize(amountProp)}`;
       const currencyField = `${prop.name}${capitalize(currencyProp)}`;
       args.push(`new Money(jpa.get${capitalize(amountField)}(), jpa.get${capitalize(currencyField)}())`);
+    } else if (isVoType(prop.type, bcYaml)) {
+      const inner = getVoInnerProp(prop.type, bcYaml);
+      if (inner) {
+        // Single-property VO: reconstruct from scalar column
+        const nullable = prop.nullable === true;
+        const getter = `jpa.get${capitalize(prop.name)}()`;
+        args.push(nullable
+          ? `${getter} != null ? new ${prop.type}(${getter}) : null`
+          : `new ${prop.type}(${getter})`);
+      } else {
+        // Multi-property VO: reconstruct from expanded columns
+        const voDef = getVoDef(prop.type, bcYaml);
+        if (voDef) {
+          const voArgs = (voDef.properties || []).map(
+            (vp) => `jpa.get${capitalize(prop.name)}${capitalize(vp.name)}()`
+          );
+          args.push(`new ${prop.type}(${voArgs.join(', ')})`);
+        } else {
+          args.push(`jpa.get${capitalize(prop.name)}()`);
+        }
+      }
     } else {
       args.push(`jpa.get${capitalize(prop.name)}()`);
     }
@@ -431,9 +524,14 @@ function buildToJpaBody(aggregate, bcYaml) {
   const moneyProps = getMoneyVoProps(bcYaml);
   const [amountProp, currencyProp] = moneyProps;
 
-  const props = (aggregate.properties || []).filter(
-    (p) => p.name !== 'id' && !AUDIT_FIELD_NAMES.has(p.name)
-  );
+  const props = (aggregate.properties || []).filter((p) => {
+    if (p.name === 'id') return false;
+    if (p.name === 'createdAt' || p.name === 'updatedAt') return false;
+    // deletedAt is never in the Lombok builder — it lives in FullAuditableEntity (inherited).
+    // FullAuditableEntity is used when auditable=true OR softDelete=true.
+    if (p.name === 'deletedAt' && (aggregate.auditable === true || aggregate.softDelete === true)) return false;
+    return true;
+  });
 
   const lines = [`${name}Jpa jpa = ${name}Jpa.builder()`, `        .id(domain.getId())`];
 
@@ -443,6 +541,26 @@ function buildToJpaBody(aggregate, bcYaml) {
       const currencyField = `${prop.name}${capitalize(currencyProp)}`;
       lines.push(`        .${amountField}(domain.get${capitalize(prop.name)}().get${capitalize(amountProp)}())`);
       lines.push(`        .${currencyField}(domain.get${capitalize(prop.name)}().get${capitalize(currencyProp)}())`);
+    } else if (isVoType(prop.type, bcYaml)) {
+      const inner = getVoInnerProp(prop.type, bcYaml);
+      if (inner) {
+        const nullable = prop.nullable === true;
+        const domainGetter = `domain.get${capitalize(prop.name)}()`;
+        lines.push(nullable
+          ? `        .${prop.name}(${domainGetter} != null ? ${domainGetter}.get${capitalize(inner)}() : null)`
+          : `        .${prop.name}(${domainGetter}.get${capitalize(inner)}())`);
+      } else {
+        // Multi-property VO: expand to individual JPA builder calls
+        const voDef = getVoDef(prop.type, bcYaml);
+        if (voDef) {
+          for (const vp of (voDef.properties || [])) {
+            const jpaField = `${prop.name}${capitalize(vp.name)}`;
+            lines.push(`        .${jpaField}(domain.get${capitalize(prop.name)}().get${capitalize(vp.name)}())`);
+          }
+        } else {
+          lines.push(`        .${prop.name}(domain.get${capitalize(prop.name)}())`);
+        }
+      }
     } else {
       lines.push(`        .${prop.name}(domain.get${capitalize(prop.name)}())`);
     }
@@ -455,8 +573,10 @@ function buildToJpaBody(aggregate, bcYaml) {
 
   lines.push(`        .build();`);
 
-  // Set soft-delete field (not in builder — lives in FullAuditableEntity with setter)
-  if (aggregate.softDelete) {
+  // Set deletedAt via setter — field lives in FullAuditableEntity, not in builder.
+  // Applies when: softDelete=true (injected field) OR aggregate has explicit deletedAt prop.
+  const hasExplicitDeletedAt = (aggregate.properties || []).some((p) => p.name === 'deletedAt');
+  if (aggregate.softDelete || hasExplicitDeletedAt) {
     lines.push(`jpa.setDeletedAt(domain.getDeletedAt());`);
   }
 
@@ -482,6 +602,27 @@ function buildChildToDomainBody(entity, bcYaml) {
       const amountField = `${prop.name}${capitalize(amountProp)}`;
       const currencyField = `${prop.name}${capitalize(currencyProp)}`;
       args.push(`new Money(jpa.get${capitalize(amountField)}(), jpa.get${capitalize(currencyField)}())`);
+    } else if (isVoType(prop.type, bcYaml)) {
+      const inner = getVoInnerProp(prop.type, bcYaml);
+      if (inner) {
+        // Single-property VO: reconstruct from scalar column
+        const nullable = prop.nullable === true;
+        const getter = `jpa.get${capitalize(prop.name)}()`;
+        args.push(nullable
+          ? `${getter} != null ? new ${prop.type}(${getter}) : null`
+          : `new ${prop.type}(${getter})`);
+      } else {
+        // Multi-property VO: reconstruct from expanded columns
+        const voDef = getVoDef(prop.type, bcYaml);
+        if (voDef) {
+          const voArgs = (voDef.properties || []).map(
+            (vp) => `jpa.get${capitalize(prop.name)}${capitalize(vp.name)}()`
+          );
+          args.push(`new ${prop.type}(${voArgs.join(', ')})`);
+        } else {
+          args.push(`jpa.get${capitalize(prop.name)}()`);
+        }
+      }
     } else {
       args.push(`jpa.get${capitalize(prop.name)}()`);
     }
@@ -509,6 +650,27 @@ function buildChildToJpaBody(entity, bcYaml) {
       const currencyField = `${prop.name}${capitalize(currencyProp)}`;
       lines.push(`        .${amountField}(domain.get${capitalize(prop.name)}().get${capitalize(amountProp)}())`);
       lines.push(`        .${currencyField}(domain.get${capitalize(prop.name)}().get${capitalize(currencyProp)}())`);
+    } else if (isVoType(prop.type, bcYaml)) {
+      const inner = getVoInnerProp(prop.type, bcYaml);
+      if (inner) {
+        // Single-property VO: unwrap to scalar column
+        const nullable = prop.nullable === true;
+        const domainGetter = `domain.get${capitalize(prop.name)}()`;
+        lines.push(nullable
+          ? `        .${prop.name}(${domainGetter} != null ? ${domainGetter}.get${capitalize(inner)}() : null)`
+          : `        .${prop.name}(${domainGetter}.get${capitalize(inner)}())`);
+      } else {
+        // Multi-property VO: expand to individual JPA builder calls
+        const voDef = getVoDef(prop.type, bcYaml);
+        if (voDef) {
+          for (const vp of (voDef.properties || [])) {
+            const jpaField = `${prop.name}${capitalize(vp.name)}`;
+            lines.push(`        .${jpaField}(domain.get${capitalize(prop.name)}().get${capitalize(vp.name)}())`);
+          }
+        } else {
+          lines.push(`        .${prop.name}(domain.get${capitalize(prop.name)}())`);
+        }
+      }
     } else {
       lines.push(`        .${prop.name}(domain.get${capitalize(prop.name)}())`);
     }
@@ -554,6 +716,10 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
     return `return jpaRepository.${name}(${paramNames}).map(this::toDomain);`;
   }
 
+  if (methodReturnType.startsWith('List<')) {
+    return `return jpaRepository.${name}(${paramNames}).stream().map(this::toDomain).toList();`;
+  }
+
   return `return jpaRepository.${name}(${paramNames});`;
 }
 
@@ -575,6 +741,7 @@ function collectImplImports(aggregateName, aggregate, methods, bc, packageName, 
     const rt = method.returnType;
     if (rt.startsWith('Optional<')) hasOptional = true;
     if (rt.startsWith('Page<')) { hasPage = true; hasPageable = true; }
+    if (rt.startsWith('List<')) imports.add('java.util.List');
 
     for (const p of method.params) {
       if (p.javaType === 'UUID') imports.add('java.util.UUID');
@@ -609,6 +776,17 @@ function collectImplImports(aggregateName, aggregate, methods, bc, packageName, 
   );
   if (hasMoneyInAggregate || hasMoneyInEntities) {
     imports.add(`${packageName}.${bc}.domain.valueobject.Money`);
+  }
+
+  // Non-Money VOs used in toDomain/toJpa mappers
+  const allProps = [
+    ...(aggregate.properties || []),
+    ...(aggregate.entities || []).flatMap((e) => e.properties || []),
+  ];
+  for (const prop of allProps) {
+    if (isVoType(prop.type, bcYaml)) {
+      imports.add(`${packageName}.${bc}.domain.valueobject.${prop.type}`);
+    }
   }
 
   // JpaRepository interface
@@ -653,7 +831,8 @@ function buildJpaRepoInterfaceContext(aggregateName, normalizedMethods, aggregat
 
     let jpaReturnType = yamlReturnToJava(m.returns)
       .replace(`Optional<${aggregateName}>`, `Optional<${jpaEntityName}>`)
-      .replace(`Page<${aggregateName}>`, `Page<${jpaEntityName}>`);
+      .replace(`Page<${aggregateName}>`, `Page<${jpaEntityName}>`)
+      .replace(`List<${aggregateName}>`, `List<${jpaEntityName}>`);
 
     // Build params string with @Param annotations for @Query methods
     let paramsStr;

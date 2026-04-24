@@ -1,0 +1,42 @@
+package <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>;
+
+import org.springframework.stereotype.Component;
+<%
+const responseMethods = operations.filter(op => op.hasDomainReturn);
+const uniqueDomainTypes = [...new Set(responseMethods.map(op => op.domainType))];
+const uniqueInfraDtos   = [...new Set(responseMethods.map(op => op.infraDtoName))];
+%>
+<%_ uniqueDomainTypes.forEach(dt => { _%>
+import <%- packageName %>.<%- moduleName %>.domain.models.<%- targetBcPackage %>.<%- dt %>;
+<%_ }); _%>
+<%_ uniqueInfraDtos.forEach(dto => { _%>
+import <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>.dtos.<%- dto %>;
+<%_ }); _%>
+<%_ voImports.forEach(imp => { _%>
+import <%- imp %>;
+<%_ }); _%>
+<%_ if (needsBigDecimal) { _%>
+import java.math.BigDecimal;
+<%_ } _%>
+
+/**
+ * ACL (Anti-Corruption Layer) mapper for {@link <%- portInterfaceName %>}.
+ *
+ * <p>Translates infrastructure DTOs (shaped by the <%- targetBc %> external API) into
+ * domain models. If the external API changes, only these methods need updating;
+ * domain logic using the domain models remains untouched.
+ */
+@Component
+public class <%- aclMapperClassName %> {
+<%_ responseMethods.forEach(op => { _%>
+
+    public <%- op.domainType %> to<%- op.domainType %>(<%- op.infraDtoName %> dto) {
+        if (dto == null) return null;
+        return new <%- op.domainType %>(
+<%_   op.mappingFields.forEach((f, i) => { _%>
+            <%- f.expression %><%- i < op.mappingFields.length - 1 ? ',' : '' %>
+<%_   }); _%>
+        );
+    }
+<%_ }); _%>
+}

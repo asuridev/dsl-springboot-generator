@@ -128,10 +128,14 @@ function validate(doc) {
       if (!agg.sourceEvents || agg.sourceEvents.length === 0) {
         fail(`readModel aggregate "${agg.name}" must have "sourceEvents".`);
       }
-      const readModelUseCases = useCases.filter((uc) => uc.aggregate === agg.name);
-      for (const uc of readModelUseCases) {
+      // Only commands must be event-triggered; queries on a readModel aggregate
+      // may still be exposed via HTTP (e.g. list endpoints on the LRM).
+      const readModelCommands = useCases.filter(
+        (uc) => uc.aggregate === agg.name && uc.type === 'command'
+      );
+      for (const uc of readModelCommands) {
         if (!uc.trigger || uc.trigger.kind !== 'event') {
-          fail(`readModel aggregate "${agg.name}" use case "${uc.id}" must have trigger.kind: event.`);
+          fail(`readModel aggregate "${agg.name}" command "${uc.id}" must have trigger.kind: event.`);
         }
       }
     }

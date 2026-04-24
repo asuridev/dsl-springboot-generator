@@ -1,0 +1,69 @@
+package <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>;
+
+import <%- packageName %>.<%- moduleName %>.application.ports.<%- portInterfaceName %>;
+import org.springframework.stereotype.Component;
+<%
+const allOps = operations || [];
+const hasAnyList = allOps.some(op => op.returnList);
+const uniqueDomainTypes = [...new Set(allOps.filter(op => op.hasDomainReturn).map(op => op.domainType))];
+const uniqueReqDtos = [...new Set(allOps.filter(op => op.hasBody).map(op => op.requestDtoName))];
+%>
+<%_ if (hasAnyList) { _%>
+import java.util.List;
+import java.util.stream.Collectors;
+<%_ } _%>
+import java.util.UUID;
+<%_ uniqueDomainTypes.forEach(dt => { _%>
+import <%- packageName %>.<%- moduleName %>.domain.models.<%- targetBcPackage %>.<%- dt %>;
+<%_ }); _%>
+<%_ uniqueReqDtos.forEach(dto => { _%>
+import <%- packageName %>.<%- moduleName %>.application.dtos.<%- dto %>;
+<%_ }); _%>
+
+/**
+ * Feign adapter — infrastructure implementation of {@link <%- portInterfaceName %>}.
+ * Delegates HTTP calls to {@link <%- feignClientClassName %>} and maps
+ * infrastructure DTOs to domain models via {@link <%- aclMapperClassName %>}.
+ */
+@Component
+public class <%- feignAdapterClassName %> implements <%- portInterfaceName %> {
+
+    private final <%- feignClientClassName %> feignClient;
+    private final <%- aclMapperClassName %> aclMapper;
+
+    public <%- feignAdapterClassName %>(<%- feignClientClassName %> feignClient, <%- aclMapperClassName %> aclMapper) {
+        this.feignClient = feignClient;
+        this.aclMapper = aclMapper;
+    }
+<%_ allOps.forEach(op => { _%>
+
+    @Override
+<%_   const domainReturn = !op.hasDomainReturn ? 'void'
+        : op.returnList ? `List<${op.domainType}>`
+        : op.domainType;
+      const params = [];
+      const args   = [];
+      op.pathVariables.forEach(pv => { params.push(`String ${pv}`); args.push(pv); });
+      if (op.hasBody) { params.push(`${op.requestDtoName} body`); args.push('body'); }
+_%>
+    public <%- domainReturn %> <%- op.methodName %>(<%- params.join(', ') %>) {
+<%_   if (!op.hasDomainReturn) { _%>
+        feignClient.<%- op.feignMethodName %>(<%- args.join(', ') %>);
+<%_   } else if (op.returnList) { _%>
+        return feignClient.<%- op.feignMethodName %>(<%- args.join(', ') %>).stream()
+            .map(aclMapper::to<%- op.domainType %>)
+            .collect(Collectors.toList());
+<%_   } else { _%>
+        return aclMapper.to<%- op.domainType %>(feignClient.<%- op.feignMethodName %>(<%- args.join(', ') %>));
+<%_   } _%>
+    }
+<%_ }); _%>
+<%_ fkMethods.forEach(fk => { _%>
+
+    @Override
+    public boolean <%- fk.methodName %>(UUID id) {
+        // TODO: implement FK existence check against <%- targetBc %> BC
+        throw new UnsupportedOperationException("<%- fk.methodName %> not implemented yet");
+    }
+<%_ }); _%>
+}

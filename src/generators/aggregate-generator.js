@@ -196,13 +196,15 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
 
   // Check all properties for additional types
   for (const prop of aggregate.properties || []) {
-    const isVO = isValueObjectType(prop.type, bcYaml);
-    const isEnum = isEnumType(prop.type, bcYaml);
+    const enumWrapperMatch = /^Enum<(.+)>$/.exec(prop.type);
+    const resolvedType = enumWrapperMatch ? enumWrapperMatch[1] : prop.type;
+    const isVO = isValueObjectType(resolvedType, bcYaml);
+    const isEnum = enumWrapperMatch != null || isEnumType(resolvedType, bcYaml);
 
     if (isVO) {
-      imports.add(`import ${pkg}.${bc}.domain.valueobject.${prop.type};`);
+      imports.add(`import ${pkg}.${bc}.domain.valueobject.${resolvedType};`);
     } else if (isEnum) {
-      imports.add(`import ${pkg}.${bc}.domain.enums.${prop.type};`);
+      imports.add(`import ${pkg}.${bc}.domain.enums.${resolvedType};`);
     } else {
       try {
         const mapped = mapType(prop.type, prop);
@@ -272,13 +274,15 @@ function buildChildEntityImports(entity, bcYaml, config) {
   for (const prop of entity.properties || []) {
     if (prop.name === 'id') continue; // UUID already imported
 
-    const isVO = isValueObjectType(prop.type, bcYaml);
-    const isEnum = isEnumType(prop.type, bcYaml);
+    const enumWrapperMatch = /^Enum<(.+)>$/.exec(prop.type);
+    const resolvedType = enumWrapperMatch ? enumWrapperMatch[1] : prop.type;
+    const isVO = isValueObjectType(resolvedType, bcYaml);
+    const isEnum = enumWrapperMatch != null || isEnumType(resolvedType, bcYaml);
 
     if (isVO) {
-      imports.add(`import ${pkg}.${bc}.domain.valueobject.${prop.type};`);
+      imports.add(`import ${pkg}.${bc}.domain.valueobject.${resolvedType};`);
     } else if (isEnum) {
-      imports.add(`import ${pkg}.${bc}.domain.enums.${prop.type};`);
+      imports.add(`import ${pkg}.${bc}.domain.enums.${resolvedType};`);
     } else {
       try {
         const mapped = mapType(prop.type, prop);
@@ -382,7 +386,9 @@ async function generateAggregates(bcYaml, config, outputDir) {
       .filter((p) => p.name !== 'id' && p.readOnly && p.defaultValue != null)
       .map((p) => {
         let enumType = null;
-        if (isEnumType(p.type, bcYaml)) enumType = p.type;
+        const enumWrapperMatch = /^Enum<(.+)>$/.exec(p.type);
+        if (enumWrapperMatch) enumType = enumWrapperMatch[1];
+        else if (isEnumType(p.type, bcYaml)) enumType = p.type;
 
         let value;
         if (p.defaultValue === 'generated') {
@@ -515,11 +521,20 @@ async function generateAggregates(bcYaml, config, outputDir) {
       const entityAutoInits = (entity.properties || [])
         .filter((p) => p.name !== 'id' && p.readOnly && p.defaultValue != null)
         .map((p) => {
+          let enumType = null;
+          const enumWrapperMatch = /^Enum<(.+)>$/.exec(p.type);
+          if (enumWrapperMatch) enumType = enumWrapperMatch[1];
+          else if (isEnumType(p.type, bcYaml)) enumType = p.type;
+
           let value;
           if (p.defaultValue === 'generated') {
             value = 'UUID.randomUUID()';
           } else if (p.defaultValue === 'now()') {
             value = 'java.time.Instant.now()';
+          } else if (enumType) {
+            value = `${enumType}.${p.defaultValue}`;
+          } else if (typeof p.defaultValue === 'boolean') {
+            value = String(p.defaultValue);
           } else {
             value = JSON.stringify(String(p.defaultValue));
           }

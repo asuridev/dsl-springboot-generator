@@ -3,40 +3,33 @@
 const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toPackagePath, getApplicationClassName } = require('../utils/naming');
+const { loadParameters } = require('../utils/config-manager');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
-/** Maps database technology names to JDBC driver class names. */
-const DB_DRIVERS = {
-  postgresql: 'org.postgresql.Driver',
-  mysql:      'com.mysql.cj.jdbc.Driver',
-  h2:         'org.h2.Driver',
-};
-
-/** Maps database technology names to Hibernate dialect class names. */
-const DB_DIALECTS = {
-  postgresql: 'org.hibernate.dialect.PostgreSQLDialect',
-  mysql:      'org.hibernate.dialect.MySQLDialect',
-  h2:         'org.hibernate.dialect.H2Dialect',
-};
-
 /**
  * Derives HTTP integration entries from system.yaml integrations.
- * Returns one entry per integration where channel === 'http'.
+ * Returns one deduplicated entry per target BC where channel === 'http'.
+ * Each entry produces the Spring property key: integration.{toBc}.base-url
+ * which matches @FeignClient(url = "${integration.{toBc}.base-url}").
  *
  * @param {object} system — parsed system.yaml (from readSystemYaml)
- * @returns {Array<{fromBc: string, toService: string, localUrl: string, envVar: string}>}
+ * @returns {Array<{toBc: string, localUrl: string, envVar: string}>}
  */
 function buildHttpIntegrations(system) {
-  return (system.integrations || []).filter((i) => i.channel === 'http').map((i) => {
-    const toName = i.to;
-    // Convert kebab-case name to SCREAMING_SNAKE for env var: payment-gateway → PAYMENT_GATEWAY_URL
-    const envVar = toName.toUpperCase().replace(/-/g, '_') + '_URL';
-    // Derive a service key name: payment-gateway → payment-gateway-service
-    const toService = `${toName}-service`;
-    const localUrl = `https://api.${toName}.example.com`;
-    return { fromBc: i.from, toService, localUrl, envVar };
-  });
+  const seen = new Set();
+  return (system.integrations || [])
+    .filter((i) => i.channel === 'http')
+    .reduce((acc, i) => {
+      if (!seen.has(i.to)) {
+        seen.add(i.to);
+        // Convert kebab-case to SCREAMING_SNAKE: payment-gateway → PAYMENT_GATEWAY_URL
+        const envVar = i.to.toUpperCase().replace(/-/g, '_') + '_URL';
+        const localUrl = `https://api.${i.to}.example.com`;
+        acc.push({ toBc: i.to, localUrl, envVar });
+      }
+      return acc;
+    }, []);
 }
 
 /**
@@ -58,11 +51,33 @@ function buildHttpIntegrations(system) {
 async function generateBaseProject(config, system, outputDir) {
   const { packageName, javaVersion, springBootVersion, systemName } = config;
 
-  // ── Derive infrastructure metadata from system.yaml ──────────────────────
-  const dbTech        = (system.infrastructure && system.infrastructure.database && system.infrastructure.database.technology) || 'postgresql';
-  const driverClass   = DB_DRIVERS[dbTech]  || DB_DRIVERS.postgresql;
-  const dialect       = DB_DIALECTS[dbTech] || DB_DIALECTS.postgresql;
-  const hasMessaging  = !!(system.infrastructure && system.infrastructure.messageBroker && system.infrastructure.messageBroker.technology === 'rabbitmq');
+  // ── Resolve technology metadata from config/stack-catalog.json + config ─────
+  const params = await loadParameters();
+
+  const dbId = config.database || 'postgresql';
+  const dbMeta = params.databases.find((d) => d.id === dbId) || params.databases[0];
+  const driverClass  = dbMeta.driverClass;
+  const dialect      = dbMeta.dialect;
+  const databaseDependency = dbMeta.gradleDependency;
+
+  // Build JDBC URL (H2 uses a different URL format)
+  const buildJdbcUrl = (env) => {
+    if (dbId === 'h2') {
+      return env === 'local' || env === 'test'
+        ? `jdbc:h2:mem:${dbName};DB_CLOSE_DELAY=-1;MODE=PostgreSQL`
+        : `jdbc:h2:mem:${dbName};DB_CLOSE_DELAY=-1;MODE=PostgreSQL`;
+    }
+    if (env === 'production') return '${DB_URL}';
+    if (env === 'develop' || env === 'test') return `\${DB_URL:${dbMeta.jdbcPrefix}://localhost:${dbMeta.defaultPort}/${dbName}}`;
+    return `${dbMeta.jdbcPrefix}://localhost:${dbMeta.defaultPort}/${dbName}`;
+  };
+
+  const brokerId = config.broker || null;
+  const brokerMeta = brokerId ? params.messageBrokers.find((b) => b.id === brokerId) : null;
+  const brokerDependency     = brokerMeta ? brokerMeta.gradleDependency : null;
+  const brokerTestDependency = brokerMeta ? brokerMeta.testDependency    : null;
+
+  const hasMessaging        = !!brokerId;
   const httpIntegrations    = buildHttpIntegrations(system);
   const hasHttpIntegrations = httpIntegrations.length > 0;
 
@@ -82,7 +97,7 @@ async function generateBaseProject(config, system, outputDir) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'gradle', 'build.gradle.ejs'),
     path.join(outputDir, 'build.gradle'),
-    { groupId, artifactId, javaVersion, springBootVersion }
+    { groupId, artifactId, javaVersion, springBootVersion, databaseDependency, brokerDependency, brokerTestDependency }
   );
 
   await renderAndWrite(
@@ -117,7 +132,7 @@ async function generateBaseProject(config, system, outputDir) {
   // ── application.yaml (base — profile-agnostic) ──────────────────────────
 
   const dbName = artifactId.replace(/-/g, '_');
-  const envTemplateVars = { artifactId, packageName, dbName, driverClass, dialect, hasMessaging, hasHttpIntegrations, httpIntegrations };
+  const envTemplateVars = { artifactId, packageName, dbName, driverClass, dialect, hasMessaging, hasHttpIntegrations, httpIntegrations, broker: brokerId };
 
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'resources', 'application.yaml.ejs'),
@@ -131,7 +146,7 @@ async function generateBaseProject(config, system, outputDir) {
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'base', 'resources', `application-${env}.yaml.ejs`),
       path.join(resourcesDir, `application-${env}.yaml`),
-      { hasMessaging, hasHttpIntegrations }
+      { hasMessaging, hasHttpIntegrations, broker: brokerId }
     );
   }
 
@@ -145,7 +160,7 @@ async function generateBaseProject(config, system, outputDir) {
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'db.yaml.ejs'),
       path.join(paramDir, 'db.yaml'),
-      envTemplateVars
+      { ...envTemplateVars, jdbcUrl: buildJdbcUrl(env) }
     );
 
     // cors.yaml (static, no template vars but still run through EJS for consistency)
@@ -155,12 +170,12 @@ async function generateBaseProject(config, system, outputDir) {
       {}
     );
 
-    // rabbitmq.yaml (only when system uses RabbitMQ)
-    if (hasMessaging) {
+    // broker parameter file (only when messaging is configured)
+    if (hasMessaging && brokerId) {
       await renderAndWrite(
-        path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'rabbitmq.yaml.ejs'),
-        path.join(paramDir, 'rabbitmq.yaml'),
-        { topology: null }
+        path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, `${brokerId}.yaml.ejs`),
+        path.join(paramDir, `${brokerId}.yaml`),
+        { topology: null, artifactId }
       );
     }
 
@@ -310,29 +325,32 @@ async function generateBaseProject(config, system, outputDir) {
   );
 }
 
-// ─── RabbitMQ topology YAML ───────────────────────────────────────────────────
+// ─── Broker topology YAML ────────────────────────────────────────────────────
 
 /**
- * Re-renders all four rabbitmq.yaml parameter files, appending the
- * broker topology (exchanges, queues, routing-keys) derived from the BCs.
+ * Re-renders the broker parameter file for all four environments, injecting the
+ * full topology (exchanges/queues/routing-keys for RabbitMQ, topics for Kafka)
+ * derived from the BCs after all BC processing is complete.
  *
- * This is intentionally a separate step run AFTER all BC processing so that
- * the complete topology is available before writing the files.
- *
- * @param {{ exchanges, queues, routingKeys }} topology
- * @param {{ packageName, systemName }} config
+ * @param {object} topology  - broker-specific topology object
+ * @param {{ packageName, systemName, broker }} config
  * @param {string} outputDir
  */
-async function generateRabbitMQTopologyYaml(topology, config, outputDir) {
+async function generateBrokerTopologyYaml(topology, config, outputDir) {
+  const brokerId = config.broker;
+  if (!brokerId) return;
+
   const resourcesDir = path.join(outputDir, 'src', 'main', 'resources');
+  const artifactId = config.systemName;
+
   for (const env of ['local', 'develop', 'test', 'production']) {
     const paramDir = path.join(resourcesDir, 'parameters', env);
     await renderAndWrite(
-      path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'rabbitmq.yaml.ejs'),
-      path.join(paramDir, 'rabbitmq.yaml'),
-      { topology }
+      path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, `${brokerId}.yaml.ejs`),
+      path.join(paramDir, `${brokerId}.yaml`),
+      { topology, artifactId }
     );
   }
 }
 
-module.exports = { generateBaseProject, generateRabbitMQTopologyYaml };
+module.exports = { generateBaseProject, generateBrokerTopologyYaml };

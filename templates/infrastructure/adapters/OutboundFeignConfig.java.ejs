@@ -1,0 +1,28 @@
+package <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>;
+
+import feign.Logger;
+import feign.Request;
+import org.springframework.context.annotation.Bean;
+
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Feign client configuration for the <%- targetBc %> BC.
+ * Not annotated with @Configuration — registered via @FeignClient(configuration=...).
+ */
+public class <%- feignConfigClassName %> {
+
+    @Bean
+    public Logger.Level feignLoggerLevel() {
+        return Logger.Level.BASIC;
+    }
+
+    @Bean
+    public Request.Options feignOptions() {
+        return new Request.Options(
+            15, TimeUnit.SECONDS,   // connect timeout
+            15, TimeUnit.SECONDS,   // read timeout
+            true
+        );
+    }
+}

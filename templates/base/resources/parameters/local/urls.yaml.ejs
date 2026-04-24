@@ -1,4 +1,4 @@
-<% httpIntegrations.forEach(function(integration) { %>
-<%= integration.fromBc %>:
-  <%= integration.toService %>.base-url: <%= integration.localUrl %>
+integration:
+<% httpIntegrations.forEach(function(item) { %>
+  <%= item.toBc %>.base-url: <%= item.localUrl %>
 <% }); %>

@@ -4,6 +4,7 @@ const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toCamelCase, toPackagePath } = require('../utils/naming');
 const { mapType } = require('../utils/type-mapper');
+const { getOutboundHttpBcNames } = require('./outbound-http-generator');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -55,11 +56,21 @@ function normalizeRepoMethods(repositories) {
 
 function normalizeMethodParams(method) {
   if (method.params && Array.isArray(method.params)) {
-    return method.params.map((p) => ({
-      name: p.name,
-      type: p.type,
-      required: p.required !== false,
-    }));
+    return method.params.map((p) => {
+      // Inline YAML flow form: [{id: 'Uuid'}] → {name: 'id', type: 'Uuid'}
+      if (typeof p === 'object' && p !== null && !('name' in p) && !('type' in p)) {
+        const entries = Object.entries(p);
+        if (entries.length === 1) {
+          const [name, type] = entries[0];
+          return { name, type: String(type), required: true };
+        }
+      }
+      return {
+        name: p.name,
+        type: p.type,
+        required: p.required !== false,
+      };
+    });
   }
   if (method.signature) {
     return parseSignatureParams(method.signature);
@@ -168,7 +179,7 @@ function parseRepoMethodName(repoMethodStr) {
 
 // ─── Java type helpers ────────────────────────────────────────────────────────
 
-function javaTypeForDto(type, packageName, moduleName, imports) {
+function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Set()) {
   if (type === 'Uuid') {
     imports.add('java.util.UUID');
     return 'UUID';
@@ -192,15 +203,27 @@ function javaTypeForDto(type, packageName, moduleName, imports) {
   const stringMatch = /^String\((\d+)\)$/.exec(type);
   if (stringMatch) return 'String';
   if (type === 'String') return 'String';
-  // Enum or domain type
+  // Enum<X> → X
+  const enumMatch = /^Enum<(.+)>$/.exec(type);
+  if (enumMatch) {
+    const enumName = enumMatch[1];
+    imports.add(`${packageName}.${moduleName}.domain.enums.${enumName}`);
+    return enumName;
+  }
+  // Value object
+  if (voNames.has(type)) {
+    imports.add(`${packageName}.${moduleName}.domain.valueobject.${type}`);
+    return type;
+  }
+  // Bare enum
   imports.add(`${packageName}.${moduleName}.domain.enums.${type}`);
   return type;
 }
 
 // Commands receive UUIDs as String and convert with UUID.fromString in handler
-function javaTypeForCommand(type, packageName, moduleName, imports) {
+function javaTypeForCommand(type, packageName, moduleName, imports, voNames = new Set()) {
   if (type === 'Uuid') return 'String';
-  return javaTypeForDto(type, packageName, moduleName, imports);
+  return javaTypeForDto(type, packageName, moduleName, imports, voNames);
 }
 
 function getterName(fieldName) {
@@ -209,13 +232,13 @@ function getterName(fieldName) {
 
 // ─── ResponseDto fields ───────────────────────────────────────────────────────
 
-function buildResponseDtoFields(agg, packageName, moduleName) {
+function buildResponseDtoFields(agg, packageName, moduleName, voNames = new Set()) {
   const imports = new Set();
   const fields = [];
 
   for (const prop of agg.properties || []) {
     if (prop.hidden || prop.internal) continue;
-    const javaType = javaTypeForDto(prop.type, packageName, moduleName, imports);
+    const javaType = javaTypeForDto(prop.type, packageName, moduleName, imports, voNames);
     fields.push({ type: javaType, name: prop.name, annotations: [] });
   }
 
@@ -230,14 +253,21 @@ function buildResponseDtoFields(agg, packageName, moduleName) {
 
 // ─── Mapper fields ────────────────────────────────────────────────────────────
 
-function buildMapperFields(agg, packageName, moduleName) {
+function buildMapperFields(agg, packageName, moduleName, voNames = new Set()) {
   const imports = new Set();
   const fields = [];
 
+  // Types that are VOs in the domain but map to String in the DTO — need .getValue()
+  const voToStringTypes = new Set(['Email', 'Url']);
+
   for (const prop of agg.properties || []) {
     if (prop.hidden || prop.internal) continue;
-    javaTypeForDto(prop.type, packageName, moduleName, imports); // side-effect: collect imports
-    fields.push({ name: prop.name, getter: getterName(prop.name) });
+    javaTypeForDto(prop.type, packageName, moduleName, imports, voNames); // side-effect: collect imports
+    const baseGetter = getterName(prop.name);
+    const getter = voToStringTypes.has(prop.type)
+      ? `${baseGetter}().getValue`
+      : baseGetter;
+    fields.push({ name: prop.name, getter });
   }
 
   if (agg.auditable) {
@@ -250,7 +280,7 @@ function buildMapperFields(agg, packageName, moduleName) {
 
 // ─── Command fields ───────────────────────────────────────────────────────────
 
-function buildCommandFields(uc, agg, packageName, moduleName) {
+function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set()) {
   const imports = new Set();
   const fields = [];
   const { methodName, params } = parseMethodSignature(uc.method || '');
@@ -268,9 +298,9 @@ function buildCommandFields(uc, agg, packageName, moduleName) {
 
   for (const param of params) {
     const prop = propMap.get(param.name);
-    // Skip server-generated or auth-context fields
-    if (prop && prop.readOnly && prop.defaultValue === 'generated') continue;
-    if (prop && prop.source === 'auth-context') continue;
+    // Never skip explicitly-declared method params — if the designer put it in the method
+    // signature (e.g. create(id, ...) for an LRM), it must appear in the command.
+    if (prop && prop.source === 'authContext') continue;
 
     const rawType = resolveParamType(param.name, propMap);
 
@@ -292,7 +322,7 @@ function buildCommandFields(uc, agg, packageName, moduleName) {
         annotations: param.optional ? [] : ['@NotBlank'],
       });
     } else {
-      const javaType = javaTypeForCommand(rawType, packageName, moduleName, imports);
+      const javaType = javaTypeForCommand(rawType, packageName, moduleName, imports, voNames);
       const annotations = buildValidationAnnotations(javaType, param.optional, imports);
       fields.push({ type: javaType, name: param.name, annotations });
     }
@@ -364,6 +394,10 @@ function buildQueryReturnType(uc, agg, repoMethods) {
     (p) => p.type === 'PageRequest' || p.type === 'Pageable'
   );
   if (hasPageable) return `PagedResponse<${agg.name}ResponseDto>`;
+  // List query: method name starts with 'list' or 'findAll' and has no paging
+  if (repoMethodName.startsWith('list') || repoMethodName.startsWith('findAll')) {
+    return `List<${agg.name}ResponseDto>`;
+  }
   return `${agg.name}ResponseDto`;
 }
 
@@ -383,7 +417,7 @@ function isSubEntityQuery(uc, agg) {
 
 // ─── Command handler body ─────────────────────────────────────────────────────
 
-function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName) {
+function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcYaml) {
   const lines = [];
   const extraImports = new Set();
   const { methodName, params, returnType } = parseMethodSignature(uc.method || '');
@@ -409,8 +443,9 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName) {
     );
   }
 
-  // FK validations
+  // FK validations — only for local repos; cross-BC ports are scaffold-only (// TODO)
   for (const fk of uc.fkValidations || []) {
+    if (!hasLocalReadModel(fk, bcYaml || { bc: moduleName, aggregates: [] })) continue;
     const fkErrorEntry = errorMap[fk.notFoundError];
     const fkErrorType = fkErrorEntry ? fkErrorEntry.errorType : 'NotFoundException';
     const fkRepoFieldName = `${toCamelCase(fk.aggregate)}Repository`;
@@ -424,8 +459,13 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName) {
   const callArgs = [];
   for (const param of params) {
     const prop = propMap.get(param.name);
-    if (prop && prop.readOnly && prop.defaultValue === 'generated') continue;
-    if (prop && prop.source === 'auth-context') continue;
+
+    // authContext fields are injected from SecurityContext, not from the command
+    if (prop && prop.source === 'authContext') {
+      extraImports.add('org.springframework.security.core.context.SecurityContextHolder');
+      callArgs.push(`UUID.fromString(SecurityContextHolder.getContext().getAuthentication().getName())`);
+      continue;
+    }
 
     const rawType = resolveParamType(param.name, propMap);
 
@@ -445,7 +485,7 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName) {
   // Domain method invocation
   if (isCreate) {
     lines.push(
-      `        ${agg.name} ${aggVarName} = ${agg.name}.${methodName}(${callArgs.join(', ')});`
+      `        ${agg.name} ${aggVarName} = new ${agg.name}(${callArgs.join(', ')});`
     );
   } else {
     lines.push(`        ${aggVarName}.${methodName}(${callArgs.join(', ')});`);
@@ -479,7 +519,19 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
   extraImports.add('java.util.UUID');
   extraImports.add(`${packageName}.${moduleName}.domain.aggregate.${agg.name}`);
 
-  if (!hasPageable) {
+  const isListQuery = repoMethodName.startsWith('list') || repoMethodName.startsWith('findAll');
+
+  if (isListQuery && !hasPageable) {
+    // Unpaged list query: e.g. listByCustomerId(Uuid)
+    extraImports.add('java.util.List');
+    const callArgs = buildListCallArgs(methodParams, extraImports);
+    lines.push(
+      `        List<${agg.name}> entities = ${repoFieldName}.${repoMethodName}(${callArgs});`
+    );
+    lines.push(
+      `        return entities.stream().map(${mapperFieldName}::toResponseDto).toList();`
+    );
+  } else if (!hasPageable) {
     // Single entity query
     const errorEntry = hasNotFoundError ? errorMap[notFoundErrors[0]] : null;
     const errorType = errorEntry ? errorEntry.errorType : null;
@@ -512,6 +564,19 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
   return { body: lines.join('\n'), extraImports: [...extraImports].sort() };
 }
 
+function buildListCallArgs(methodParams, imports) {
+  const args = [];
+  for (const param of methodParams) {
+    if (param.type === 'Uuid') {
+      imports.add('java.util.UUID');
+      args.push(`UUID.fromString(query.${param.name}())`);
+    } else {
+      args.push(`query.${param.name}()`);
+    }
+  }
+  return args.join(', ');
+}
+
 function buildPagedCallArgs(methodParams, agg, packageName, moduleName, imports) {
   const args = [];
   for (const param of methodParams) {
@@ -524,14 +589,16 @@ function buildPagedCallArgs(methodParams, agg, packageName, moduleName, imports)
     } else if (param.type === 'String' || /^String\(/.test(param.type)) {
       args.push(`query.${param.name}()`);
     } else {
-      // Enum type
-      imports.add(`${packageName}.${moduleName}.domain.enums.${param.type}`);
+      // Enum<X> or bare enum type
+      const enumMatch = /^Enum<(.+)>$/.exec(param.type);
+      const enumName = enumMatch ? enumMatch[1] : param.type;
+      imports.add(`${packageName}.${moduleName}.domain.enums.${enumName}`);
       if (!param.required) {
         args.push(
-          `query.${param.name}() != null ? ${param.type}.valueOf(query.${param.name}()) : null`
+          `query.${param.name}() != null ? ${enumName}.valueOf(query.${param.name}()) : null`
         );
       } else {
-        args.push(`${param.type}.valueOf(query.${param.name}())`);
+        args.push(`${enumName}.valueOf(query.${param.name}())`);
       }
     }
   }
@@ -540,11 +607,66 @@ function buildPagedCallArgs(methodParams, agg, packageName, moduleName, imports)
 
 // ─── FK repo list ─────────────────────────────────────────────────────────────
 
-function buildFkRepos(uc, packageName, moduleName) {
-  return (uc.fkValidations || []).map((fk) => ({
-    repoName: `${fk.aggregate}Repository`,
-    repoFieldName: `${toCamelCase(fk.aggregate)}Repository`,
-  }));
+/**
+ * Returns true if the FK aggregate is satisfied by a local repository.
+ * Either same-BC FK, or cross-BC FK with a local read model aggregate
+ * (aggregate with readModel: true and sourceBC matching fk.bc).
+ */
+function hasLocalReadModel(fk, bcYaml) {
+  if (!fk.bc || fk.bc === bcYaml.bc) return true;
+  return (bcYaml.aggregates || []).some(
+    (agg) => agg.readModel === true && agg.sourceBC === fk.bc && agg.name === fk.aggregate
+  );
+}
+
+/**
+ * Splits fkValidations into:
+ *   - fkRepos:  FKs satisfied by a local repository (same BC or LRM)
+ *   - fkPorts:  FKs requiring a cross-BC service port (no LRM exists)
+ *
+ * Each fkPorts entry: { portName, portFieldName, bc, bcPascal, aggregate,
+ *                       field, notFoundError, methodName, importPath, isNew }
+ */
+function buildFkDependencies(uc, packageName, moduleName, mainAggregateName, bcYaml) {
+  const fkRepos = [];
+  const fkPorts = [];
+  const seenPorts = new Set();
+
+  // BCs handled by outbound-http-generator already emit a unified ServicePort —
+  // do NOT generate a separate ServicePort.java.ejs file for them.
+  const outboundHttpBcNames = getOutboundHttpBcNames(bcYaml);
+
+  for (const fk of (uc.fkValidations || [])) {
+    if (fk.aggregate === mainAggregateName) continue;
+    if (hasLocalReadModel(fk, bcYaml)) {
+      fkRepos.push({
+        repoName: `${fk.aggregate}Repository`,
+        repoFieldName: `${toCamelCase(fk.aggregate)}Repository`,
+      });
+    } else {
+      // Cross-BC without LRM → service port in application/ports/
+      const bcPascal = toPascalCase(fk.bc);
+      const portName = `${bcPascal}ServicePort`;
+      const portFieldName = `${toCamelCase(fk.bc)}ServicePort`;
+      // isNew = false when the outbound HTTP generator already owns this port file
+      const managedByOutboundGenerator = outboundHttpBcNames.has(fk.bc);
+      fkPorts.push({
+        portName,
+        portFieldName,
+        bc: fk.bc,
+        bcPascal,
+        aggregate: fk.aggregate,
+        field: fk.field,
+        notFoundError: fk.notFoundError,
+        methodName: `exists${fk.aggregate}`,
+        importPath: `${packageName}.${moduleName}.application.ports.${portName}`,
+        isNew: !seenPorts.has(portName) && !managedByOutboundGenerator,
+      });
+      seenPorts.add(portName);
+    }
+  }
+
+  return { fkRepos, fkPorts };
 }
 
 // ─── Individual generators ────────────────────────────────────────────────────
@@ -576,8 +698,8 @@ async function generatePackageInfo(moduleName, packageName, bcDir, systemName) {
   );
 }
 
-async function generateResponseDto(agg, moduleName, packageName, bcDir) {
-  const { fields, imports } = buildResponseDtoFields(agg, packageName, moduleName);
+async function generateResponseDto(agg, moduleName, packageName, bcDir, voNames = new Set()) {
+  const { fields, imports } = buildResponseDtoFields(agg, packageName, moduleName, voNames);
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'ResponseDto.java.ejs'),
     path.join(bcDir, 'application', 'dtos', `${agg.name}ResponseDto.java`),
@@ -585,8 +707,8 @@ async function generateResponseDto(agg, moduleName, packageName, bcDir) {
   );
 }
 
-async function generateApplicationMapper(agg, moduleName, packageName, bcDir) {
-  const { fields, imports } = buildMapperFields(agg, packageName, moduleName);
+async function generateApplicationMapper(agg, moduleName, packageName, bcDir, voNames = new Set()) {
+  const { fields, imports } = buildMapperFields(agg, packageName, moduleName, voNames);
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'ApplicationMapper.java.ejs'),
     path.join(bcDir, 'application', 'mappers', `${agg.name}ApplicationMapper.java`),
@@ -594,41 +716,68 @@ async function generateApplicationMapper(agg, moduleName, packageName, bcDir) {
   );
 }
 
-async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap) {
-  const { fields, imports } = buildCommandFields(uc, agg, packageName, moduleName);
+async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames = new Set()) {
+  const ucClassName = toPascalCase(uc.name);
+  const { fields, imports } = buildCommandFields(uc, agg, packageName, moduleName, voNames);
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'UcCommand.java.ejs'),
-    path.join(bcDir, 'application', 'commands', `${uc.name}Command.java`),
-    { packageName, moduleName, useCaseName: uc.name, imports, fields }
+    path.join(bcDir, 'application', 'commands', `${ucClassName}Command.java`),
+    { packageName, moduleName, useCaseName: ucClassName, imports, fields }
+  );
+}
+
+async function generateServicePort(port, packageName, moduleName, bcDir) {
+  const portsDir = path.join(bcDir, 'application', 'ports');
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'application', 'ServicePort.java.ejs'),
+    path.join(portsDir, `${port.portName}.java`),
+    {
+      packageName,
+      moduleName,
+      portName: port.portName,
+      bc: port.bc,
+      bcPascal: port.bcPascal,
+      aggregate: port.aggregate,
+      methodName: port.methodName,
+    }
   );
 }
 
 async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, errorMap, bcYaml, repoMethods) {
+  const ucClassName = toPascalCase(uc.name);
   const aggVarName = toCamelCase(agg.name);
   const repoName = `${agg.name}Repository`;
   const repoFieldName = `${aggVarName}Repository`;
-  const fkRepos = buildFkRepos(uc, packageName, moduleName);
+  const { fkRepos, fkPorts } = buildFkDependencies(uc, packageName, moduleName, agg.name, bcYaml);
+
+  // Generate service port interfaces for cross-BC dependencies (one file per unique port)
+  for (const port of fkPorts) {
+    if (port.isNew) {
+      await generateServicePort(port, packageName, moduleName, bcDir);
+    }
+  }
 
   let body = '';
   let extraImports = [];
 
   if (uc.implementation === 'full') {
-    const result = buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName);
+    const result = buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcYaml);
     body = result.body;
     extraImports = result.extraImports;
   }
 
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'UcCommandHandler.java.ejs'),
-    path.join(bcDir, 'application', 'usecases', `${uc.name}CommandHandler.java`),
+    path.join(bcDir, 'application', 'usecases', `${ucClassName}CommandHandler.java`),
     {
       packageName,
       moduleName,
-      useCaseName: uc.name,
+      useCaseName: ucClassName,
       aggregateName: agg.name,
       repoName,
       repoFieldName,
       fkRepos,
+      fkPorts,
       needsMapper: false,
       mapperName: '',
       mapperFieldName: '',
@@ -640,14 +789,15 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
 }
 
 async function generateQuery(uc, agg, moduleName, packageName, bcDir, repoMethods) {
+  const ucClassName = toPascalCase(uc.name);
   const returnType = buildQueryReturnType(uc, agg, repoMethods);
   const fields = buildQueryFields(uc, agg, repoMethods);
   const imports = buildQueryImports(returnType, packageName, moduleName, agg);
 
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'UcQuery.java.ejs'),
-    path.join(bcDir, 'application', 'queries', `${uc.name}Query.java`),
-    { packageName, moduleName, useCaseName: uc.name, returnType, fields, imports }
+    path.join(bcDir, 'application', 'queries', `${ucClassName}Query.java`),
+    { packageName, moduleName, useCaseName: ucClassName, returnType, fields, imports }
   );
 }
 
@@ -656,11 +806,15 @@ function buildQueryImports(returnType, packageName, moduleName, agg) {
   if (returnType.startsWith('PagedResponse')) {
     imports.push(`${packageName}.shared.application.dtos.PagedResponse`);
   }
+  if (returnType.startsWith('List<')) {
+    imports.push('java.util.List');
+  }
   imports.push(`${packageName}.${moduleName}.application.dtos.${agg.name}ResponseDto`);
   return imports;
 }
 
 async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, errorMap, repoMethods) {
+  const ucClassName = toPascalCase(uc.name);
   const aggVarName = toCamelCase(agg.name);
   const repoName = `${agg.name}Repository`;
   const repoFieldName = `${aggVarName}Repository`;
@@ -679,6 +833,9 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
   if (returnType.startsWith('PagedResponse')) {
     extraImports.push(`${packageName}.shared.application.dtos.PagedResponse`);
   }
+  if (returnType.startsWith('List<')) {
+    extraImports.push('java.util.List');
+  }
 
   if (effectiveImpl === 'full') {
     const result = buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, moduleName);
@@ -689,11 +846,11 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
 
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'UcQueryHandler.java.ejs'),
-    path.join(bcDir, 'application', 'usecases', `${uc.name}QueryHandler.java`),
+    path.join(bcDir, 'application', 'usecases', `${ucClassName}QueryHandler.java`),
     {
       packageName,
       moduleName,
-      useCaseName: uc.name,
+      useCaseName: ucClassName,
       aggregateName: agg.name,
       repoName,
       repoFieldName,
@@ -718,6 +875,7 @@ async function generateApplicationLayer(bcYaml, config, outputDir) {
   const errorMap = buildErrorMap(bcYaml.errors || []);
   const repoMethods = normalizeRepoMethods(bcYaml.repositories || []);
   const allUseCases = bcYaml.useCases || [];
+  const voNames = new Set((bcYaml.valueObjects || []).map((vo) => vo.name));
 
   // 1. Domain errors
   await generateDomainErrors(bcYaml.errors || [], errorMap, moduleName, packageName, bcDir);
@@ -735,13 +893,13 @@ async function generateApplicationLayer(bcYaml, config, outputDir) {
     const aggUseCases = allUseCases.filter((uc) => uc.aggregate === aggName);
 
     // ResponseDto + Mapper per aggregate
-    await generateResponseDto(agg, moduleName, packageName, bcDir);
-    await generateApplicationMapper(agg, moduleName, packageName, bcDir);
+    await generateResponseDto(agg, moduleName, packageName, bcDir, voNames);
+    await generateApplicationMapper(agg, moduleName, packageName, bcDir, voNames);
 
     // Use cases
     for (const uc of aggUseCases) {
       if (uc.type === 'command') {
-        await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap);
+        await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames);
         await generateCommandHandler(uc, agg, moduleName, packageName, bcDir, errorMap, bcYaml, repoMethods);
       } else if (uc.type === 'query') {
         await generateQuery(uc, agg, moduleName, packageName, bcDir, repoMethods);

@@ -1,0 +1,136 @@
+package <%= packageName %>.<%= moduleName %>.infrastructure.adapters.rabbitmqMessageBroker;
+
+import org.springframework.amqp.core.Binding;
+import org.springframework.amqp.core.BindingBuilder;
+import org.springframework.amqp.core.Queue;
+import org.springframework.amqp.core.QueueBuilder;
+import org.springframework.amqp.core.TopicExchange;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/**
+ * RabbitMQ topology configuration for the <%= moduleName %> bounded context.
+ *
+ * Declares all exchanges, queues, dead-letter exchanges (DLX), dead-letter queues (DLQ)
+ * and bindings needed by this BC. Values are resolved at runtime from
+ * parameters/{env}/rabbitmq.yaml via @Value — no hardcoded strings.
+ *
+ * derived_from: domainEvents (published + consumed)
+ */
+@Configuration
+public class <%= modulePascalCase %>RabbitMQConfig {
+
+<% if (publishedEvents.length > 0) { %>
+    // ─── Publisher exchange for <%= moduleName %> ──────────────────────────────────────
+
+    @Value("${exchanges.<%= moduleName %>}")
+    private String <%= moduleCamelCase %>ExchangeName;
+
+    @Bean
+    public TopicExchange <%= moduleCamelCase %>Exchange() {
+        return new TopicExchange(<%= moduleCamelCase %>ExchangeName, true, false);
+    }
+
+    @Bean
+    public TopicExchange <%= moduleCamelCase %>DlxExchange() {
+        return new TopicExchange(<%= moduleCamelCase %>ExchangeName + ".dlx", true, false);
+    }
+
+<% for (const event of publishedEvents) { %>
+    // ─── <%= event.name %> ────────────────────────────────────────────────────────────
+
+    @Value("${queues.<%= event.queueKey %>}")
+    private String <%= event.fieldName %>QueueName;
+
+    @Value("${routing-keys.<%= event.queueKey %>}")
+    private String <%= event.fieldName %>RoutingKey;
+
+    @Bean
+    public Queue <%= event.fieldName %>Queue() {
+        return QueueBuilder.durable(<%= event.fieldName %>QueueName)
+                .withArgument("x-dead-letter-exchange", <%= moduleCamelCase %>ExchangeName + ".dlx")
+                .build();
+    }
+
+    @Bean
+    public Binding <%= event.fieldName %>Binding() {
+        return BindingBuilder
+                .bind(<%= event.fieldName %>Queue())
+                .to(<%= moduleCamelCase %>Exchange())
+                .with(<%= event.fieldName %>RoutingKey);
+    }
+
+    @Bean
+    public Queue <%= event.fieldName %>Dlq() {
+        return QueueBuilder.durable(<%= event.fieldName %>QueueName + ".dlq").build();
+    }
+
+    @Bean
+    public Binding <%= event.fieldName %>DlqBinding() {
+        return BindingBuilder
+                .bind(<%= event.fieldName %>Dlq())
+                .to(<%= moduleCamelCase %>DlxExchange())
+                .with(<%= event.fieldName %>RoutingKey);
+    }
+
+<% } %>
+<% } %>
+<% for (const producerEntry of consumersByProducer) { %>
+    // ─── Consumer: events from <%= producerEntry.producerBc %> ──────────────────────────────────────
+    // Bean names are prefixed with the owning BC (<%= moduleCamelCase %>) to avoid collisions
+    // when multiple BCs consume from the same producer exchange.
+
+    @Value("${exchanges.<%= producerEntry.producerBc %>}")
+    private String <%= moduleCamelCase %>_<%= producerEntry.producerCamel %>ExchangeName;
+
+    @Bean("<%= moduleCamelCase %>_<%= producerEntry.producerCamel %>Exchange")
+    public TopicExchange <%= moduleCamelCase %>_<%= producerEntry.producerCamel %>Exchange() {
+        return new TopicExchange(<%= moduleCamelCase %>_<%= producerEntry.producerCamel %>ExchangeName, true, false);
+    }
+
+    @Bean("<%= moduleCamelCase %>_<%= producerEntry.producerCamel %>DlxExchange")
+    public TopicExchange <%= moduleCamelCase %>_<%= producerEntry.producerCamel %>DlxExchange() {
+        return new TopicExchange(<%= moduleCamelCase %>_<%= producerEntry.producerCamel %>ExchangeName + ".dlx", true, false);
+    }
+
+<% for (const event of producerEntry.events) { %>
+    // ─── <%= event.name %> (from <%= producerEntry.producerBc %>) ──────────────────────────────────
+
+    @Value("${queues.<%= event.queueKey %>}")
+    private String <%= event.fieldName %>QueueName;
+
+    @Value("${routing-keys.<%= event.queueKey %>}")
+    private String <%= event.fieldName %>RoutingKey;
+
+    @Bean
+    public Queue <%= event.fieldName %>Queue() {
+        return QueueBuilder.durable(<%= event.fieldName %>QueueName)
+                .withArgument("x-dead-letter-exchange", <%= moduleCamelCase %>_<%= producerEntry.producerCamel %>ExchangeName + ".dlx")
+                .build();
+    }
+
+    @Bean
+    public Binding <%= event.fieldName %>Binding() {
+        return BindingBuilder
+                .bind(<%= event.fieldName %>Queue())
+                .to(<%= moduleCamelCase %>_<%= producerEntry.producerCamel %>Exchange())
+                .with(<%= event.fieldName %>RoutingKey);
+    }
+
+    @Bean
+    public Queue <%= event.fieldName %>Dlq() {
+        return QueueBuilder.durable(<%= event.fieldName %>QueueName + ".dlq").build();
+    }
+
+    @Bean
+    public Binding <%= event.fieldName %>DlqBinding() {
+        return BindingBuilder
+                .bind(<%= event.fieldName %>Dlq())
+                .to(<%= moduleCamelCase %>_<%= producerEntry.producerCamel %>DlxExchange())
+                .with(<%= event.fieldName %>RoutingKey);
+    }
+
+<% } %>
+<% } %>
+}

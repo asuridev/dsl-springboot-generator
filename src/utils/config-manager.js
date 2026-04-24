@@ -5,6 +5,7 @@ const path = require('path');
 const logger = require('./logger');
 
 const CONFIG_FILE = 'dsl-springboot.json';
+const PARAMETERS_FILE = path.join(__dirname, '..', '..', 'config', 'stack-catalog.json');
 
 /**
  * Returns the absolute path to the config file in CWD.
@@ -44,4 +45,12 @@ async function writeConfig(config) {
   logger.success(`Configuration saved to ${CONFIG_FILE}`);
 }
 
-module.exports = { configExists, readConfig, writeConfig };
+async function loadParameters() {
+  if (!(await fs.pathExists(PARAMETERS_FILE))) {
+    throw new Error(`Generator parameters file not found at: ${PARAMETERS_FILE}`);
+  }
+  const raw = await fs.readFile(PARAMETERS_FILE, 'utf-8');
+  return JSON.parse(raw);
+}
+
+module.exports = { configExists, readConfig, writeConfig, loadParameters };

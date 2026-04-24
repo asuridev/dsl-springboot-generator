@@ -181,7 +181,17 @@ function mapType(type, prop = {}) {
         validationAnnotations: [],
       };
 
-    default:
+    default: {
+      // Enum<X> → X (enum reference in YAML canonical form)
+      const enumMatch = /^Enum<(.+)>$/.exec(type);
+      if (enumMatch) {
+        return {
+          javaType: enumMatch[1],
+          importHint: null,
+          validationAnnotations: [],
+          isDomainType: true,
+        };
+      }
       // Assume it's an enum or aggregate reference (PascalCase domain type)
       return {
         javaType: type,
@@ -189,6 +199,7 @@ function mapType(type, prop = {}) {
         validationAnnotations: [],
         isDomainType: true,
       };
+    }
   }
 }
 

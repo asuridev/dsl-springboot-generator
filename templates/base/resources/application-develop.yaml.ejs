@@ -3,5 +3,5 @@ spring:
     import:
       - "classpath:parameters/develop/db.yaml"
       - "classpath:parameters/develop/cors.yaml"
-<%- hasMessaging ? '      - "classpath:parameters/develop/rabbitmq.yaml"' : '' %>
+<%- hasMessaging ? '      - "classpath:parameters/develop/' + broker + '.yaml"' : '' %>
 <%- hasHttpIntegrations ? '      - "classpath:parameters/develop/urls.yaml"' : '' %>

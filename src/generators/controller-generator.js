@@ -96,7 +96,7 @@ function getCommandFields(uc, agg) {
     const prop = propMap.get(param.name);
     // Only skip auto-generated fields for create operations (they're set server-side)
     if (isCreate && prop && prop.readOnly && prop.defaultValue === 'generated') continue;
-    if (prop && prop.source === 'auth-context') continue;
+    if (prop && prop.source === 'authContext') continue;
     const rawType = resolveParamType(param.name, propMap);
     if (rawType === 'Money') {
       fields.push(`${param.name}Amount`);
@@ -152,7 +152,8 @@ function normalizeNotFoundErrors(nfe) {
 
 function getQueryFields(uc, agg, repoMethods) {
   const repoMethodName = parseRepoMethodNameStr(uc.repositoryMethod);
-  const methodParams = (repoMethods[agg.name] || {})[repoMethodName] || [];
+  const methodEntry = (repoMethods[agg.name] || {})[repoMethodName] || {};
+  const methodParams = methodEntry.params || [];
   const fields = [];
 
   if (methodParams.length > 0) {
@@ -199,7 +200,10 @@ function normalizeRepoMethods(repositories) {
   for (const repo of repositories || []) {
     result[repo.aggregate] = {};
     for (const method of repo.methods || []) {
-      result[repo.aggregate][method.name] = normalizeMethodParams(method);
+      result[repo.aggregate][method.name] = {
+        params: normalizeMethodParams(method),
+        returns: method.returns || null,
+      };
     }
   }
   return result;
@@ -207,11 +211,21 @@ function normalizeRepoMethods(repositories) {
 
 function normalizeMethodParams(method) {
   if (method.params && Array.isArray(method.params)) {
-    return method.params.map((p) => ({
-      name: p.name,
-      type: p.type,
-      required: p.required !== false,
-    }));
+    return method.params.map((p) => {
+      // Inline YAML flow form: [{id: 'Uuid'}] → {name: 'id', type: 'Uuid'}
+      if (typeof p === 'object' && p !== null && !('name' in p) && !('type' in p)) {
+        const entries = Object.entries(p);
+        if (entries.length === 1) {
+          const [name, type] = entries[0];
+          return { name, type: String(type), required: true };
+        }
+      }
+      return {
+        name: p.name,
+        type: p.type,
+        required: p.required !== false,
+      };
+    });
   }
   if (method.signature) {
     return parseSignatureParams(method.signature);
@@ -241,7 +255,8 @@ function parseSignatureParams(signature) {
 
 function isPagedQuery(uc, agg, repoMethods) {
   const repoMethodName = parseRepoMethodNameStr(uc.repositoryMethod);
-  const methodParams = (repoMethods[agg.name] || {})[repoMethodName] || [];
+  const methodEntry = (repoMethods[agg.name] || {})[repoMethodName] || {};
+  const methodParams = methodEntry.params || [];
   return methodParams.some((p) => p.type === 'PageRequest' || p.type === 'Pageable');
 }
 
@@ -279,12 +294,18 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods) {
   const isQuery = uc.type === 'query';
   const isScaffold = uc.implementation === 'scaffold';
 
-  // Paged query detection
+  // Paged / list query detection
   const paged = isQuery && isPagedQuery(uc, agg, repoMethods);
+  const repoMethodNameQ = isQuery ? parseRepoMethodNameStr(uc.repositoryMethod) : '';
+  const repoMethodEntryQ = isQuery ? ((repoMethods[agg.name] || {})[repoMethodNameQ] || {}) : {};
+  const repoReturns = repoMethodEntryQ.returns || '';
+  const isList = !paged && isQuery && (repoReturns.startsWith('List[') || repoReturns.startsWith('List<'));
   const returnType = isQuery
     ? paged
       ? `PagedResponse<${agg.name}ResponseDto>`
-      : `${agg.name}ResponseDto`
+      : isList
+        ? `List<${agg.name}ResponseDto>`
+        : `${agg.name}ResponseDto`
     : 'void';
 
   // Command fields (in declaration order from the record)
@@ -300,21 +321,25 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods) {
   const queryFieldsList = isQuery ? getQueryFields(uc, agg, repoMethods) : [];
 
   // Build dispatch call string
+  const ucClassName = toPascalCase(uc.name);
   let dispatchCall;
   if (isQuery) {
     // All query fields come from path vars or @RequestParam
     const args = queryFieldsList.map((f) => f.name).join(', ');
-    dispatchCall = `new ${uc.name}Query(${args})`;
+    dispatchCall = `new ${ucClassName}Query(${args})`;
+  } else if (allCmdFields.length === 0) {
+    // No command fields (all injected server-side e.g. authContext) — instantiate empty record
+    dispatchCall = `new ${ucClassName}Command()`;
   } else if (hasOnlyPathFields || (!hasRequestBody && allCmdFields.length > 0)) {
     // All fields from path (e.g., DeactivateCategory, DeleteCategory)
     const args = allCmdFields.map((f) => (pathFieldNames.has(f) ? f : f)).join(', ');
-    dispatchCall = `new ${uc.name}Command(${args})`;
+    dispatchCall = `new ${ucClassName}Command(${args})`;
   } else if (hasRequestBody && commandHasId) {
     // Mix of path id + body fields
     const args = allCmdFields
       .map((f) => (pathFieldNames.has(f) ? f : `command.${f}()`))
       .join(', ');
-    dispatchCall = `new ${uc.name}Command(${args})`;
+    dispatchCall = `new ${ucClassName}Command(${args})`;
   } else {
     // Create (no path id) — dispatch body command directly
     dispatchCall = 'command';
@@ -341,7 +366,7 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods) {
     bodyFieldNames,
     commandHasId,
     dispatchCall,
-    ucName: uc.name,
+    ucName: ucClassName,
     aggName: agg.name,
   };
 }
@@ -459,11 +484,17 @@ function buildControllerImports(operations, packageName, moduleName) {
       imports.add(`${packageName}.${moduleName}.application.queries.${op.ucName}Query`);
     }
     if (!op.isCommand && op.returnType && op.returnType !== 'void') {
-      const baseDtoType = op.returnType.replace('PagedResponse<', '').replace('>', '');
-      imports.add(`${packageName}.${moduleName}.application.dtos.${baseDtoType}`);
-      if (op.returnType.startsWith('PagedResponse')) {
+      let baseDtoType;
+      if (op.returnType.startsWith('PagedResponse<')) {
+        baseDtoType = op.returnType.replace('PagedResponse<', '').replace('>', '');
         imports.add(`${packageName}.shared.application.dtos.PagedResponse`);
+      } else if (op.returnType.startsWith('List<')) {
+        baseDtoType = op.returnType.replace('List<', '').replace('>', '');
+        imports.add('java.util.List');
+      } else {
+        baseDtoType = op.returnType;
       }
+      imports.add(`${packageName}.${moduleName}.application.dtos.${baseDtoType}`);
     }
   }
 

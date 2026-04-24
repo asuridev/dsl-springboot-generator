@@ -1,0 +1,16 @@
+package <%= packageName %>.<%= moduleName %>.application.ports;
+
+import java.util.UUID;
+
+/**
+ * Output port — anti-corruption boundary to the <%= bc %> bounded context.
+ * Implementations live in infrastructure/adapters/<%= bc %>/.
+ */
+public interface <%= portName %> {
+
+    /**
+     * Returns true if a <%= aggregate %> with the given id exists and is active in <%= bc %>.
+     * Used for FK validation before persisting aggregates that reference cross-BC entities.
+     */
+    boolean <%= methodName %>(UUID id);
+}

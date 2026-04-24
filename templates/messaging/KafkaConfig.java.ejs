@@ -1,0 +1,61 @@
+package <%= packageName %>.shared.infrastructure.configurations.kafkaConfig;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.config.TopicBuilder;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory;
+import org.springframework.kafka.core.KafkaAdmin;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.core.ProducerFactory;
+import org.springframework.kafka.support.serializer.JsonSerializer;
+
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * Shared Kafka infrastructure configuration.
+ *
+ * Topic declarations are managed per-module in their own adapter packages
+ * to keep configuration co-located with business behaviour.
+ * This class only provides the shared infrastructure beans.
+ */
+@Configuration
+public class KafkaConfig {
+
+    private final KafkaProperties kafkaProperties;
+
+    public KafkaConfig(KafkaProperties kafkaProperties) {
+        this.kafkaProperties = kafkaProperties;
+    }
+
+    @Bean
+    public ProducerFactory<String, Object> kafkaProducerFactory(ObjectMapper objectMapper) {
+        Map<String, Object> props = new HashMap<>(kafkaProperties.buildProducerProperties(null));
+        props.put(
+            org.apache.kafka.clients.producer.ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+            JsonSerializer.class
+        );
+        JsonSerializer<Object> valueSerializer = new JsonSerializer<>(objectMapper);
+        valueSerializer.setAddTypeInfo(false);
+        return new DefaultKafkaProducerFactory<>(props,
+            new org.apache.kafka.common.serialization.StringSerializer(),
+            valueSerializer
+        );
+    }
+
+    @Bean
+    public KafkaTemplate<String, Object> kafkaTemplate(
+            ProducerFactory<String, Object> kafkaProducerFactory) {
+        return new KafkaTemplate<>(kafkaProducerFactory);
+    }
+
+    @Bean
+    public KafkaAdmin kafkaAdmin() {
+        return new KafkaAdmin(kafkaProperties.buildAdminProperties(null));
+    }
+}

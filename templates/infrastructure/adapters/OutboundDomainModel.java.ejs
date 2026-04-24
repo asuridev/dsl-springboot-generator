@@ -1,0 +1,39 @@
+package <%- packageName %>.<%- moduleName %>.domain.models.<%- targetBcPackage %>;
+<%
+const needsBigDecimal = fields && fields.some(f => f.javaType === 'BigDecimal');
+const needsInstant    = fields && fields.some(f => f.javaType === 'Instant');
+const needsUUID       = fields && fields.some(f => f.javaType === 'UUID');
+const needsList       = fields && fields.some(f => f.javaType && f.javaType.startsWith('List'));
+%>
+<%_ if (needsBigDecimal) { _%>
+import java.math.BigDecimal;
+<%_ } _%>
+<%_ if (needsInstant) { _%>
+import java.time.Instant;
+<%_ } _%>
+<%_ if (needsUUID) { _%>
+import java.util.UUID;
+<%_ } _%>
+<%_ if (needsList) { _%>
+import java.util.List;
+<%_ } _%>
+<%_ (voImports || []).forEach(imp => { _%>
+import <%- imp %>;
+<%_ }); _%>
+
+/**
+ * Domain model for the <%- name %> concept consumed from the <%- targetBc %> BC.
+ *
+ * <p>ACL (Anti-Corruption Layer): this record is the domain-side abstraction.
+ * The corresponding infrastructure DTO lives in
+ * {@code infrastructure.adapters.<%- targetBcPackage %>.dtos} and is mapped
+ * by {@link <%- aclMapperClassName %>}. If the external API changes, only the mapper
+ * needs updating — domain logic using this type remains untouched.
+ */
+public record <%- name %>(
+<%_ if (fields && fields.length > 0) { _%>
+<%_   fields.forEach((f, i) => { _%>
+    <%- f.javaType %> <%- f.name %><%- i < fields.length - 1 ? ',' : '' %>
+<%_   }); _%>
+<%_ } _%>
+) {}

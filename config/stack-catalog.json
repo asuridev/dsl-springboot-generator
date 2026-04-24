@@ -1,0 +1,65 @@
+{
+  "java": {
+    "default": "21",
+    "supported": ["17", "21"]
+  },
+  "gradle": {
+    "default": "8.x",
+    "supported": ["7.x", "8.x"]
+  },
+  "springBoot": {
+    "default": "3.4.x",
+    "supported": ["3.3.x", "3.4.x"]
+  },
+  "databases": [
+    {
+      "id": "postgresql",
+      "label": "PostgreSQL",
+      "gradleDependency": "runtimeOnly 'org.postgresql:postgresql'",
+      "driverClass": "org.postgresql.Driver",
+      "dialect": "org.hibernate.dialect.PostgreSQLDialect",
+      "defaultPort": 5432,
+      "jdbcPrefix": "jdbc:postgresql"
+    },
+    {
+      "id": "mysql",
+      "label": "MySQL",
+      "gradleDependency": "runtimeOnly 'com.mysql:mysql-connector-j'",
+      "driverClass": "com.mysql.cj.jdbc.Driver",
+      "dialect": "org.hibernate.dialect.MySQLDialect",
+      "defaultPort": 3306,
+      "jdbcPrefix": "jdbc:mysql"
+    },
+    {
+      "id": "h2",
+      "label": "H2 (in-memory — local/test only)",
+      "gradleDependency": "runtimeOnly 'com.h2database:h2'",
+      "driverClass": "org.h2.Driver",
+      "dialect": "org.hibernate.dialect.H2Dialect",
+      "defaultPort": null,
+      "jdbcPrefix": "jdbc:h2:mem"
+    }
+  ],
+  "messageBrokers": [
+    {
+      "id": "rabbitmq",
+      "label": "RabbitMQ",
+      "gradleDependency": "implementation 'org.springframework.boot:spring-boot-starter-amqp'",
+      "testDependency": "testImplementation 'org.springframework.amqp:spring-rabbit-test'"
+    },
+    {
+      "id": "kafka",
+      "label": "Apache Kafka",
+      "gradleDependency": "implementation 'org.springframework.kafka:spring-kafka'",
+      "testDependency": "testImplementation 'org.springframework.kafka:spring-kafka-test'"
+    }
+  ],
+  "dockerImages": {
+    "postgres": "postgres:16-alpine",
+    "mysql": "mysql:8.0",
+    "kafka": "confluentinc/cp-kafka:7.6.0",
+    "kafkaZookeeper": "confluentinc/cp-zookeeper:7.6.0",
+    "kafkaUi": "provectuslabs/kafka-ui:latest",
+    "rabbitmq": "rabbitmq:4-management"
+  }
+}
