@@ -305,6 +305,28 @@ async function generateBaseProject(config, system, outputDir) {
     );
   }
 
+  // ── Shared: SecurityConfig ────────────────────────────────────────────────
+
+  const securityConfigDir = path.join(
+    javaMainDir, 'shared', 'infrastructure', 'configurations', 'securityConfig'
+  );
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'shared', 'configurations', 'securityConfig', 'SecurityConfig.java.ejs'),
+    path.join(securityConfigDir, 'SecurityConfig.java'),
+    { packageName }
+  );
+
+  // ── Shared: SwaggerConfig ─────────────────────────────────────────────────
+
+  const swaggerConfigDir = path.join(
+    javaMainDir, 'shared', 'infrastructure', 'configurations', 'swaggerConfig'
+  );
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'shared', 'configurations', 'swaggerConfig', 'SwaggerConfig.java.ejs'),
+    path.join(swaggerConfigDir, 'SwaggerConfig.java'),
+    { packageName }
+  );
+
   // ── Shared: EventEnvelope ─────────────────────────────────────────────────
 
   const eventEnvelopeDir = path.join(javaMainDir, 'shared', 'infrastructure', 'eventEnvelope');
