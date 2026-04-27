@@ -1,0 +1,16 @@
+package <%= packageName %>.shared.domain.customExceptions;
+
+/**
+ * Base class for all domain exceptions.
+ * Subclasses represent intentional business rule violations that should not be retried.
+ * Infrastructure exceptions (DB timeouts, connection errors, etc.) extend RuntimeException directly
+ * and will be caught separately to allow the retry interceptor to act.
+ */
+public abstract class DomainException extends RuntimeException {
+
+    protected DomainException() {}
+
+    protected DomainException(String message) {
+        super(message);
+    }
+}

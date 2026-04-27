@@ -193,6 +193,7 @@ async function generateBaseProject(config, system, outputDir) {
 
   const exceptionsDir = path.join(javaMainDir, 'shared', 'domain', 'customExceptions');
   const exceptionClasses = [
+    'DomainException',
     'BusinessException',
     'NotFoundException',
     'ConflictException',

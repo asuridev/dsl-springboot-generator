@@ -1,6 +1,6 @@
 package <%= packageName %>.shared.domain.customExceptions;
 
-public class BusinessException extends RuntimeException {
+public class BusinessException extends DomainException {
 
     public BusinessException(String msg) {
         super(msg);

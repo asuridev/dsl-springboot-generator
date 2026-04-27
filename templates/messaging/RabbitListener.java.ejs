@@ -1,6 +1,7 @@
 package <%= packageName %>.<%= moduleName %>.infrastructure.rabbitListener;
 
 import <%= packageName %>.<%= moduleName %>.application.commands.<%= commandClassName %>;
+import <%= packageName %>.shared.domain.customExceptions.DomainException;
 import <%= packageName %>.shared.infrastructure.configurations.useCaseConfig.UseCaseMediator;
 import <%= packageName %>.shared.infrastructure.eventEnvelope.EventEnvelope;
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -81,10 +82,14 @@ public class <%= listenerClassName %> {
 <% }); %>
             ));
             channel.basicAck(deliveryTag, false);
-        } catch (RuntimeException e) {
-            log.error("Business logic error — sending to DLQ. queue={}, error={}",
+        } catch (DomainException e) {
+            log.error("Domain error — sending to DLQ immediately. queue={}, error={}",
                 message.getMessageProperties().getConsumerQueue(), e.getMessage(), e);
             channel.basicNack(deliveryTag, false, false);
+        } catch (RuntimeException e) {
+            log.warn("Infrastructure error — will retry. queue={}, error={}",
+                message.getMessageProperties().getConsumerQueue(), e.getMessage(), e);
+            throw e;
         }
     }
 }
