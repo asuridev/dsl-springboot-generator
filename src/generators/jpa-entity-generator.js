@@ -8,7 +8,8 @@ const { mapType } = require('../utils/type-mapper');
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
 // Fields managed by FullAuditableEntity base class — never declared in JPA entity
-const AUDIT_FIELD_NAMES = new Set(['createdAt', 'updatedAt', 'deletedAt']);
+// Note: deletedAt is NOT excluded here — it must be generated explicitly for softDelete aggregates
+const AUDIT_FIELD_NAMES = new Set(['createdAt', 'updatedAt']);
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -198,9 +199,17 @@ function buildJpaEntityImports(aggregate, bcYaml, config) {
   const imports = new Set();
   const bc = bcYaml.bc;
 
+  // @Id field always needs UUID
+  imports.add('java.util.UUID');
+
   // Base class
   if (aggregate.auditable || aggregate.softDelete) {
     imports.add(`${config.packageName}.shared.domain.FullAuditableEntity`);
+  }
+
+  // softDelete requires Instant for deleted_at column
+  if (aggregate.softDelete) {
+    imports.add('java.time.Instant');
   }
 
   // Iterate properties
@@ -311,6 +320,9 @@ function buildJpaChildEntityImports(entity, bcYaml, config) {
   const imports = new Set();
   const bc = bcYaml.bc;
 
+  // @Id field always needs UUID
+  imports.add('java.util.UUID');
+
   for (const prop of entity.properties || []) {
     if (prop.name === 'id') continue;
 
@@ -384,6 +396,18 @@ function buildJpaEntityContext(aggregate, bcYaml, config) {
   const baseClass = (hasAudit || hasSoftDelete) ? 'FullAuditableEntity' : null;
 
   const fields = buildJpaFields(aggregate.properties, aggregate, bcYaml);
+
+  // For softDelete aggregates, ensure deleted_at column exists.
+  // If the YAML has a deletedAt property it was already included above.
+  // If not, add a synthetic field so @SQLRestriction("deleted_at IS NULL") works.
+  if (hasSoftDelete && !fields.some((f) => f.name === 'deletedAt')) {
+    fields.push({
+      name: 'deletedAt',
+      javaType: 'Instant',
+      columnAnnotation: '@Column(name = "deleted_at")',
+    });
+  }
+
   const indexes = buildIndexes(aggregate.name, aggregate.properties);
 
   const childEntities = (aggregate.entities || []).map((entity) => ({

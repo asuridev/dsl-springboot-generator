@@ -179,7 +179,19 @@ function parseRepoMethodName(repoMethodStr) {
 
 // ─── Java type helpers ────────────────────────────────────────────────────────
 
-function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Set()) {
+/**
+ * Returns true when a VO type has exactly one String-like property,
+ * meaning it should be represented as a plain String in DTOs and commands.
+ * e.g. PhoneNumber { value: String }, Email { value: Email }, Url { value: Url }
+ */
+function isSingleStringVo(voType, bcYaml) {
+  const vo = (bcYaml && bcYaml.valueObjects || []).find((v) => v.name === voType);
+  if (!vo || (vo.properties || []).length !== 1) return false;
+  const t = vo.properties[0].type;
+  return t === 'String' || t === 'Text' || t === 'Email' || t === 'Url' || /^String\(\d+\)$/.test(t);
+}
+
+function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Set(), bcYaml = null) {
   if (type === 'Uuid') {
     imports.add('java.util.UUID');
     return 'UUID';
@@ -212,6 +224,7 @@ function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Se
   }
   // Value object
   if (voNames.has(type)) {
+    if (isSingleStringVo(type, bcYaml)) return 'String';
     imports.add(`${packageName}.${moduleName}.domain.valueobject.${type}`);
     return type;
   }
@@ -221,9 +234,9 @@ function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Se
 }
 
 // Commands receive UUIDs as String and convert with UUID.fromString in handler
-function javaTypeForCommand(type, packageName, moduleName, imports, voNames = new Set()) {
+function javaTypeForCommand(type, packageName, moduleName, imports, voNames = new Set(), bcYaml = null) {
   if (type === 'Uuid') return 'String';
-  return javaTypeForDto(type, packageName, moduleName, imports, voNames);
+  return javaTypeForDto(type, packageName, moduleName, imports, voNames, bcYaml);
 }
 
 function getterName(fieldName) {
@@ -232,13 +245,13 @@ function getterName(fieldName) {
 
 // ─── ResponseDto fields ───────────────────────────────────────────────────────
 
-function buildResponseDtoFields(agg, packageName, moduleName, voNames = new Set()) {
+function buildResponseDtoFields(agg, packageName, moduleName, voNames = new Set(), bcYaml = null) {
   const imports = new Set();
   const fields = [];
 
   for (const prop of agg.properties || []) {
     if (prop.hidden || prop.internal) continue;
-    const javaType = javaTypeForDto(prop.type, packageName, moduleName, imports, voNames);
+    const javaType = javaTypeForDto(prop.type, packageName, moduleName, imports, voNames, bcYaml);
     fields.push({ type: javaType, name: prop.name, annotations: [] });
   }
 
@@ -253,18 +266,16 @@ function buildResponseDtoFields(agg, packageName, moduleName, voNames = new Set(
 
 // ─── Mapper fields ────────────────────────────────────────────────────────────
 
-function buildMapperFields(agg, packageName, moduleName, voNames = new Set()) {
+function buildMapperFields(agg, packageName, moduleName, voNames = new Set(), bcYaml = null) {
   const imports = new Set();
   const fields = [];
 
-  // Types that are VOs in the domain but map to String in the DTO — need .getValue()
-  const voToStringTypes = new Set(['Email', 'Url']);
-
   for (const prop of agg.properties || []) {
     if (prop.hidden || prop.internal) continue;
-    javaTypeForDto(prop.type, packageName, moduleName, imports, voNames); // side-effect: collect imports
+    javaTypeForDto(prop.type, packageName, moduleName, imports, voNames, bcYaml); // side-effect: collect imports
     const baseGetter = getterName(prop.name);
-    const getter = voToStringTypes.has(prop.type)
+    const isSingleStrVo = voNames.has(prop.type) && isSingleStringVo(prop.type, bcYaml);
+    const getter = isSingleStrVo
       ? `${baseGetter}().getValue`
       : baseGetter;
     fields.push({ name: prop.name, getter });
@@ -280,7 +291,7 @@ function buildMapperFields(agg, packageName, moduleName, voNames = new Set()) {
 
 // ─── Command fields ───────────────────────────────────────────────────────────
 
-function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set()) {
+function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(), bcYaml = null) {
   const imports = new Set();
   const fields = [];
   const { methodName, params } = parseMethodSignature(uc.method || '');
@@ -322,7 +333,7 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
         annotations: param.optional ? [] : ['@NotBlank'],
       });
     } else {
-      const javaType = javaTypeForCommand(rawType, packageName, moduleName, imports, voNames);
+      const javaType = javaTypeForCommand(rawType, packageName, moduleName, imports, voNames, bcYaml);
       const annotations = buildValidationAnnotations(javaType, param.optional, imports);
       fields.push({ type: javaType, name: param.name, annotations });
     }
@@ -698,8 +709,8 @@ async function generatePackageInfo(moduleName, packageName, bcDir, systemName) {
   );
 }
 
-async function generateResponseDto(agg, moduleName, packageName, bcDir, voNames = new Set()) {
-  const { fields, imports } = buildResponseDtoFields(agg, packageName, moduleName, voNames);
+async function generateResponseDto(agg, moduleName, packageName, bcDir, voNames = new Set(), bcYaml = null) {
+  const { fields, imports } = buildResponseDtoFields(agg, packageName, moduleName, voNames, bcYaml);
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'ResponseDto.java.ejs'),
     path.join(bcDir, 'application', 'dtos', `${agg.name}ResponseDto.java`),
@@ -707,8 +718,8 @@ async function generateResponseDto(agg, moduleName, packageName, bcDir, voNames 
   );
 }
 
-async function generateApplicationMapper(agg, moduleName, packageName, bcDir, voNames = new Set()) {
-  const { fields, imports } = buildMapperFields(agg, packageName, moduleName, voNames);
+async function generateApplicationMapper(agg, moduleName, packageName, bcDir, voNames = new Set(), bcYaml = null) {
+  const { fields, imports } = buildMapperFields(agg, packageName, moduleName, voNames, bcYaml);
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'ApplicationMapper.java.ejs'),
     path.join(bcDir, 'application', 'mappers', `${agg.name}ApplicationMapper.java`),
@@ -716,9 +727,9 @@ async function generateApplicationMapper(agg, moduleName, packageName, bcDir, vo
   );
 }
 
-async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames = new Set()) {
+async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames = new Set(), bcYaml = null) {
   const ucClassName = toPascalCase(uc.name);
-  const { fields, imports } = buildCommandFields(uc, agg, packageName, moduleName, voNames);
+  const { fields, imports } = buildCommandFields(uc, agg, packageName, moduleName, voNames, bcYaml);
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'UcCommand.java.ejs'),
     path.join(bcDir, 'application', 'commands', `${ucClassName}Command.java`),
@@ -749,6 +760,14 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
   const repoName = `${agg.name}Repository`;
   const repoFieldName = `${aggVarName}Repository`;
   const { fkRepos, fkPorts } = buildFkDependencies(uc, packageName, moduleName, agg.name, bcYaml);
+
+  // Detect properties that must be injected from SecurityContext (not from command)
+  const authContextFields = (agg.properties || [])
+    .filter((p) => p.source === 'authContext')
+    .map((p) => {
+      const javaType = p.type === 'Uuid' ? 'UUID' : p.type;
+      return { name: p.name, javaType };
+    });
 
   // Generate service port interfaces for cross-BC dependencies (one file per unique port)
   for (const port of fkPorts) {
@@ -781,6 +800,7 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
       needsMapper: false,
       mapperName: '',
       mapperFieldName: '',
+      authContextFields,
       implementation: uc.implementation || 'scaffold',
       body,
       imports: extraImports,
@@ -893,13 +913,13 @@ async function generateApplicationLayer(bcYaml, config, outputDir) {
     const aggUseCases = allUseCases.filter((uc) => uc.aggregate === aggName);
 
     // ResponseDto + Mapper per aggregate
-    await generateResponseDto(agg, moduleName, packageName, bcDir, voNames);
-    await generateApplicationMapper(agg, moduleName, packageName, bcDir, voNames);
+    await generateResponseDto(agg, moduleName, packageName, bcDir, voNames, bcYaml);
+    await generateApplicationMapper(agg, moduleName, packageName, bcDir, voNames, bcYaml);
 
     // Use cases
     for (const uc of aggUseCases) {
       if (uc.type === 'command') {
-        await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames);
+        await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml);
         await generateCommandHandler(uc, agg, moduleName, packageName, bcDir, errorMap, bcYaml, repoMethods);
       } else if (uc.type === 'query') {
         await generateQuery(uc, agg, moduleName, packageName, bcDir, repoMethods);

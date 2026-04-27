@@ -67,6 +67,9 @@ public class <%= useCaseName %>CommandHandler implements CommandHandler<<%= useC
     @LogExceptions
     public void handle(<%= useCaseName %>Command command) {
 <% if (implementation === 'scaffold') { %>
+<% if (authContextFields && authContextFields.length > 0) { %>
+<% authContextFields.forEach(function(f) { %>        // TODO (authContext): inject <%- f.javaType %> <%- f.name %> from SecurityContextHolder.getContext().getAuthentication()
+<% }); %><% } %>
         // TODO: implement business logic — ver <%= moduleName %>-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
 <% } else { %>

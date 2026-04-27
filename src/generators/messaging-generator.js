@@ -4,10 +4,62 @@ const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toCamelCase, toKebabCase, toPascalCase, toPackagePath } = require('../utils/naming');
 const { mapType } = require('../utils/type-mapper');
+const logger = require('../utils/logger');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
 // ─── AsyncAPI parsing (legacy — kept for backward compatibility) ──────────────
+
+// ─── AsyncAPI payload resolver ────────────────────────────────────────────────
+
+/**
+ * Attempts to derive integration event payload fields from the AsyncAPI document.
+ * Handles `$ref` in message.payload pointing to components/schemas.
+ *
+ * Returns an array of { name, type } objects, or [] if not found.
+ */
+function resolvePayloadFromAsyncApi(eventName, asyncApiDoc) {
+  if (!asyncApiDoc || !asyncApiDoc.messages) return [];
+
+  // Resolve the message schema — try exact name, then with 'Payload'/'Event' suffix, then prefix match
+  let msgSchema = asyncApiDoc.messages.get(eventName)
+    || asyncApiDoc.messages.get(`${eventName}Payload`)
+    || asyncApiDoc.messages.get(`${eventName}Event`);
+  if (!msgSchema) {
+    // case-insensitive prefix match
+    const lower = eventName.toLowerCase();
+    for (const [key, val] of asyncApiDoc.messages) {
+      if (key.toLowerCase().startsWith(lower)) { msgSchema = val; break; }
+    }
+  }
+  if (!msgSchema) return [];
+
+  // Resolve the payload — may be inline or a $ref to components/schemas
+  let payloadSchema = msgSchema.payload || null;
+  if (payloadSchema && payloadSchema.$ref) {
+    const refParts = payloadSchema.$ref.split('/');
+    const schemaName = refParts[refParts.length - 1];
+    payloadSchema = (asyncApiDoc.schemas || {})[schemaName] || null;
+  }
+  if (!payloadSchema || !payloadSchema.properties) return [];
+
+  // Map OpenAPI/AsyncAPI schema types to domain types
+  function mapAsyncApiType(propName, propSchema) {
+    const t = propSchema.type || 'string';
+    const fmt = propSchema.format || '';
+    if (fmt === 'uuid') return 'Uuid';
+    if (fmt === 'date-time') return 'Instant';
+    if (t === 'integer' || t === 'int32' || t === 'int64') return 'Integer';
+    if (t === 'number') return 'Decimal';
+    if (t === 'boolean') return 'Boolean';
+    return 'String';
+  }
+
+  return Object.entries(payloadSchema.properties).map(([propName, propSchema]) => ({
+    name: propName,
+    type: mapAsyncApiType(propName, propSchema),
+  }));
+}
 
 // ─── Type helpers ─────────────────────────────────────────────────────────────
 
@@ -75,12 +127,21 @@ function toRoutingKeyKebab(eventName) {
 /**
  * Builds the per-event context object used across all messaging templates.
  */
-function buildEventContext(event, packageName, moduleName) {
+function buildEventContext(event, packageName, moduleName, asyncApiDoc) {
   const topicNameKebab = toRoutingKeyKebab(event.name);
   const topicNameCamel = toCamelCase(topicNameKebab);
   const integrationEventClassName = `${event.name}IntegrationEvent`;
 
-  const eventFields = (event.payload || []).map((p) =>
+  // Use bc.yaml payload if present; fall back to async-api schema
+  let rawPayload = event.payload || [];
+  if (rawPayload.length === 0 && asyncApiDoc) {
+    rawPayload = resolvePayloadFromAsyncApi(event.name, asyncApiDoc);
+    if (rawPayload.length > 0) {
+      logger.warn(`[${moduleName}] Event "${event.name}" payload resolved from async-api schema (not declared in bc.yaml).`);
+    }
+  }
+
+  const eventFields = rawPayload.map((p) =>
     Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName))
   );
 
@@ -424,12 +485,13 @@ async function generateKafkaListener(consumedEvent, packageName, moduleName, lis
  * Dispatches to RabbitMQ or Kafka implementations based on config.broker.
  *
  * @param {object} bcYaml
- * @param {object} _asyncApiDoc - Ignored (kept for API compatibility)
+ * @param {object} asyncApiDoc  - Parsed async-api document (channels + messages Map); used as
+ *                                payload fallback when bc.yaml events have empty payload lists.
  * @param {object} config       - { packageName, systemName, broker }
  * @param {string} outputDir
  * @returns {{ eventCount, integrationEventCount, listenerCount }}
  */
-async function generateMessagingLayer(bcYaml, _asyncApiDoc, config, outputDir) {
+async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir) {
   const packageName = config.packageName;
   const moduleName = bcYaml.bc;
 
@@ -466,7 +528,10 @@ async function generateMessagingLayer(bcYaml, _asyncApiDoc, config, outputDir) {
 
     // Lightweight form — derive from matching use case
     const uc = ucByEventName.get(ev.name);
-    if (!uc) return ev; // no matching UC; listener cannot be generated
+    if (!uc) {
+      logger.warn(`[${moduleName}] Consumed event "${ev.name}" has no use case with trigger.kind=event. No listener will be generated.`);
+      return ev; // no command → no listener
+    }
 
     const queueKey = ev.queueKey || `${moduleName}-${toRoutingKeyKebab(ev.name)}`;
 
@@ -522,7 +587,7 @@ async function generateMessagingLayer(bcYaml, _asyncApiDoc, config, outputDir) {
   const adaptersDir     = path.join(bcBase, 'infrastructure', 'adapters');
 
   const publishedEventCtxs = publishedEvents.map((e) =>
-    buildEventContext(e, packageName, moduleName)
+    buildEventContext(e, packageName, moduleName, asyncApiDoc)
   );
 
   let eventCount = 0;
@@ -552,9 +617,11 @@ async function generateMessagingLayer(bcYaml, _asyncApiDoc, config, outputDir) {
 
   // ── Per-BC RabbitMQ config (exchanges, queues, bindings, DLQs) ──────────
   if (config.broker === 'rabbitmq' && (publishedEventCtxs.length > 0 || resolvedConsumedEvents.length > 0)) {
+    // Only include consumed events that have a listener (command field present)
+    const consumedWithListener = resolvedConsumedEvents.filter((ev) => ev.command);
     await generateBcRabbitMQConfig(
       publishedEventCtxs,
-      resolvedConsumedEvents,
+      consumedWithListener,
       packageName,
       moduleName,
       adaptersDir

@@ -74,7 +74,7 @@ function detectStateTransition(ucId, aggregate, bcEnums) {
     if (!enumDef) continue;
     for (const valueObj of enumDef.values || []) {
       for (const t of valueObj.transitions || []) {
-        if (t && t.triggeredBy && t.triggeredBy.startsWith(ucId + ' ')) {
+        if (t && t.triggeredBy && (t.triggeredBy === ucId || t.triggeredBy.startsWith(ucId + ' '))) {
           return { statusField: field.name, enumType: field.type, targetValue: t.to, emits: t.emits || null };
         }
       }
@@ -319,6 +319,14 @@ async function generateAggregates(bcYaml, config, outputDir) {
   const publishedEvents = (bcYaml.domainEvents || {}).published || [];
 
   for (const aggregate of aggregates) {
+    // ── 0. Determine if this aggregate is a read model (no domain events) ────────
+    const isReadModel = aggregate.readModel === true;
+
+    // Filter published events to this aggregate only; read models never raise events
+    const aggregatePublishedEvents = isReadModel
+      ? []
+      : publishedEvents.filter((e) => !e.aggregate || e.aggregate === aggregate.name);
+
     // ── 1. Build scalar fields (from YAML properties, excluding id and audit) ──
     const allProps = aggregate.properties || [];
     const scalarFields = allProps
@@ -428,7 +436,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
       }));
 
       const returnType = resolveReturnType(sig.returnType, aggregate.name);
-      const body = computeMethodBody(uc, sig, aggregate, bcEnums, bc, publishedEvents);
+      const body = computeMethodBody(uc, sig, aggregate, bcEnums, bc, aggregatePublishedEvents);
 
       businessMethods.push({
         name: sig.name,
@@ -440,7 +448,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
     }
 
     // ── 6. Build imports (after businessMethods so param types are included) ──
-    const imports = buildImports(aggregate, bcYaml, config, businessMethods, publishedEvents);
+    const imports = buildImports(aggregate, bcYaml, config, businessMethods, aggregatePublishedEvents);
 
     // ── 7. Render aggregate root ───────────────────────────────────────────────
     const context = {
@@ -450,7 +458,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
       description: aggregate.description || '',
       hasAudit: !!aggregate.auditable,
       hasSoftDelete: !!aggregate.softDelete,
-      hasDomainEvents: publishedEvents.length > 0,
+      hasDomainEvents: aggregatePublishedEvents.length > 0,
       hasChildEntities: childEntities.length > 0,
       imports,
       fields: scalarFields,

@@ -929,7 +929,10 @@ async function generateRepositories(bcYaml, config, outputDir) {
       return { ...normalized, derivedFrom: m.derivedFrom };
     });
 
-    const hasDomainEvents = ((bcYaml.domainEvents || {}).published || []).length > 0;
+    // hasDomainEvents: read models never publish events and must not inject eventPublisher
+    const allPublishedEvents = (bcYaml.domainEvents || {}).published || [];
+    const hasDomainEvents = !(aggregate.readModel === true) &&
+      allPublishedEvents.some((e) => !e.aggregate || e.aggregate === aggregateName);
 
     // 1. Domain repository interface
     const ifaceContext = buildRepoInterfaceContext(aggregateName, normalizedMethods, bc, config.packageName, bcYaml);

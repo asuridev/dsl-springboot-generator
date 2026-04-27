@@ -33,12 +33,15 @@ async function readAsyncApiYaml(bcName) {
 
   const channels = [];
   const messages = new Map();
+  const schemas = {}; // components.schemas for $ref resolution
 
   // AsyncAPI 3.x format: top-level "channels" object + "operations" object
   const docChannels = doc.channels || {};
   const docOperations = doc.operations || {};
   const docComponents = doc.components || {};
   const docMessages = (docComponents.messages || {});
+  const docSchemas = docComponents.schemas || {};
+  Object.assign(schemas, docSchemas);
 
   // Collect component messages
   for (const [msgName, msgSchema] of Object.entries(docMessages)) {
@@ -85,7 +88,7 @@ async function readAsyncApiYaml(bcName) {
     }
   }
 
-  return { channels, messages };
+  return { channels, messages, schemas };
 }
 
 module.exports = { readAsyncApiYaml };
