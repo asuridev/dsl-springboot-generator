@@ -73,12 +73,18 @@ public class <%= listenerClassName %> {
         <%- f.javaType %> <%= f.name %> = objectMapper.convertValue(event.data().get("<%= f.name %>"), <%- f.javaType %>.class);
 <%   } %>
 <% }); %>
-        useCaseMediator.dispatch(new <%= commandClassName %>(
+        try {
+            useCaseMediator.dispatch(new <%= commandClassName %>(
 <% const _cmdFields = commandFields || fields || []; %>
 <% _cmdFields.forEach((f, i) => { %>
-                <%= f.name %><%= i < _cmdFields.length - 1 ? ',' : '' %>
+                    <%= f.name %><%= i < _cmdFields.length - 1 ? ',' : '' %>
 <% }); %>
-        ));
-        channel.basicAck(deliveryTag, false);
+            ));
+            channel.basicAck(deliveryTag, false);
+        } catch (RuntimeException e) {
+            log.error("Business logic error — sending to DLQ. queue={}, error={}",
+                message.getMessageProperties().getConsumerQueue(), e.getMessage(), e);
+            channel.basicNack(deliveryTag, false, false);
+        }
     }
 }

@@ -268,7 +268,7 @@ async function generateBaseProject(config, system, outputDir) {
   // ── Shared: annotations ───────────────────────────────────────────────────
 
   const annotationsDir = path.join(javaMainDir, 'shared', 'domain', 'annotations');
-  const annotations = ['ApplicationComponent', 'DomainComponent', 'LogExceptions', 'LogLevel'];
+  const annotations = ['ApplicationComponent', 'DomainComponent', 'LogExceptions', 'LogLevel', 'LogBefore', 'LogAfter', 'Loggable', 'LogTimer'];
   for (const ann of annotations) {
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'shared', 'annotations', `${ann}.java.ejs`),
@@ -324,6 +324,28 @@ async function generateBaseProject(config, system, outputDir) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'shared', 'configurations', 'swaggerConfig', 'SwaggerConfig.java.ejs'),
     path.join(swaggerConfigDir, 'SwaggerConfig.java'),
+    { packageName }
+  );
+
+  // ── Shared: HandlerLogs (AOP logging aspect) ──────────────────────────────
+
+  const loggerConfigDir = path.join(
+    javaMainDir, 'shared', 'infrastructure', 'configurations', 'loggerConfig'
+  );
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'shared', 'configurations', 'loggerConfig', 'HandlerLogs.java.ejs'),
+    path.join(loggerConfigDir, 'HandlerLogs.java'),
+    { packageName }
+  );
+
+  // ── Shared: EventPublicationSchemaConfig (Spring Modulith varchar→TEXT) ───
+
+  const eventPublicationConfigDir = path.join(
+    javaMainDir, 'shared', 'infrastructure', 'configurations', 'eventPublicationConfig'
+  );
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'shared', 'configurations', 'eventPublicationConfig', 'EventPublicationSchemaConfig.java.ejs'),
+    path.join(eventPublicationConfigDir, 'EventPublicationSchemaConfig.java'),
     { packageName }
   );
 

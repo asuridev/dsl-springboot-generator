@@ -1,0 +1,109 @@
+package <%= packageName %>.shared.infrastructure.configurations.eventPublicationConfig;
+
+import java.util.Map;
+import javax.sql.DataSource;
+
+import org.hibernate.boot.model.relational.Namespace;
+import org.hibernate.boot.model.relational.Sequence;
+import org.hibernate.mapping.Table;
+import org.hibernate.tool.schema.spi.SchemaFilter;
+import org.hibernate.tool.schema.spi.SchemaFilterProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.boot.autoconfigure.orm.jpa.HibernatePropertiesCustomizer;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+/**
+ * Fixes Spring Modulith JPA event_publication table columns.
+ * <p>
+ * Hibernate maps the internal {@code JpaEventPublication} String fields
+ * as {@code varchar(255)} by default, which is too short for serialised
+ * domain event payloads.
+ * <p>
+ * This config does two things:
+ * <ol>
+ *   <li>Excludes the {@code event_publication} table from Hibernate DDL auto
+ *       so it never tries to ALTER columns back to {@code varchar(255)}.</li>
+ *   <li>Runs an {@link ApplicationRunner} that ensures the columns are {@code TEXT}.</li>
+ * </ol>
+ */
+@Configuration
+public class EventPublicationSchemaConfig implements HibernatePropertiesCustomizer {
+
+    private static final Logger log = LoggerFactory.getLogger(EventPublicationSchemaConfig.class);
+
+    @Override
+    public void customize(Map<String, Object> hibernateProperties) {
+        hibernateProperties.put(
+            "hibernate.hbm2ddl.schema_filter_provider",
+            new EventPublicationFilterProvider()
+        );
+    }
+
+    @Bean
+    ApplicationRunner eventPublicationSchemaFix(DataSource dataSource) {
+        return args -> {
+            try (var conn = dataSource.getConnection()) {
+                var db = conn.getMetaData().getDatabaseProductName().toLowerCase();
+                String[] statements;
+
+                if (db.contains("postgre")) {
+                    statements = new String[]{
+                        "CREATE TABLE IF NOT EXISTS event_publication (id UUID NOT NULL PRIMARY KEY, completion_date TIMESTAMP, event_type TEXT NOT NULL, listener_id TEXT NOT NULL, publication_date TIMESTAMP, serialized_event TEXT NOT NULL)",
+                        "ALTER TABLE event_publication ALTER COLUMN serialized_event TYPE TEXT",
+                        "ALTER TABLE event_publication ALTER COLUMN event_type TYPE TEXT",
+                        "ALTER TABLE event_publication ALTER COLUMN listener_id TYPE TEXT"
+                    };
+                } else if (db.contains("mysql") || db.contains("maria")) {
+                    statements = new String[]{
+                        "CREATE TABLE IF NOT EXISTS event_publication (id VARCHAR(36) NOT NULL PRIMARY KEY, completion_date DATETIME, event_type TEXT NOT NULL, listener_id TEXT NOT NULL, publication_date DATETIME, serialized_event TEXT NOT NULL)",
+                        "ALTER TABLE event_publication MODIFY COLUMN serialized_event TEXT",
+                        "ALTER TABLE event_publication MODIFY COLUMN event_type TEXT",
+                        "ALTER TABLE event_publication MODIFY COLUMN listener_id TEXT"
+                    };
+                } else {
+                    // H2 and other databases
+                    statements = new String[]{
+                        "CREATE TABLE IF NOT EXISTS event_publication (id UUID NOT NULL PRIMARY KEY, completion_date TIMESTAMP, event_type TEXT NOT NULL, listener_id TEXT NOT NULL, publication_date TIMESTAMP, serialized_event TEXT NOT NULL)",
+                        "ALTER TABLE IF EXISTS event_publication ALTER COLUMN serialized_event TEXT",
+                        "ALTER TABLE IF EXISTS event_publication ALTER COLUMN event_type TEXT",
+                        "ALTER TABLE IF EXISTS event_publication ALTER COLUMN listener_id TEXT"
+                    };
+                }
+
+                for (var sql : statements) {
+                    try (var stmt = conn.createStatement()) {
+                        stmt.execute(sql);
+                    } catch (Exception e) {
+                        // Column already TEXT or statement not applicable — safe to ignore
+                    }
+                }
+                log.debug("event_publication columns verified (TEXT)");
+            }
+        };
+    }
+
+    // ── Hibernate Schema Filter ────────────────────────────────────────────
+    // Excludes event_publication from ddl-auto so Hibernate never tries
+    // to ALTER its columns back to varchar(255).
+
+    static class EventPublicationFilterProvider implements SchemaFilterProvider {
+        private static final SchemaFilter FILTER = new EventPublicationFilter();
+
+        @Override public SchemaFilter getCreateFilter()    { return FILTER; }
+        @Override public SchemaFilter getDropFilter()      { return FILTER; }
+        @Override public SchemaFilter getMigrateFilter()   { return FILTER; }
+        @Override public SchemaFilter getValidateFilter()  { return FILTER; }
+        @Override public SchemaFilter getTruncatorFilter() { return FILTER; }
+    }
+
+    static class EventPublicationFilter implements SchemaFilter {
+        @Override public boolean includeNamespace(Namespace namespace) { return true; }
+        @Override public boolean includeSequence(Sequence sequence)    { return true; }
+        @Override public boolean includeTable(Table table) {
+            return !"event_publication".equalsIgnoreCase(table.getName());
+        }
+    }
+}

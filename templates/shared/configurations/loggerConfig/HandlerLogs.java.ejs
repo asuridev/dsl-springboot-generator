@@ -1,0 +1,144 @@
+package <%= packageName %>.shared.infrastructure.configurations.loggerConfig;
+
+import <%= packageName %>.shared.domain.annotations.*;
+import org.aspectj.lang.JoinPoint;
+import org.aspectj.lang.ProceedingJoinPoint;
+import org.aspectj.lang.annotation.*;
+import org.aspectj.lang.reflect.MethodSignature;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Component;
+
+import java.util.Set;
+import java.util.StringJoiner;
+
+@Component
+@Aspect
+public class HandlerLogs {
+
+  // ── Individual annotations ──────────────────────────────────────
+
+  @Before("@annotation(logBefore)")
+  public void executionBeforeMethod(JoinPoint joinPoint, LogBefore logBefore) {
+    Logger logger = getLogger(joinPoint);
+    log(logger, logBefore.level(),
+        "▶ Entering {} with args: [{}]",
+        joinPoint.getSignature().getName(),
+        formatArgs(joinPoint, Set.of(logBefore.excludeArgs())));
+  }
+
+  @AfterReturning(pointcut = "@annotation(logAfter)", returning = "result")
+  public void executionSuccessMethod(JoinPoint joinPoint, LogAfter logAfter, Object result) {
+    Logger logger = getLogger(joinPoint);
+    log(logger, logAfter.level(),
+        "◀ Completed {} with args: [{}] | return: {}",
+        joinPoint.getSignature().getName(),
+        formatArgs(joinPoint, Set.of(logAfter.excludeArgs())),
+        result);
+  }
+
+  @AfterThrowing(pointcut = "@annotation(logExceptions)", throwing = "exception")
+  public void executionFailMethod(JoinPoint joinPoint, LogExceptions logExceptions, Exception exception) {
+    Logger logger = getLogger(joinPoint);
+    log(logger, logExceptions.level(),
+        "✖ Method {} failed with args: [{}] | exception: {} | message: {}",
+        joinPoint.getSignature().getName(),
+        formatArgs(joinPoint, Set.of(logExceptions.excludeArgs())),
+        exception.getClass().getSimpleName(),
+        exception.getMessage());
+  }
+
+  @Around("@annotation(logTimer)")
+  public Object executionTimeMethod(ProceedingJoinPoint joinPoint, LogTimer logTimer) throws Throwable {
+    long start = System.currentTimeMillis();
+    Object result = joinPoint.proceed();
+    long executionTime = System.currentTimeMillis() - start;
+    Logger logger = getLogger(joinPoint);
+    log(logger, logTimer.level(),
+        "⏱ Method {} executed in {} ms",
+        joinPoint.getSignature().getName(),
+        executionTime);
+    return result;
+  }
+
+  // ── Unified @Loggable annotation ───────────────────────────────
+
+  @Around("@annotation(loggable)")
+  public Object executionLoggableMethod(ProceedingJoinPoint joinPoint, Loggable loggable) throws Throwable {
+    Logger logger = getLogger(joinPoint);
+    String methodName = joinPoint.getSignature().getName();
+    Set<String> excluded = Set.of(loggable.excludeArgs());
+
+    if (loggable.before()) {
+      log(logger, loggable.level(),
+          "▶ Entering {} with args: [{}]",
+          methodName,
+          formatArgs(joinPoint, excluded));
+    }
+
+    long start = loggable.timer() ? System.currentTimeMillis() : 0;
+
+    try {
+      Object result = joinPoint.proceed();
+
+      if (loggable.after()) {
+        log(logger, loggable.level(),
+            "◀ Completed {} with args: [{}] | return: {}",
+            methodName,
+            formatArgs(joinPoint, excluded),
+            result);
+      }
+
+      if (loggable.timer()) {
+        long executionTime = System.currentTimeMillis() - start;
+        log(logger, loggable.level(),
+            "⏱ Method {} executed in {} ms",
+            methodName,
+            executionTime);
+      }
+
+      return result;
+    } catch (Exception exception) {
+      if (loggable.exceptions()) {
+        logger.warn("✖ Method {} failed with args: [{}] | exception: {} | message: {}",
+            methodName,
+            formatArgs(joinPoint, excluded),
+            exception.getClass().getSimpleName(),
+            exception.getMessage());
+      }
+      throw exception;
+    }
+  }
+
+  // ── Private helpers ────────────────────────────────────────────
+
+  private Logger getLogger(JoinPoint joinPoint) {
+    return LoggerFactory.getLogger(joinPoint.getSignature().getDeclaringTypeName());
+  }
+
+  private String formatArgs(JoinPoint joinPoint, Set<String> excludedArgs) {
+    MethodSignature signature = (MethodSignature) joinPoint.getSignature();
+    String[] paramNames = signature.getParameterNames();
+    Object[] args = joinPoint.getArgs();
+
+    if (paramNames == null || paramNames.length == 0) {
+      return "";
+    }
+
+    StringJoiner joiner = new StringJoiner(", ");
+    for (int i = 0; i < paramNames.length; i++) {
+      joiner.add(paramNames[i] + "=" +
+          (excludedArgs.contains(paramNames[i]) ? "[PROTECTED]" : args[i]));
+    }
+    return joiner.toString();
+  }
+
+  private void log(Logger logger, LogLevel level, String message, Object... args) {
+    switch (level) {
+      case TRACE -> logger.trace(message, args);
+      case DEBUG -> logger.debug(message, args);
+      case INFO  -> logger.info(message, args);
+      case WARN  -> logger.warn(message, args);
+    }
+  }
+}

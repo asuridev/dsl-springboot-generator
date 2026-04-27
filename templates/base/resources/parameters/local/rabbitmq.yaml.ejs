@@ -5,14 +5,20 @@ spring:
     username: guest
     password: guest
     virtual-host: /
+    publisher-confirm-type: correlated
+    publisher-returns: true
     listener:
       simple:
         acknowledge-mode: manual
         concurrency: 3
+        prefetch: 5
         retry:
           enabled: true
           max-attempts: 3
           initial-interval: 1500
+          multiplier: 2.0
+          max-interval: 30000
+          stateless: true
 <% if (topology && topology.exchanges.length > 0) { %>
 exchanges:
 <% topology.exchanges.forEach(e => { %>  <%- e.key %>: <%- e.value %>
