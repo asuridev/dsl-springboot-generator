@@ -19,7 +19,7 @@ const { generateOutboundHttpAdapters } = require('../generators/outbound-http-ge
 const { generateControllerLayer } = require('../generators/controller-generator');
 const { generateMessagingLayer, generateSharedBrokerConfig, buildRabbitMQTopology, buildKafkaTopology } = require('../generators/messaging-generator');
 const { readBcYaml } = require('../utils/bc-yaml-reader');
-const { readOpenApiYaml, readAsyncApiYaml } = require('../utils/arch-yaml-reader');
+const { readOpenApiYaml, readAsyncApiYaml, readInternalApiYaml } = require('../utils/arch-yaml-reader');
 
 // ─── BC discovery ─────────────────────────────────────────────────────────────
 
@@ -250,7 +250,8 @@ async function buildCommand() {
     // ── 8. Per-BC application layer generation (SP-5) ──────────────────────
     const appSpinner = ora('Generating application layer…').start();
     for (const bcYaml of allBcYamls) {
-      await generateApplicationLayer(bcYaml, resolvedConfig, outputDir);
+      const internalApiDocForApp = await readInternalApiYaml(bcYaml.bc);
+      await generateApplicationLayer(bcYaml, resolvedConfig, outputDir, internalApiDocForApp);
     }
     appSpinner.succeed(`Application layer generated for ${allBcYamls.length} bounded context(s)`);
 
@@ -295,7 +296,8 @@ async function buildCommand() {
       // REST controllers
       try {
         const openApiDoc = await readOpenApiYaml(bcYaml.bc);
-        const count = await generateControllerLayer(bcYaml, openApiDoc, resolvedConfig, outputDir);
+        const internalApiDoc = await readInternalApiYaml(bcYaml.bc);
+        const count = await generateControllerLayer(bcYaml, openApiDoc, internalApiDoc, resolvedConfig, outputDir);
         controllerCount += count;
       } catch (err) {
         logger.warn(`Skipping controllers for ${bcYaml.bc}: ${err.message}`);

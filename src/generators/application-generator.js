@@ -895,14 +895,99 @@ function buildQueryImports(returnType, packageName, moduleName, agg) {
   return imports;
 }
 
-async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, errorMap, repoMethods) {
+// ─── Internal API schema helpers ────────────────────────────────────────────────────────────────────────────
+
+function resolveInternalSchemaRef(ref) {
+  if (!ref) return null;
+  const parts = ref.split('/');
+  return parts[parts.length - 1];
+}
+
+function openApiPropToJavaType(propSchema, imports) {
+  if (!propSchema) return 'String';
+  if (propSchema.$ref) {
+    const name = resolveInternalSchemaRef(propSchema.$ref);
+    return `${name}Dto`;
+  }
+  if (propSchema.type === 'array' && propSchema.items) {
+    imports.add('java.util.List');
+    const itemType = openApiPropToJavaType(propSchema.items, imports);
+    return `List<${itemType}>`;
+  }
+  if (propSchema.type === 'integer') return 'int';
+  if (propSchema.type === 'number') {
+    imports.add('java.math.BigDecimal');
+    return 'BigDecimal';
+  }
+  if (propSchema.type === 'boolean') return 'boolean';
+  return 'String';
+}
+
+function buildInternalSchemaFields(schemaName, components, forCommand = false) {
+  const schema = (components?.schemas || {})[schemaName];
+  if (!schema) return { fields: [], imports: [] };
+  const imports = new Set();
+  const fields = [];
+  const requiredSet = new Set(schema.required || []);
+  for (const [propName, propSchema] of Object.entries(schema.properties || {})) {
+    const javaType = openApiPropToJavaType(propSchema, imports);
+    const annotations = [];
+    if (forCommand) {
+      const isObj = propSchema.$ref || propSchema.type === 'array' || propSchema.type === 'object';
+      if (isObj) {
+        imports.add('jakarta.validation.Valid');
+        annotations.push('@Valid');
+      }
+      if (requiredSet.has(propName) && propSchema.type !== 'integer' && propSchema.type !== 'boolean') {
+        imports.add('jakarta.validation.constraints.NotNull');
+        annotations.push('@NotNull');
+      }
+    }
+    fields.push({ type: javaType, name: propName, annotations });
+  }
+  return { fields, imports: [...imports].sort() };
+}
+
+function collectInternalSchemas(rootSchemaName, components, visited = new Set()) {
+  if (visited.has(rootSchemaName)) return visited;
+  const schema = (components?.schemas || {})[rootSchemaName];
+  if (!schema) return visited;
+  visited.add(rootSchemaName);
+  for (const propSchema of Object.values(schema.properties || {})) {
+    visitInternalPropSchema(propSchema, components, visited);
+  }
+  return visited;
+}
+
+function visitInternalPropSchema(propSchema, components, visited) {
+  if (propSchema.$ref) {
+    const refName = resolveInternalSchemaRef(propSchema.$ref);
+    collectInternalSchemas(refName, components, visited);
+  } else if (propSchema.type === 'array' && propSchema.items) {
+    visitInternalPropSchema(propSchema.items, components, visited);
+  }
+}
+
+async function generateInternalApiDtos(schemasToGenerate, packageName, moduleName, components, bcDir) {
+  const dtosDir = path.join(bcDir, 'application', 'dtos');
+  for (const schemaName of schemasToGenerate) {
+    const { fields, imports } = buildInternalSchemaFields(schemaName, components);
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'application', 'InternalApiDto.java.ejs'),
+      path.join(dtosDir, `${schemaName}Dto.java`),
+      { packageName, moduleName, dtoName: `${schemaName}Dto`, imports, fields }
+    );
+  }
+}
+
+async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, errorMap, repoMethods, customReturnType = null) {
   const ucClassName = toPascalCase(uc.name);
   const aggVarName = toCamelCase(agg.name);
   const repoName = `${agg.name}Repository`;
   const repoFieldName = `${aggVarName}Repository`;
   const mapperName = `${agg.name}ApplicationMapper`;
   const mapperFieldName = `${aggVarName}ApplicationMapper`;
-  const returnType = buildQueryReturnType(uc, agg, repoMethods);
+  const returnType = customReturnType || buildQueryReturnType(uc, agg, repoMethods);
 
   // Use scaffold for sub-entity queries (cannot auto-generate correct body)
   const effectiveImpl = isSubEntityQuery(uc, agg) ? 'scaffold' : (uc.implementation || 'scaffold');
@@ -910,20 +995,24 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
   let body = '';
   let extraImports = [];
 
-  // Always import ResponseDto (needed for return type in all implementations)
-  extraImports.push(`${packageName}.${moduleName}.application.dtos.${agg.name}ResponseDto`);
-  if (returnType.startsWith('PagedResponse')) {
-    extraImports.push(`${packageName}.shared.application.dtos.PagedResponse`);
-  }
-  if (returnType.startsWith('List<')) {
-    extraImports.push('java.util.List');
-  }
-
-  if (effectiveImpl === 'full') {
-    const result = buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, moduleName);
-    body = result.body;
-    extraImports = [...extraImports, ...result.extraImports];
-    extraImports = [...new Set(extraImports)].sort();
+  if (customReturnType) {
+    // For internal ops: import the custom return DTO directly
+    extraImports.push(`${packageName}.${moduleName}.application.dtos.${customReturnType}`);
+  } else {
+    // Standard path: always import aggregate ResponseDto
+    extraImports.push(`${packageName}.${moduleName}.application.dtos.${agg.name}ResponseDto`);
+    if (returnType.startsWith('PagedResponse')) {
+      extraImports.push(`${packageName}.shared.application.dtos.PagedResponse`);
+    }
+    if (returnType.startsWith('List<')) {
+      extraImports.push('java.util.List');
+    }
+    if (effectiveImpl === 'full') {
+      const result = buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, moduleName);
+      body = result.body;
+      extraImports = [...extraImports, ...result.extraImports];
+      extraImports = [...new Set(extraImports)].sort();
+    }
   }
 
   await renderAndWrite(
@@ -948,7 +1037,7 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
-async function generateApplicationLayer(bcYaml, config, outputDir) {
+async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDoc = null) {
   const { packageName, systemName } = config;
   const moduleName = bcYaml.bc;
   const packagePath = toPackagePath(packageName);
@@ -958,6 +1047,21 @@ async function generateApplicationLayer(bcYaml, config, outputDir) {
   const repoMethods = normalizeRepoMethods(bcYaml.repositories || []);
   const allUseCases = bcYaml.useCases || [];
   const voNames = new Set((bcYaml.valueObjects || []).map((vo) => vo.name));
+
+  // Build map of internal API operations: operationId → { opSpec, components }
+  const internalOpsMap = new Map();
+  if (internalApiDoc) {
+    const paths = internalApiDoc.paths || {};
+    for (const [, pathItem] of Object.entries(paths)) {
+      for (const [httpMethod, operation] of Object.entries(pathItem)) {
+        if (httpMethod === 'parameters' || typeof operation !== 'object' || !operation.operationId) continue;
+        internalOpsMap.set(operation.operationId, {
+          opSpec: operation,
+          components: internalApiDoc.components || {},
+        });
+      }
+    }
+  }
 
   // 1. Domain errors
   await generateDomainErrors(bcYaml.errors || [], errorMap, moduleName, packageName, bcDir);
@@ -980,7 +1084,80 @@ async function generateApplicationLayer(bcYaml, config, outputDir) {
 
     // Use cases
     for (const uc of aggUseCases) {
-      if (uc.type === 'command') {
+      const opId = uc.trigger?.operationId;
+      const isInternalOp = opId && internalOpsMap.has(opId);
+
+      if (isInternalOp) {
+        const { opSpec, components } = internalOpsMap.get(opId);
+
+        // Extract request / response schema names
+        const requestRef = opSpec.requestBody?.content?.['application/json']?.schema?.$ref;
+        const requestSchemaName = requestRef ? resolveInternalSchemaRef(requestRef) : null;
+        const responseRef = opSpec.responses?.['200']?.content?.['application/json']?.schema?.$ref;
+        const responseSchemaName = responseRef ? resolveInternalSchemaRef(responseRef) : null;
+
+        // Collect schemas to generate as DTOs
+        const schemasToGenerate = new Set();
+        if (requestSchemaName) {
+          // Nested schemas from request body (root schema becomes the Query record)
+          const allReqSchemas = collectInternalSchemas(requestSchemaName, components, new Set());
+          allReqSchemas.delete(requestSchemaName);
+          for (const s of allReqSchemas) schemasToGenerate.add(s);
+        }
+        if (responseSchemaName) {
+          collectInternalSchemas(responseSchemaName, components, schemasToGenerate);
+        }
+        const dtoSchemas = [...schemasToGenerate].filter((s) => !/error/i.test(s));
+        await generateInternalApiDtos(dtoSchemas, packageName, moduleName, components, bcDir);
+
+        // Build Query record fields from request body schema
+        const ucClassName = toPascalCase(uc.name);
+        const queryImports = new Set();
+        let queryFields = [];
+        if (requestSchemaName) {
+          const { fields, imports } = buildInternalSchemaFields(requestSchemaName, components, true);
+          queryFields = fields;
+          for (const imp of imports) queryImports.add(imp);
+        }
+        const responseReturnType = responseSchemaName ? `${responseSchemaName}Dto` : 'void';
+        if (responseReturnType !== 'void') {
+          queryImports.add(`${packageName}.${moduleName}.application.dtos.${responseReturnType}`);
+        }
+
+        // Add imports for any DTO types used in query fields (different package: queries vs dtos)
+        for (const field of queryFields) {
+          const match = /(\w+Dto)/.exec(field.type);
+          if (match) {
+            queryImports.add(`${packageName}.${moduleName}.application.dtos.${match[1]}`);
+          }
+        }
+
+        // Generate Query record
+        await renderAndWrite(
+          path.join(TEMPLATES_DIR, 'application', 'UcQuery.java.ejs'),
+          path.join(bcDir, 'application', 'queries', `${ucClassName}Query.java`),
+          {
+            packageName,
+            moduleName,
+            useCaseName: ucClassName,
+            returnType: responseReturnType,
+            fields: queryFields,
+            imports: [...queryImports].sort(),
+          }
+        );
+
+        // Generate QueryHandler — always scaffold for internal ops
+        await generateQueryHandler(
+          { ...uc, implementation: 'scaffold' },
+          agg,
+          moduleName,
+          packageName,
+          bcDir,
+          errorMap,
+          repoMethods,
+          responseReturnType
+        );
+      } else if (uc.type === 'command') {
         await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml);
         await generateCommandHandler(uc, agg, moduleName, packageName, bcDir, errorMap, bcYaml, repoMethods);
       } else if (uc.type === 'query') {

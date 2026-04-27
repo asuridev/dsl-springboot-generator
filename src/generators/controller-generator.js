@@ -36,6 +36,8 @@ function buildOpsMap(openApiDoc) {
 
       const responses = operation.responses || {};
       const primaryCode = Object.keys(responses).find((c) => c !== 'default') || '200';
+      const responseBody = responses[primaryCode];
+      const responseSchemaRef = responseBody?.content?.['application/json']?.schema?.$ref || null;
 
       map.set(operation.operationId, {
         httpMethod: httpMethod.toUpperCase(),
@@ -45,6 +47,7 @@ function buildOpsMap(openApiDoc) {
         hasRequestBody: !!operation.requestBody,
         primaryResponseCode: parseInt(primaryCode, 10),
         summary: operation.summary || operation.operationId,
+        responseSchemaRef,
       });
     }
   }
@@ -460,6 +463,43 @@ function buildQueryParamAnnotations(queryFields, openApiQueryParams) {
   return result;
 }
 
+// ─── Internal operation builder ───────────────────────────────────────────────
+
+/**
+ * Builds a controller operation object for an internal API endpoint.
+ * Internal ops use POST with a Query record as the request body and return a typed DTO.
+ */
+function buildInternalOperation(uc, internalApiOp, commonPrefix) {
+  const { httpMethod, fullPath, primaryResponseCode, summary, hasRequestBody, responseSchemaRef } = internalApiOp;
+  const mappingPath = fullPath.startsWith(commonPrefix)
+    ? fullPath.slice(commonPrefix.length) || ''
+    : fullPath;
+
+  const ucClassName = toPascalCase(uc.name);
+  const responseSchemaName = responseSchemaRef ? responseSchemaRef.split('/').pop() : null;
+  const returnType = responseSchemaName ? `${responseSchemaName}Dto` : 'void';
+
+  return {
+    httpAnnotation: METHOD_ANNOTATION[httpMethod] || 'PostMapping',
+    mappingPath,
+    httpStatus: httpStatus(primaryResponseCode),
+    methodName: toCamelCase(uc.trigger.operationId),
+    summary,
+    isCommand: false,
+    isScaffold: true,
+    returnType,
+    pathVarNames: [],
+    queryParamsList: [],
+    hasRequestBody,
+    bodyFieldNames: [],
+    commandHasId: false,
+    dispatchCall: 'query',
+    ucName: ucClassName,
+    aggName: uc.aggregate,
+    isInternal: true,
+  };
+}
+
 // ─── Method signature builder ─────────────────────────────────────────────────
 
 /**
@@ -474,9 +514,11 @@ function buildMethodStrings(op) {
     params.push(`@PathVariable String ${pv}`);
   }
 
-  // Request body (commands with body)
+  // Request body (commands with body, or internal queries with body)
   if (op.isCommand && op.hasRequestBody) {
     params.push(`@Valid @RequestBody ${op.ucName}Command command`);
+  } else if (op.isInternal && op.hasRequestBody) {
+    params.push(`@Valid @RequestBody ${op.ucName}Query query`);
   }
 
   // Query params (for GET queries) — skip authContext fields
@@ -576,12 +618,13 @@ function buildControllerImports(operations, packageName, moduleName) {
 
 // ─── Main generator ───────────────────────────────────────────────────────────
 
-async function generateControllerLayer(bcYaml, openApiDoc, config, outputDir) {
+async function generateControllerLayer(bcYaml, openApiDoc, internalApiDoc, config, outputDir) {
   const packageName = config.packageName;
   const moduleName = bcYaml.bc;
 
   const serverBaseUrl = openApiDoc.servers?.[0]?.url || '/api/v1';
-  const opsMap = buildOpsMap(openApiDoc);
+  const publicOpsMap = buildOpsMap(openApiDoc);
+  const internalOpsMap = internalApiDoc ? buildOpsMap(internalApiDoc) : new Map();
   const repoMethods = normalizeRepoMethods(bcYaml.repositories);
 
   // Index aggregates by name
@@ -619,9 +662,14 @@ async function generateControllerLayer(bcYaml, openApiDoc, config, outputDir) {
     const rawOperations = [];
     for (const uc of ucs) {
       const opId = uc.trigger.operationId;
-      const openApiOp = opsMap.get(opId);
+      let openApiOp = publicOpsMap.get(opId);
+      let isInternal = false;
+      if (!openApiOp && internalOpsMap.has(opId)) {
+        openApiOp = internalOpsMap.get(opId);
+        isInternal = true;
+      }
       if (!openApiOp) continue;
-      rawOperations.push({ uc, openApiOp });
+      rawOperations.push({ uc, openApiOp, isInternal });
     }
 
     if (rawOperations.length === 0) continue;
@@ -632,8 +680,10 @@ async function generateControllerLayer(bcYaml, openApiDoc, config, outputDir) {
     const requestMapping = serverBaseUrl + commonPrefix;
 
     // Build operation objects for template (with pre-computed strings)
-    const operations = rawOperations.map(({ uc, openApiOp }) => {
-      const op = buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods);
+    const operations = rawOperations.map(({ uc, openApiOp, isInternal }) => {
+      const op = isInternal
+        ? buildInternalOperation(uc, openApiOp, commonPrefix)
+        : buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods);
       const strings = buildMethodStrings(op);
       return { ...op, ...strings };
     });

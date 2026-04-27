@@ -27,7 +27,7 @@ public class <%= controllerName %> {
      */
     @<%- op.httpAnnotation %>(<%- pathArg %>)
     @ResponseStatus(<%= op.httpStatus %>)
-    @Operation(summary = "<%= op.summary %>")
+    <% if (op.isInternal) { %>@Operation(hidden = true)<% } else { %>@Operation(summary = "<%= op.summary %>")<% } %>
     public <%- op.isCommand ? 'void' : op.returnType %> <%= op.methodName %>(<%- op.methodParams %>) {
         log.info("<%- op.logMessage %>"<%- op.logArgs %>);
         <%- op.dispatchStatement %>
