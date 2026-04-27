@@ -16,7 +16,7 @@ const SOFT_DELETE_FIELD = 'deletedAt';
 const ALWAYS_EXCLUDE_FROM_CREATION = new Set(['createdAt', 'updatedAt', 'deletedAt']);
 
 // ─── Helper: resolve Java type for a param name ───────────────────────────────
-function resolveParamType(paramName, aggregateProps, childEntities) {
+function resolveParamType(paramName, aggregateProps, childEntities, typeHint, bcYaml) {
   // 1. Match against aggregate properties
   const aggrProp = (aggregateProps || []).find((p) => p.name === paramName);
   if (aggrProp) {
@@ -39,7 +39,23 @@ function resolveParamType(paramName, aggregateProps, childEntities) {
     }
   }
 
-  // 3. Heuristics by name convention
+  // 3. Use inline type hint from method signature (e.g. "imageId: Uuid")
+  if (typeHint) {
+    // Check if it's a known value object or enum in the BC
+    if (bcYaml) {
+      if ((bcYaml.valueObjects || []).some((vo) => vo.name === typeHint)) return typeHint;
+      const enumMatch = /^Enum<(.+)>$/.exec(typeHint);
+      const resolvedEnum = enumMatch ? enumMatch[1] : typeHint;
+      if ((bcYaml.enums || []).some((e) => e.name === resolvedEnum)) return resolvedEnum;
+    }
+    try {
+      return mapType(typeHint, {}).javaType;
+    } catch (_) {
+      return typeHint; // pass through as domain type
+    }
+  }
+
+  // 4. Heuristics by name convention
   if (paramName === 'id' || paramName.endsWith('Id')) return 'UUID';
   if (paramName.endsWith('At')) return 'Instant';
   if (paramName === 'password' || paramName === 'passwordHash') return 'String';
@@ -49,18 +65,52 @@ function resolveParamType(paramName, aggregateProps, childEntities) {
 
 // ─── Helper: parse method signature string ────────────────────────────────────
 // Input:  "create(name, description?, displayOrder?): Category"
-// Output: { name, params: [{name, optional}], returnType }
+// Input:  "removeImage(imageId: Uuid): void"  (inline type hints supported)
+// Output: { name, params: [{name, optional, typeHint}], returnType }
 function parseMethodSignature(sig) {
   if (!sig) return null;
-  const match = sig.match(/^(\w+)\(([^)]*)\)\s*:\s*(.+)$/);
-  if (!match) return null;
-  const [, name, paramsStr, returnType] = match;
-  const params = paramsStr
-    .split(',')
-    .map((s) => s.trim())
+  // Use a balanced-paren approach: find the outermost () then the final ': returnType'
+  const firstParen = sig.indexOf('(');
+  // Bare method name with no parens (e.g. "abandon", "addItem") — treat as no-arg, void
+  if (firstParen === -1) return { name: sig.trim(), params: [], returnType: 'void' };
+  // Walk forward to find the matching closing paren (handles nested parens like String(200))
+  let depth = 0;
+  let closeParen = -1;
+  for (let i = firstParen; i < sig.length; i++) {
+    if (sig[i] === '(') depth++;
+    else if (sig[i] === ')') {
+      depth--;
+      if (depth === 0) { closeParen = i; break; }
+    }
+  }
+  if (closeParen === -1) return null;
+  const name = sig.substring(0, firstParen).trim();
+  const paramsStr = sig.substring(firstParen + 1, closeParen);
+  const returnTypeMatch = sig.substring(closeParen + 1).match(/^\s*:\s*(.+)$/);
+  const returnType = returnTypeMatch ? returnTypeMatch[1].trim() : 'void';
+  // Split params on commas that are NOT inside nested parens
+  const rawParams = [];
+  let current = '';
+  let d = 0;
+  for (const ch of paramsStr) {
+    if (ch === '(') { d++; current += ch; }
+    else if (ch === ')') { d--; current += ch; }
+    else if (ch === ',' && d === 0) { rawParams.push(current.trim()); current = ''; }
+    else { current += ch; }
+  }
+  if (current.trim()) rawParams.push(current.trim());
+  const params = rawParams
     .filter(Boolean)
-    .map((p) => ({ name: p.replace('?', '').trim(), optional: p.endsWith('?') }));
-  return { name, params, returnType: returnType.trim() };
+    .map((p) => {
+      const optional = p.includes('?');
+      const clean = p.replace('?', '').trim();
+      // Support inline type annotation: "paramName: TypeHint"
+      const colonIdx = clean.indexOf(':');
+      const paramName = colonIdx !== -1 ? clean.substring(0, colonIdx).trim() : clean;
+      const typeHint = colonIdx !== -1 ? clean.substring(colonIdx + 1).trim() : null;
+      return { name: paramName, optional, typeHint };
+    });
+  return { name, params, returnType };
 }
 
 // ─── Helper: try to detect state transition for a full-implementation UC ──────
@@ -101,9 +151,15 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
         const event = publishedEvents.find((e) => e.name === transition.emits);
         if (event) {
           const aggregateCamelId = aggregate.name.charAt(0).toLowerCase() + aggregate.name.slice(1) + 'Id';
+          const aggregatePropNames = new Set((aggregate.properties || []).map((pr) => pr.name));
           const args = (event.payload || []).map((p) => {
             if (p.name === aggregateCamelId) return 'this.getId()';
-            return `this.get${p.name.charAt(0).toUpperCase() + p.name.slice(1)}()`;
+            if (aggregatePropNames.has(p.name)) {
+              return `this.get${p.name.charAt(0).toUpperCase() + p.name.slice(1)}()`;
+            }
+            // Timestamp of occurrence — not a persisted aggregate field
+            if (p.type === 'DateTime' || p.type === 'Instant') return 'Instant.now()';
+            return `null /* TODO: provide value for ${p.name} */`;
           });
           body += `\n        raise(new ${event.name}Event(${args.join(', ')}));`;
         }
@@ -232,6 +288,12 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
     imports.add(`import ${pkg}.shared.domain.DomainEvent;`);
     for (const event of publishedEvents) {
       imports.add(`import ${pkg}.${bc}.domain.events.${event.name}Event;`);
+      // If any payload field is a DateTime/Instant not on the aggregate, Instant.now() is generated
+      const aggregatePropNames = new Set((aggregate.properties || []).map((pr) => pr.name));
+      const needsInstantForEvent = (event.payload || []).some(
+        (p) => (p.type === 'DateTime' || p.type === 'Instant') && !aggregatePropNames.has(p.name)
+      );
+      if (needsInstantForEvent) imports.add('import java.time.Instant;');
     }
   }
 
@@ -431,7 +493,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
       // Resolve Java types for each parameter
       const params = sig.params.map((p) => ({
         name: p.name,
-        javaType: resolveParamType(p.name, aggregate.properties, aggregate.entities),
+        javaType: resolveParamType(p.name, aggregate.properties, aggregate.entities, p.typeHint, bcYaml),
         optional: p.optional,
       }));
 

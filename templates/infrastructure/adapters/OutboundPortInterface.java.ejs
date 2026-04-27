@@ -6,6 +6,7 @@ const needsBigDecimal = domainModels.some(dm => dm.fields.some(f => f.javaType =
 const needsInstant    = domainModels.some(dm => dm.fields.some(f => f.javaType === 'Instant'));
 const needsList       = operations.some(op => op.returnList);
 const uniqueDomainTypes = [...new Set(operations.filter(op => op.hasDomainReturn).map(op => op.domainType))];
+const uniqueReqDtos   = [...new Set(operations.filter(op => op.hasBody && op.requestDtoName).map(op => op.requestDtoName))];
 %>
 <%_ if (needsBigDecimal) { _%>
 import java.math.BigDecimal;
@@ -18,6 +19,9 @@ import java.util.List;
 <%_ } _%>
 <%_ uniqueDomainTypes.forEach(dt => { _%>
 import <%- packageName %>.<%- moduleName %>.domain.models.<%- targetBcPackage %>.<%- dt %>;
+<%_ }); _%>
+<%_ uniqueReqDtos.forEach(dto => { _%>
+import <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>.dtos.<%- dto %>;
 <%_ }); _%>
 
 /**

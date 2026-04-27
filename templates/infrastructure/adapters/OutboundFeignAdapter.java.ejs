@@ -17,7 +17,7 @@ import java.util.UUID;
 import <%- packageName %>.<%- moduleName %>.domain.models.<%- targetBcPackage %>.<%- dt %>;
 <%_ }); _%>
 <%_ uniqueReqDtos.forEach(dto => { _%>
-import <%- packageName %>.<%- moduleName %>.application.dtos.<%- dto %>;
+import <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>.dtos.<%- dto %>;
 <%_ }); _%>
 
 /**

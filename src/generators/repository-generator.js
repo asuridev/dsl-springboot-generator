@@ -166,7 +166,7 @@ function parseParamsFormat(method) {
         return { type: String(type), name, required: true };
       }
     }
-    return { type: p.type, name: p.name, required: p.required !== false };
+    return { ...p, type: p.type, name: p.name, required: p.required !== false };
   });
   return { name: method.name, params, returns: method.returns || 'void' };
 }
@@ -185,10 +185,19 @@ function normalizeMethod(yamlMethod) {
  * Build the JPQL query for a "list" method (optional-filter + pagination).
  * entityAlias — single-letter alias; jpaEntityName — "ProductJpa"; optional params
  */
-function buildListQuery(jpaEntityName, optionalParams, alias) {
+function buildListQuery(jpaEntityName, optionalParams, requiredFilterParams, alias) {
   const a = alias || jpaEntityName.charAt(0).toLowerCase();
-  const conditions = optionalParams.map((p) => `(:${p.name} IS NULL OR ${a}.${p.name} = :${p.name})`);
-  const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+  const reqConditions = (requiredFilterParams || []).map((p) => `${a}.${p.name} = :${p.name}`);
+  const optConditions = optionalParams.map((p) => {
+    if (p.filterOn && Array.isArray(p.filterOn) && p.filterOn.length > 0) {
+      // LIKE_CONTAINS: search param mapped to one or more entity fields
+      const likeConditions = p.filterOn.map((f) => `${a}.${f} LIKE CONCAT('%', :${p.name}, '%')`);
+      return `(:${p.name} IS NULL OR (${likeConditions.join(' OR ')}))`;
+    }
+    return `(:${p.name} IS NULL OR ${a}.${p.name} = :${p.name})`;
+  });
+  const allConditions = [...reqConditions, ...optConditions];
+  const where = allConditions.length > 0 ? ` WHERE ${allConditions.join(' AND ')}` : '';
   return `SELECT ${a} FROM ${jpaEntityName} ${a}${where}`;
 }
 
@@ -197,11 +206,16 @@ function buildListQuery(jpaEntityName, optionalParams, alias) {
  * Method name pattern: count{Entities}InXxx or count{Entities}ByXxx
  * Params: [{name, type}] — FK param + optional filter
  */
-function buildCountQuery(methodName, params, bcYaml) {
+function buildCountQuery(methodName, params, bcYaml, fallbackJpaEntityName, currentAggregate) {
   // Extract entity plural from method name: countActiveProductsByCategoryId → ActiveProducts
   const match = methodName.match(/^count([A-Z][a-zA-Z]+?)(?:In|By|With)/);
   if (!match) {
-    return `// TODO: write @Query for ${methodName}`;
+    // Fallback: build JPQL using the current aggregate's JPA entity and params
+    const jpaName = fallbackJpaEntityName || 'EntityJpa';
+    const a = jpaName.charAt(0).toLowerCase();
+    const conditions = (params || []).map((p) => `${a}.${p.name} = :${p.name}`);
+    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
+    return `SELECT COUNT(${a}) FROM ${jpaName} ${a}${where}`;
   }
   const entityPlural = match[1];
 
@@ -230,7 +244,15 @@ function buildCountQuery(methodName, params, bcYaml) {
     }
   }
 
-  const jpaName = aggregate ? `${aggregate.name}Jpa` : `${entityPlural.replace(/s$/, '')}Jpa`;
+  // If no aggregate matched, entityPlural is a state qualifier (e.g. 'Active', 'Pending').
+  // Add a status condition and fall back to the current aggregate's JPA entity.
+  // Exception: soft-delete aggregates have no status field — @SQLRestriction handles filtering.
+  if (!aggregate && extraConditions.length === 0) {
+    if (!currentAggregate || currentAggregate.softDelete !== true) {
+      extraConditions.push(`status = '${entityPlural.toUpperCase()}'`);
+    }
+  }
+  const jpaName = aggregate ? `${aggregate.name}Jpa` : (fallbackJpaEntityName || `${entityPlural.replace(/s$/, '')}Jpa`);
   const a = jpaName.charAt(0).toLowerCase();
 
   const conditions = [
@@ -276,6 +298,11 @@ function classifyMethod(method) {
     if (nonPageable.length === 1 && !method.returns?.startsWith('Page[')) return 'derived';
   }
 
+  // Spring Data derived: countByXxx — Spring Data derives count queries from method name
+  if (/^countBy[A-Z]/.test(method.name)) {
+    return 'derived';
+  }
+
   return 'custom';
 }
 
@@ -290,14 +317,17 @@ function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
     if (/^search/.test(name)) {
       return buildSearchQuery(name, jpaEntityName, aggregate);
     }
-    const optionalParams = (params || []).filter(
-      (p) => p.type !== 'PageRequest' && p.name !== 'pageable' && p.required === false
-    );
-    return buildListQuery(jpaEntityName, optionalParams);
+    // page/size Integer params are pagination — exclude from JPQL conditions
+    const isPaginationParam = (p) =>
+      p.type === 'PageRequest' || p.name === 'pageable' ||
+      ((p.name === 'page' || p.name === 'size') && p.type === 'Integer');
+    const requiredFilterParams = (params || []).filter((p) => !isPaginationParam(p) && p.required !== false);
+    const optionalParams = (params || []).filter((p) => !isPaginationParam(p) && p.required === false);
+    return buildListQuery(jpaEntityName, optionalParams, requiredFilterParams);
   }
 
   if (returns === 'Int' || returns === 'Integer') {
-    return buildCountQuery(name, params || [], bcYaml);
+    return buildCountQuery(name, params || [], bcYaml, jpaEntityName, aggregate);
   }
 
   if (returns && returns.startsWith('List[')) {
@@ -697,8 +727,15 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
     return `${methodReturnType} saved = toDomain(jpaRepository.save(toJpa(${entityParam})));\n        ${entityParam}.pullDomainEvents().forEach(eventPublisher::publishEvent);\n        return saved;`;
   }
 
+  if (name === 'save') {
+    if (methodReturnType === 'void') {
+      return `jpaRepository.save(toJpa(${entityParam}));`;
+    }
+    return `return toDomain(jpaRepository.save(toJpa(${entityParam})));`;
+  }
+
   if (methodReturnType === 'void') {
-    return `jpaRepository.save(toJpa(${entityParam}));`;
+    return `jpaRepository.${name}(${paramNames});`;
   }
 
   if (methodReturnType === 'int') {
@@ -713,6 +750,15 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
   }
 
   if (methodReturnType.startsWith('Page<')) {
+    // If params include page+size pair, build PageRequest.of(page, size) for JPA call
+    const pageParam = (params || []).find((p) => p.name === 'page');
+    const sizeParam = (params || []).find((p) => p.name === 'size');
+    if (pageParam && sizeParam) {
+      const otherParams = (params || []).filter((p) => p.name !== 'page' && p.name !== 'size');
+      const otherNames = otherParams.map((p) => p.name).join(', ');
+      const jpaArgs = otherNames ? `${otherNames}, PageRequest.of(page, size)` : 'PageRequest.of(page, size)';
+      return `return jpaRepository.${name}(${jpaArgs}).map(this::toDomain);`;
+    }
     return `return jpaRepository.${name}(${paramNames}).map(this::toDomain);`;
   }
 
@@ -759,9 +805,20 @@ function collectImplImports(aggregateName, aggregate, methods, bc, packageName, 
     }
   }
 
+  // PageRequest needed when any Page<> method uses page+size Integer pagination
+  let hasPageRequest = false;
+  for (const method of methods) {
+    if (method.returnType.startsWith('Page<')) {
+      const hasPageParam = method.params.some((p) => p.name === 'page');
+      const hasSizeParam = method.params.some((p) => p.name === 'size');
+      if (hasPageParam && hasSizeParam) hasPageRequest = true;
+    }
+  }
+
   if (hasOptional) imports.add('java.util.Optional');
   if (hasPage) imports.add('org.springframework.data.domain.Page');
   if (hasPageable) imports.add('org.springframework.data.domain.Pageable');
+  if (hasPageRequest) imports.add('org.springframework.data.domain.PageRequest');
 
   // Child entities
   for (const entity of aggregate.entities || []) {
@@ -839,11 +896,20 @@ function buildJpaRepoInterfaceContext(aggregateName, normalizedMethods, aggregat
     const needsQuery = classification === 'custom';
 
     if (needsQuery) {
+      const isPageReturn = m.returns && m.returns.startsWith('Page[');
+      const hasPageSize = isPageReturn
+        && (m.params || []).some((p) => p.name === 'page' && p.type === 'Integer')
+        && (m.params || []).some((p) => p.name === 'size' && p.type === 'Integer');
+      let pageableAdded = false;
       paramsStr = (m.params || []).map((p) => {
         const javaType = yamlTypeToJava(p.type);
         if (p.type === 'PageRequest') return `Pageable ${p.name || 'pageable'}`;
+        if (hasPageSize && (p.name === 'page' || p.name === 'size') && p.type === 'Integer') {
+          if (!pageableAdded) { pageableAdded = true; return 'Pageable pageRequest'; }
+          return null; // drop second of the pair
+        }
         return `@Param("${p.name}") ${javaType} ${p.name}`;
-      }).join(', ');
+      }).filter(Boolean).join(', ');
     } else {
       // derived
       paramsStr = javaParams.map((p) => `${p.javaType} ${p.name}`).join(', ');

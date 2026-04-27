@@ -74,8 +74,9 @@ public class <%= listenerClassName %> {
 <%   } %>
 <% }); %>
         useCaseMediator.dispatch(new <%= commandClassName %>(
-<% (fields || []).forEach((f, i) => { %>
-                <%= f.name %><%= i < fields.length - 1 ? ',' : '' %>
+<% const _cmdFields = commandFields || fields || []; %>
+<% _cmdFields.forEach((f, i) => { %>
+                <%= f.name %><%= i < _cmdFields.length - 1 ? ',' : '' %>
 <% }); %>
         ));
         channel.basicAck(deliveryTag, false);

@@ -175,6 +175,29 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
       const pathVariables = extractPathVariables(httpPath);
       const description = (opSpec.summary || opSpec.description || operationId).replace(/\n/g, ' ').trim();
 
+      // Request body schema → infra request DTO
+      let requestDtoName = null;
+      const reqBodySchema = opSpec.requestBody?.content?.['application/json']?.schema;
+      if (reqBodySchema && ['post', 'put', 'patch'].includes(httpVerb)) {
+        const reqRefName = reqBodySchema.$ref ? resolveRefName(reqBodySchema.$ref) : null;
+        if (reqRefName) {
+          requestDtoName = `${reqRefName}Dto`;
+          if (!processedSchemas.has(`req:${reqRefName}`)) {
+            processedSchemas.add(`req:${reqRefName}`);
+            const reqSchema = (components.schemas || {})[reqRefName] || {};
+            const reqNestedNames = new Set();
+            const reqFields = schemaToFields(reqSchema, components, reqNestedNames);
+            allInfraDtos.push({
+              dtoName: requestDtoName,
+              fields: reqFields,
+              nestedDtoImports: [],
+              targetBcPackage,
+              targetBc,
+            });
+          }
+        }
+      }
+
       // Response schema
       let infraDtoName = null;
       let domainType = null;
@@ -273,7 +296,7 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
             infraDtoName,
             domainType,
             returnList: false,
-            requestDtoName: null,
+            requestDtoName,
             infraDtoFields,
             mappingFields,
             needsBigDecimal,
@@ -313,7 +336,7 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
             infraDtoName,
             domainType,
             returnList: false,
-            requestDtoName: null,
+            requestDtoName,
             infraDtoFields,
             mappingFields,
             needsBigDecimal,
@@ -334,7 +357,7 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
           infraDtoName: null,
           domainType: null,
           returnList: false,
-          requestDtoName: null,
+          requestDtoName,
           infraDtoFields: [],
           mappingFields: [],
           needsBigDecimal: false,

@@ -21,11 +21,20 @@ const HTTP_TO_EXCEPTION = {
 
 // ─── Error helpers ────────────────────────────────────────────────────────────
 
+// CART_NOT_FOUND → CartNotFoundError
+function deriveErrorType(code) {
+  return (code || '')
+    .split('_')
+    .map((w) => w.charAt(0) + w.slice(1).toLowerCase())
+    .join('') + 'Error';
+}
+
 function buildErrorMap(errors) {
   const map = {};
   for (const err of (errors || [])) {
+    const errorType = err.errorType || deriveErrorType(err.code);
     map[err.code] = {
-      errorType: err.errorType,
+      errorType,
       httpStatus: err.httpStatus,
       baseException: HTTP_TO_EXCEPTION[err.httpStatus] || 'BusinessException',
     };
@@ -156,19 +165,49 @@ function resolveParamType(paramName, propMap) {
 
 function parseMethodSignature(methodStr) {
   if (!methodStr) return { methodName: '', params: [], returnType: 'void' };
-  const mainMatch = methodStr.match(/^(\w+)\(([^)]*)\)(?:\s*:\s*(.+))?$/);
-  if (!mainMatch) return { methodName: methodStr, params: [], returnType: 'void' };
-  const methodName = mainMatch[1];
-  const paramsStr = mainMatch[2].trim();
-  const returnType = (mainMatch[3] || 'void').trim();
-  const params = paramsStr
-    ? paramsStr.split(',').map((p) => {
-        const t = p.trim();
-        const optional = t.endsWith('?');
-        return { name: t.replace('?', '').trim(), optional };
-      })
-    : [];
-  return { methodName, params, returnType };
+  const firstParen = methodStr.indexOf('(');
+  // No parens: bare method name (e.g. "create")
+  if (firstParen === -1) return { methodName: methodStr.trim(), params: [], returnType: 'void' };
+  // Walk forward to find the matching closing paren (handles nested parens like String(200))
+  let depth = 0;
+  let closeParen = -1;
+  for (let i = firstParen; i < methodStr.length; i++) {
+    if (methodStr[i] === '(') depth++;
+    else if (methodStr[i] === ')') {
+      depth--;
+      if (depth === 0) { closeParen = i; break; }
+    }
+  }
+  if (closeParen === -1) return { methodName: methodStr, params: [], returnType: 'void' };
+  const methodName = methodStr.substring(0, firstParen).trim();
+  const paramsStr = methodStr.substring(firstParen + 1, closeParen).trim();
+  const returnTypeMatch = methodStr.substring(closeParen + 1).match(/^\s*:\s*(.+)$/);
+  const returnType = returnTypeMatch ? returnTypeMatch[1].trim() : 'void';
+  // Split params on commas NOT inside nested parens
+  const params = [];
+  if (paramsStr) {
+    let current = '';
+    let d = 0;
+    for (const ch of paramsStr) {
+      if (ch === '(') { d++; current += ch; }
+      else if (ch === ')') { d--; current += ch; }
+      else if (ch === ',' && d === 0) { params.push(current.trim()); current = ''; }
+      else { current += ch; }
+    }
+    if (current.trim()) params.push(current.trim());
+  }
+  return {
+    methodName,
+    params: params.filter(Boolean).map((p) => {
+      const optional = p.includes('?');
+      const clean = p.replace('?', '').trim();
+      // Support inline type hint: "paramName: TypeHint"
+      const colonIdx = clean.indexOf(':');
+      const name = colonIdx !== -1 ? clean.substring(0, colonIdx).trim() : clean;
+      return { name, optional };
+    }),
+    returnType,
+  };
 }
 
 function parseRepoMethodName(repoMethodStr) {
@@ -352,6 +391,16 @@ function buildValidationAnnotations(javaType, optional, imports) {
   return ['@NotNull'];
 }
 
+// ─── Paged query detection ────────────────────────────────────────────────────
+// Detects paged queries when params include PageRequest/Pageable (explicit)
+// OR when params include Integer page+size (YAML Integer convention).
+function isPagedRepoMethod(repoMethodName, methodParams) {
+  if (methodParams.some((p) => p.type === 'PageRequest' || p.type === 'Pageable')) return true;
+  const hasIntPage = methodParams.some((p) => p.name === 'page' && p.type === 'Integer');
+  const hasIntSize = methodParams.some((p) => p.name === 'size' && p.type === 'Integer');
+  return hasIntPage && hasIntSize;
+}
+
 // ─── Query fields ─────────────────────────────────────────────────────────────
 
 function buildQueryFields(uc, agg, repoMethods) {
@@ -365,6 +414,8 @@ function buildQueryFields(uc, agg, repoMethods) {
       if (param.type === 'PageRequest' || param.type === 'Pageable') {
         fields.push({ type: 'int', name: 'page', annotations: [] });
         fields.push({ type: 'int', name: 'size', annotations: [] });
+      } else if (param.type === 'Integer' && (param.name === 'page' || param.name === 'size')) {
+        fields.push({ type: 'int', name: param.name, annotations: [] });
       } else {
         // All non-paging params are passed as String in the query record
         fields.push({ type: 'String', name: param.name, annotations: [] });
@@ -401,10 +452,7 @@ function buildQueryFields(uc, agg, repoMethods) {
 function buildQueryReturnType(uc, agg, repoMethods) {
   const repoMethodName = parseRepoMethodName(uc.repositoryMethod);
   const methodParams = (repoMethods[agg.name] || {})[repoMethodName] || [];
-  const hasPageable = methodParams.some(
-    (p) => p.type === 'PageRequest' || p.type === 'Pageable'
-  );
-  if (hasPageable) return `PagedResponse<${agg.name}ResponseDto>`;
+  if (isPagedRepoMethod(repoMethodName, methodParams)) return `PagedResponse<${agg.name}ResponseDto>`;
   // List query: method name starts with 'list' or 'findAll' and has no paging
   if (repoMethodName.startsWith('list') || repoMethodName.startsWith('findAll')) {
     return `List<${agg.name}ResponseDto>`;
@@ -468,9 +516,19 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
 
   // Build method call arguments
   const callArgs = [];
-  for (const param of params) {
-    const prop = propMap.get(param.name);
 
+  // For bare 'create' with no explicit params, derive args from aggregate properties
+  // using the same creationParams filter as aggregate-generator (excludes id, audit, readOnly+defaultValue)
+  const CREATION_EXCLUDE = new Set(['id', 'createdAt', 'updatedAt', 'deletedAt']);
+  const derivedParams = (isCreate && params.length === 0)
+    ? (agg.properties || []).filter((p) => {
+        if (CREATION_EXCLUDE.has(p.name)) return false;
+        if (p.readOnly && p.defaultValue != null) return false;
+        return true;
+      }).map((p) => ({ name: p.name, _prop: p }))
+    : params.map((p) => ({ name: p.name, _prop: propMap.get(p.name) }));
+
+  for (const { name: paramName, _prop: prop } of derivedParams) {
     // authContext fields are injected from SecurityContext, not from the command
     if (prop && prop.source === 'authContext') {
       extraImports.add('org.springframework.security.core.context.SecurityContextHolder');
@@ -478,18 +536,18 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
       continue;
     }
 
-    const rawType = resolveParamType(param.name, propMap);
+    const rawType = resolveParamType(paramName, propMap);
 
     if (rawType === 'Money') {
       extraImports.add(`${packageName}.${moduleName}.domain.valueobject.Money`);
-      callArgs.push(`new Money(command.${param.name}Amount(), command.${param.name}Currency())`);
+      callArgs.push(`new Money(command.${paramName}Amount(), command.${paramName}Currency())`);
     } else if (rawType === 'Uuid') {
-      callArgs.push(`UUID.fromString(command.${param.name}())`);
+      callArgs.push(`UUID.fromString(command.${paramName}())`);
     } else if (rawType === 'Url') {
       extraImports.add('java.net.URI');
-      callArgs.push(`URI.create(command.${param.name}())`);
+      callArgs.push(`URI.create(command.${paramName}())`);
     } else {
-      callArgs.push(`command.${param.name}()`);
+      callArgs.push(`command.${paramName}()`);
     }
   }
 
@@ -520,9 +578,7 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
   const mapperFieldName = `${aggVarName}ApplicationMapper`;
 
   const methodParams = (repoMethods[agg.name] || {})[repoMethodName] || [];
-  const hasPageable = methodParams.some(
-    (p) => p.type === 'PageRequest' || p.type === 'Pageable'
-  );
+  const hasPageable = isPagedRepoMethod(repoMethodName, methodParams);
 
   const notFoundErrors = normalizeNotFoundErrors(uc.notFoundError);
   const hasNotFoundError = notFoundErrors.length > 0;
@@ -593,6 +649,8 @@ function buildPagedCallArgs(methodParams, agg, packageName, moduleName, imports)
   for (const param of methodParams) {
     if (param.type === 'PageRequest' || param.type === 'Pageable') {
       args.push('PageRequest.of(query.page(), query.size())');
+    } else if (param.type === 'Integer' && (param.name === 'page' || param.name === 'size')) {
+      args.push(`query.${param.name}()`);
     } else if (param.type === 'Uuid') {
       args.push(
         `query.${param.name}() != null ? UUID.fromString(query.${param.name}()) : null`
@@ -648,11 +706,14 @@ function buildFkDependencies(uc, packageName, moduleName, mainAggregateName, bcY
   const outboundHttpBcNames = getOutboundHttpBcNames(bcYaml);
 
   for (const fk of (uc.fkValidations || [])) {
-    if (fk.aggregate === mainAggregateName) continue;
+    // Support both 'aggregate' and 'references' as the aggregate name key
+    const fkAggregate = fk.aggregate || fk.references;
+    if (!fkAggregate) continue; // skip malformed fkValidation entries
+    if (fkAggregate === mainAggregateName) continue;
     if (hasLocalReadModel(fk, bcYaml)) {
       fkRepos.push({
-        repoName: `${fk.aggregate}Repository`,
-        repoFieldName: `${toCamelCase(fk.aggregate)}Repository`,
+        repoName: `${fkAggregate}Repository`,
+        repoFieldName: `${toCamelCase(fkAggregate)}Repository`,
       });
     } else {
       // Cross-BC without LRM → service port in application/ports/
@@ -666,10 +727,10 @@ function buildFkDependencies(uc, packageName, moduleName, mainAggregateName, bcY
         portFieldName,
         bc: fk.bc,
         bcPascal,
-        aggregate: fk.aggregate,
+        aggregate: fkAggregate,
         field: fk.field,
         notFoundError: fk.notFoundError,
-        methodName: `exists${fk.aggregate}`,
+        methodName: `exists${fkAggregate}`,
         importPath: `${packageName}.${moduleName}.application.ports.${portName}`,
         isNew: !seenPorts.has(portName) && !managedByOutboundGenerator,
       });
@@ -686,13 +747,14 @@ async function generateDomainErrors(errors, errorMap, moduleName, packageName, b
   const errorsDir = path.join(bcDir, 'domain', 'errors');
   for (const err of errors) {
     const entry = errorMap[err.code] || { baseException: 'BusinessException' };
+    const errorType = entry.errorType || deriveErrorType(err.code);
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'domain', 'DomainError.java.ejs'),
-      path.join(errorsDir, `${err.errorType}.java`),
+      path.join(errorsDir, `${errorType}.java`),
       {
         packageName,
         moduleName,
-        errorType: err.errorType,
+        errorType,
         errorCode: err.code,
         baseException: entry.baseException,
       }

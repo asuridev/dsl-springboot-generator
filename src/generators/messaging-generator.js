@@ -272,7 +272,7 @@ async function generateRabbitListener(consumedEvent, packageName, moduleName, li
   const commandClassName = `${toPascalCase(consumedEvent.command)}Command`;
   const queueKey = consumedEvent.queueKey || `${moduleName}-${toRoutingKeyKebab(consumedEvent.name)}`;
 
-  const fields = (consumedEvent.payload || []).map((p) => {
+  const mapField = (p) => {
     const mapped = Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName));
     // Commands use String for UUID fields (for validation); normalize to match command signature
     if (mapped.javaType === 'UUID') {
@@ -280,7 +280,13 @@ async function generateRabbitListener(consumedEvent, packageName, moduleName, li
       mapped.importHint = null;
     }
     return mapped;
-  });
+  };
+
+  // fields: ALL payload fields — used for deserialization from the message
+  const fields = (consumedEvent.payload || []).map(mapField);
+  // commandFields: only the fields that map to the command constructor params
+  // (excludes event-only metadata like occurredAt that are not part of the command)
+  const commandFields = (consumedEvent.commandPayload || consumedEvent.payload || []).map(mapField);
 
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'messaging', 'RabbitListener.java.ejs'),
@@ -295,6 +301,7 @@ async function generateRabbitListener(consumedEvent, packageName, moduleName, li
       useCase: consumedEvent.useCase || consumedEvent.command,
       eventName: consumedEvent.name,
       fields,
+      commandFields,
     }
   );
 }
@@ -535,13 +542,79 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir) {
 
     const queueKey = ev.queueKey || `${moduleName}-${toRoutingKeyKebab(ev.name)}`;
 
+    // If the event already declares its own payload, use it directly.
+    if (ev.payload && ev.payload.length > 0) {
+      // Derive command param names from the UC method signature so we know which
+      // payload fields map to the command constructor (event-only metadata fields
+      // like occurredAt must NOT be passed to the command).
+      const ucMethod = uc.method || '';
+      const fp = ucMethod.indexOf('(');
+      let ucParamsStr = '';
+      if (fp !== -1) {
+        let depth = 0, cp = -1;
+        for (let i = fp; i < ucMethod.length; i++) {
+          if (ucMethod[i] === '(') depth++;
+          else if (ucMethod[i] === ')') { depth--; if (depth === 0) { cp = i; break; } }
+        }
+        if (cp !== -1) ucParamsStr = ucMethod.substring(fp + 1, cp).trim();
+      }
+      const commandParamNames = new Set();
+      if (ucParamsStr) {
+        const toParamName = (raw) => { const c = raw.replace('?', '').trim(); const ci = c.indexOf(':'); return ci !== -1 ? c.substring(0, ci).trim() : c; };
+        let cur = '', d = 0;
+        for (const ch of ucParamsStr) {
+          if (ch === '(') { d++; cur += ch; }
+          else if (ch === ')') { d--; cur += ch; }
+          else if (ch === ',' && d === 0) { commandParamNames.add(toParamName(cur.trim())); cur = ''; }
+          else { cur += ch; }
+        }
+        if (cur.trim()) commandParamNames.add(toParamName(cur.trim()));
+      }
+      const commandPayload = commandParamNames.size > 0
+        ? ev.payload.filter((p) => commandParamNames.has(p.name))
+        : ev.payload;
+      return {
+        name:          ev.name,
+        channel:       ev.channel || null,
+        producer:      ev.channel ? ev.channel.split('.')[0] : 'unknown',
+        command:       uc.name,
+        useCase:       uc.id,
+        queueKey,
+        payload:       ev.payload,
+        commandPayload,
+      };
+    }
+
     // Derive payload from UC method params + aggregate property types.
-    // e.g. method: "create(id, customerId, street, city, postalCode?, notes?)"
-    // → payload: [{ name:'id', type:'Uuid' }, { name:'customerId', type:'Uuid' }, ...]
-    const methodMatch = (uc.method || '').match(/^\w+\(([^)]*)\)/);
-    const paramNames = methodMatch && methodMatch[1].trim()
-      ? methodMatch[1].split(',').map((p) => p.trim().replace('?', ''))
-      : [];
+    // Uses balanced-paren parsing so String(200) doesn't terminate early.
+    // Strips inline type hints (e.g. "accountId: Uuid" → name "accountId").
+    const methodStr = uc.method || '';
+    const firstParen = methodStr.indexOf('(');
+    let paramsStr = '';
+    if (firstParen !== -1) {
+      let depth = 0, closeParen = -1;
+      for (let i = firstParen; i < methodStr.length; i++) {
+        if (methodStr[i] === '(') depth++;
+        else if (methodStr[i] === ')') { depth--; if (depth === 0) { closeParen = i; break; } }
+      }
+      if (closeParen !== -1) paramsStr = methodStr.substring(firstParen + 1, closeParen).trim();
+    }
+    const rawParams = [];
+    if (paramsStr) {
+      let current = '', d = 0;
+      for (const ch of paramsStr) {
+        if (ch === '(') { d++; current += ch; }
+        else if (ch === ')') { d--; current += ch; }
+        else if (ch === ',' && d === 0) { rawParams.push(current.trim()); current = ''; }
+        else { current += ch; }
+      }
+      if (current.trim()) rawParams.push(current.trim());
+    }
+    const paramNames = rawParams.filter(Boolean).map((p) => {
+      const clean = p.replace('?', '').trim();
+      const colonIdx = clean.indexOf(':');
+      return colonIdx !== -1 ? clean.substring(0, colonIdx).trim() : clean;
+    });
     const agg = (bcYaml.aggregates || []).find((a) => a.name === uc.aggregate);
     const aggProps = (agg && agg.properties) ? agg.properties : [];
     const payload = paramNames.map((paramName) => {

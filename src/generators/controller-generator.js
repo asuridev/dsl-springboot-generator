@@ -111,15 +111,37 @@ function getCommandFields(uc, agg) {
 
 function parseMethodSignature(methodStr) {
   if (!methodStr) return { methodName: '', params: [] };
-  const m = methodStr.match(/^(\w+)\(([^)]*)\)/);
-  if (!m) return { methodName: methodStr, params: [] };
-  const params = m[2].trim()
-    ? m[2].split(',').map((p) => {
-        const t = p.trim();
-        return { name: t.replace('?', '').trim(), optional: t.endsWith('?') };
-      })
-    : [];
-  return { methodName: m[1], params };
+  const firstParen = methodStr.indexOf('(');
+  if (firstParen === -1) return { methodName: methodStr.trim(), params: [] };
+  let depth = 0, closeParen = -1;
+  for (let i = firstParen; i < methodStr.length; i++) {
+    if (methodStr[i] === '(') depth++;
+    else if (methodStr[i] === ')') { depth--; if (depth === 0) { closeParen = i; break; } }
+  }
+  if (closeParen === -1) return { methodName: methodStr, params: [] };
+  const methodName = methodStr.substring(0, firstParen).trim();
+  const paramsStr = methodStr.substring(firstParen + 1, closeParen).trim();
+  const params = [];
+  if (paramsStr) {
+    let current = '', d = 0;
+    for (const ch of paramsStr) {
+      if (ch === '(') { d++; current += ch; }
+      else if (ch === ')') { d--; current += ch; }
+      else if (ch === ',' && d === 0) { params.push(current.trim()); current = ''; }
+      else { current += ch; }
+    }
+    if (current.trim()) params.push(current.trim());
+  }
+  return {
+    methodName,
+    params: params.filter(Boolean).map((p) => {
+      const optional = p.includes('?');
+      const clean = p.replace('?', '').trim();
+      const colonIdx = clean.indexOf(':');
+      const name = colonIdx !== -1 ? clean.substring(0, colonIdx).trim() : clean;
+      return { name, optional };
+    }),
+  };
 }
 
 function buildPropertyMap(agg) {
@@ -161,6 +183,8 @@ function getQueryFields(uc, agg, repoMethods) {
       if (param.type === 'PageRequest' || param.type === 'Pageable') {
         fields.push({ name: 'page', type: 'int' });
         fields.push({ name: 'size', type: 'int' });
+      } else if ((param.name === 'page' || param.name === 'size') && param.type === 'Integer') {
+        fields.push({ name: param.name, type: 'int' });
       } else {
         fields.push({ name: param.name, type: 'String' });
       }
@@ -257,7 +281,9 @@ function isPagedQuery(uc, agg, repoMethods) {
   const repoMethodName = parseRepoMethodNameStr(uc.repositoryMethod);
   const methodEntry = (repoMethods[agg.name] || {})[repoMethodName] || {};
   const methodParams = methodEntry.params || [];
-  return methodParams.some((p) => p.type === 'PageRequest' || p.type === 'Pageable');
+  return methodParams.some((p) => p.type === 'PageRequest' || p.type === 'Pageable')
+    || (methodParams.some((p) => p.name === 'page' && p.type === 'Integer')
+       && methodParams.some((p) => p.name === 'size' && p.type === 'Integer'));
 }
 
 // ─── Common path prefix ───────────────────────────────────────────────────────
@@ -312,7 +338,18 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods) {
   const allCmdFields = isQuery ? [] : getCommandFields(uc, agg);
   // Fields that come from path variables (by name)
   const pathFieldNames = new Set(pathVarNames);
-  const bodyFieldNames = allCmdFields.filter((f) => !pathFieldNames.has(f));
+  // getCommandFields auto-injects 'id' for non-create commands with notFoundError,
+  // but OpenAPI paths name it '{aggName}Id' (e.g. customerId, addressId).
+  // aggIdPathVar bridges this mismatch so dispatches resolve to the real path variable.
+  const aggNameCamel = toCamelCase(agg.name);
+  const aggIdPathVar = pathVarNames.find((v) => v === `${aggNameCamel}Id`) || null;
+  // Returns the path variable name a field resolves to, or null if it's a body/param field.
+  const resolveToPathVar = (fieldName) => {
+    if (pathFieldNames.has(fieldName)) return fieldName;
+    if (fieldName === 'id' && aggIdPathVar) return aggIdPathVar;
+    return null;
+  };
+  const bodyFieldNames = allCmdFields.filter((f) => resolveToPathVar(f) === null);
   const commandHasId = allCmdFields.includes('id');
   const hasOnlyPathFields =
     allCmdFields.length > 0 && bodyFieldNames.length === 0 && !hasRequestBody;
@@ -325,19 +362,22 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods) {
   let dispatchCall;
   if (isQuery) {
     // All query fields come from path vars or @RequestParam
-    const args = queryFieldsList.map((f) => f.name).join(', ');
+    const args = queryFieldsList.map((f) => resolveToPathVar(f.name) || f.name).join(', ');
     dispatchCall = `new ${ucClassName}Query(${args})`;
   } else if (allCmdFields.length === 0) {
     // No command fields (all injected server-side e.g. authContext) — instantiate empty record
     dispatchCall = `new ${ucClassName}Command()`;
   } else if (hasOnlyPathFields || (!hasRequestBody && allCmdFields.length > 0)) {
     // All fields from path (e.g., DeactivateCategory, DeleteCategory)
-    const args = allCmdFields.map((f) => (pathFieldNames.has(f) ? f : f)).join(', ');
+    const args = allCmdFields.map((f) => resolveToPathVar(f) || f).join(', ');
     dispatchCall = `new ${ucClassName}Command(${args})`;
   } else if (hasRequestBody && commandHasId) {
     // Mix of path id + body fields
     const args = allCmdFields
-      .map((f) => (pathFieldNames.has(f) ? f : `command.${f}()`))
+      .map((f) => {
+        const pv = resolveToPathVar(f);
+        return pv ? pv : `command.${f}()`;
+      })
       .join(', ');
     dispatchCall = `new ${ucClassName}Command(${args})`;
   } else {
@@ -346,9 +386,8 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods) {
   }
 
   // Build OpenAPI query params that are NOT path vars and NOT paging
-  const pathVarSet = new Set(pathVarNames);
   const controllerQueryParams = isQuery
-    ? buildQueryParamAnnotations(queryFieldsList, queryParams).filter(qp => !pathVarSet.has(qp.name))
+    ? buildQueryParamAnnotations(queryFieldsList, queryParams).filter(qp => !resolveToPathVar(qp.name))
     : [];
 
   return {
@@ -373,16 +412,17 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods) {
 
 /**
  * Builds the @RequestParam annotations for each query field.
- * Matches query fields (from the Query record) to OpenAPI query params by type/position.
+ * Matches query fields (from the Query record) to OpenAPI query params by name.
+ * Fields not present in the OpenAPI spec are marked authContext: true (sourced from JWT).
  */
 function buildQueryParamAnnotations(queryFields, openApiQueryParams) {
   const result = [];
-  let oaIdx = 0;
+  const oaByName = new Map((openApiQueryParams || []).map((p) => [p.name, p]));
 
   for (const field of queryFields) {
     if (field.type === 'int') {
-      // page or size — find matching OpenAPI param by name
-      const oaParam = openApiQueryParams.find((p) => p.name === field.name);
+      // page or size — look up by name
+      const oaParam = oaByName.get(field.name);
       const defaultVal = oaParam?.defaultValue ?? (field.name === 'page' ? 0 : 20);
       result.push({
         name: field.name,
@@ -390,23 +430,30 @@ function buildQueryParamAnnotations(queryFields, openApiQueryParams) {
         required: false,
         defaultValue: String(defaultVal),
         requestParamName: field.name,
+        authContext: false,
       });
     } else {
-      // String filter field — find next non-paging OpenAPI param
-      while (oaIdx < openApiQueryParams.length && (openApiQueryParams[oaIdx].name === 'page' || openApiQueryParams[oaIdx].name === 'size')) {
-        oaIdx++;
+      // String field — match by name; if absent from OpenAPI, comes from auth context
+      const oaParam = oaByName.get(field.name);
+      if (!oaParam) {
+        result.push({
+          name: field.name,
+          javaType: 'String',
+          required: false,
+          defaultValue: null,
+          requestParamName: null,
+          authContext: true,
+        });
+      } else {
+        result.push({
+          name: field.name,
+          javaType: 'String',
+          required: oaParam.required || false,
+          defaultValue: null,
+          requestParamName: oaParam.name !== field.name ? oaParam.name : null,
+          authContext: false,
+        });
       }
-      const oaParam = openApiQueryParams[oaIdx];
-      const oaParamName = oaParam ? oaParam.name : field.name;
-      const required = oaParam ? oaParam.required : false;
-      result.push({
-        name: field.name,
-        javaType: 'String',
-        required,
-        defaultValue: null,
-        requestParamName: oaParamName !== field.name ? oaParamName : null,
-      });
-      oaIdx++;
     }
   }
 
@@ -432,9 +479,10 @@ function buildMethodStrings(op) {
     params.push(`@Valid @RequestBody ${op.ucName}Command command`);
   }
 
-  // Query params (for GET queries)
+  // Query params (for GET queries) — skip authContext fields
   if (!op.isCommand && op.queryParamsList.length > 0) {
     for (const qp of op.queryParamsList) {
+      if (qp.authContext) continue;
       const ann = buildRequestParamAnnotation(qp);
       params.push(`${ann} ${qp.javaType} ${qp.name}`);
     }
@@ -451,9 +499,18 @@ function buildMethodStrings(op) {
     logArgs = ', ' + op.pathVarNames.join(', ');
   }
 
+  // Auth-context local variable declarations
+  const authContextLocals = (op.queryParamsList || [])
+    .filter((qp) => qp.authContext)
+    .map((qp) => `String ${qp.name} = SecurityContextHolder.getContext().getAuthentication().getName();`)
+    .join('\n        ');
+
   // Dispatch statement
   const returnKeyword = !op.isCommand ? 'return ' : '';
-  const dispatchStatement = `${returnKeyword}useCaseMediator.dispatch(${op.dispatchCall});`;
+  const dispatchLine = `${returnKeyword}useCaseMediator.dispatch(${op.dispatchCall});`;
+  const dispatchStatement = authContextLocals
+    ? `${authContextLocals}\n        ${dispatchLine}`
+    : dispatchLine;
 
   return { methodParams, logMessage, logArgs, dispatchStatement };
 }
@@ -505,6 +562,14 @@ function buildControllerImports(operations, packageName, moduleName) {
   imports.add('lombok.extern.slf4j.Slf4j');
   imports.add('org.springframework.http.HttpStatus');
   imports.add('org.springframework.web.bind.annotation.*');
+
+  // SecurityContextHolder if any operation uses authContext fields
+  const needsSecurityContext = operations.some(
+    (op) => (op.queryParamsList || []).some((qp) => qp.authContext)
+  );
+  if (needsSecurityContext) {
+    imports.add('org.springframework.security.core.context.SecurityContextHolder');
+  }
 
   return [...imports].sort();
 }
