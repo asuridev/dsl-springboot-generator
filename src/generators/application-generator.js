@@ -996,8 +996,13 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
   let extraImports = [];
 
   if (customReturnType) {
-    // For internal ops: import the custom return DTO directly
-    extraImports.push(`${packageName}.${moduleName}.application.dtos.${customReturnType}`);
+    // For internal ops: import the actual DTO class (strip List<> wrapper if present)
+    const dtoMatch = /(?:List<)?(\w+Dto)>?/.exec(customReturnType);
+    const dtoClassName = dtoMatch ? dtoMatch[1] : customReturnType;
+    extraImports.push(`${packageName}.${moduleName}.application.dtos.${dtoClassName}`);
+    if (customReturnType.startsWith('List<')) {
+      extraImports.push('java.util.List');
+    }
   } else {
     // Standard path: always import aggregate ResponseDto
     extraImports.push(`${packageName}.${moduleName}.application.dtos.${agg.name}ResponseDto`);
@@ -1085,16 +1090,24 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
     // Use cases
     for (const uc of aggUseCases) {
       const opId = uc.trigger?.operationId;
-      const isInternalOp = opId && internalOpsMap.has(opId);
+      // Only query-type UCs get special internal-API handling.
+      // Command-type UCs (e.g. 204 responses) fall through to normal command generation.
+      const isInternalOp = opId && internalOpsMap.has(opId) && uc.type === 'query';
 
       if (isInternalOp) {
         const { opSpec, components } = internalOpsMap.get(opId);
 
-        // Extract request / response schema names
+        // Extract request / response schema names.
+        // Support both direct $ref and array (type: array, items: $ref) responses.
         const requestRef = opSpec.requestBody?.content?.['application/json']?.schema?.$ref;
         const requestSchemaName = requestRef ? resolveInternalSchemaRef(requestRef) : null;
-        const responseRef = opSpec.responses?.['200']?.content?.['application/json']?.schema?.$ref;
-        const responseSchemaName = responseRef ? resolveInternalSchemaRef(responseRef) : null;
+        const responseSchema200 = opSpec.responses?.['200']?.content?.['application/json']?.schema;
+        const responseRef = responseSchema200?.$ref || null;
+        const responseArrayItemRef = (responseSchema200?.type === 'array') ? (responseSchema200?.items?.$ref || null) : null;
+        const responseSchemaName = responseRef
+          ? resolveInternalSchemaRef(responseRef)
+          : (responseArrayItemRef ? resolveInternalSchemaRef(responseArrayItemRef) : null);
+        const isListResponse = !responseRef && !!responseArrayItemRef;
 
         // Collect schemas to generate as DTOs
         const schemasToGenerate = new Set();
@@ -1107,10 +1120,19 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
         if (responseSchemaName) {
           collectInternalSchemas(responseSchemaName, components, schemasToGenerate);
         }
-        const dtoSchemas = [...schemasToGenerate].filter((s) => !/error/i.test(s));
+        // Aggregate ResponseDtos are already generated with proper Java types (UUID, Instant, enums).
+        // Exclude any schema whose DTO name matches an existing aggregate ResponseDto to prevent
+        // openApiPropToJavaType from overwriting it with all-String fields.
+        const aggDtoNames = new Set((bcYaml.aggregates || []).map((a) => `${a.name}ResponseDto`));
+        const dtoSchemas = [...schemasToGenerate].filter((s) => {
+          if (/error/i.test(s)) return false;
+          if (aggDtoNames.has(`${s}Dto`)) return false;
+          return true;
+        });
         await generateInternalApiDtos(dtoSchemas, packageName, moduleName, components, bcDir);
 
-        // Build Query record fields from request body schema
+        // Build Query record fields from request body schema (or fall back to YAML method signature
+        // for GET-style internal ops that have path params but no request body).
         const ucClassName = toPascalCase(uc.name);
         const queryImports = new Set();
         let queryFields = [];
@@ -1118,10 +1140,17 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
           const { fields, imports } = buildInternalSchemaFields(requestSchemaName, components, true);
           queryFields = fields;
           for (const imp of imports) queryImports.add(imp);
+        } else {
+          // No request body (e.g. GET /{id}): derive fields from the repositoryMethod signature
+          queryFields = buildQueryFields(uc, agg, repoMethods);
         }
-        const responseReturnType = responseSchemaName ? `${responseSchemaName}Dto` : 'void';
+        const responseReturnType = responseSchemaName
+          ? (isListResponse ? `List<${responseSchemaName}Dto>` : `${responseSchemaName}Dto`)
+          : 'void';
         if (responseReturnType !== 'void') {
-          queryImports.add(`${packageName}.${moduleName}.application.dtos.${responseReturnType}`);
+          const dtoMatch = /(?:List<)?(\w+Dto)>?/.exec(responseReturnType);
+          if (dtoMatch) queryImports.add(`${packageName}.${moduleName}.application.dtos.${dtoMatch[1]}`);
+          if (isListResponse) queryImports.add('java.util.List');
         }
 
         // Add imports for any DTO types used in query fields (different package: queries vs dtos)

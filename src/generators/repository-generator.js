@@ -462,6 +462,12 @@ function collectJpaRepoImports(customMethods, aggregate, jpaEntityName, bc, pack
   if (hasPage) imports.add('org.springframework.data.domain.Page');
   if (hasPageable) imports.add('org.springframework.data.domain.Pageable');
 
+  // @Modifying methods (e.g. softDelete) require extra imports
+  if (customMethods.some((m) => m.modifying)) {
+    imports.add('org.springframework.data.jpa.repository.Modifying');
+    imports.add('org.springframework.transaction.annotation.Transactional');
+  }
+
   return [...imports].sort();
 }
 
@@ -923,6 +929,19 @@ function buildJpaRepoInterfaceContext(aggregateName, normalizedMethods, aggregat
       paramsStr,
       query,
       _params: javaParams,
+    });
+  }
+
+  // Auto-inject softDelete for soft-delete aggregates.
+  // derivedFrom: implicit causes classifyMethod to skip it, but Spring Data does NOT provide softDelete.
+  if (aggregate.softDelete === true && !customMethods.some((m) => m.name === 'softDelete')) {
+    customMethods.push({
+      name: 'softDelete',
+      returnType: 'void',
+      paramsStr: '@Param("id") UUID id',
+      query: `UPDATE ${jpaEntityName} a SET a.deletedAt = CURRENT_TIMESTAMP WHERE a.id = :id`,
+      modifying: true,
+      _params: [{ name: 'id', javaType: 'UUID' }],
     });
   }
 

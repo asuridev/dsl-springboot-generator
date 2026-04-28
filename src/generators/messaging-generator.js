@@ -71,13 +71,13 @@ function resolvePayloadFromAsyncApi(eventName, asyncApiDoc) {
  * to the domain value object package so the IntegrationEvent can carry the
  * same type without re-declaring it.
  */
-function javaTypeForEventField(payloadField, packageName, moduleName) {
+function javaTypeForEventField(payloadField, packageName, moduleName, enumNames = new Set(), voNames = new Set()) {
   const { type } = payloadField;
 
   // List[T]
   const listMatch = /^List\[(.+)\]$/.exec(type);
   if (listMatch) {
-    const inner = javaTypeForEventField({ ...payloadField, type: listMatch[1] }, packageName, moduleName);
+    const inner = javaTypeForEventField({ ...payloadField, type: listMatch[1] }, packageName, moduleName, enumNames, voNames);
     return {
       javaType: `List<${inner.javaType}>`,
       importHint: 'java.util.List',
@@ -89,11 +89,13 @@ function javaTypeForEventField(payloadField, packageName, moduleName) {
   try {
     const mapped = mapType(type, payloadField);
     // Value Objects (e.g. Money) and other domain types (e.g. AddressSnapshot) may have
-    // importHint: null in type-mapper. Derive the import from the domain valueobject package.
-    const importHint = mapped.importHint
-      || (mapped.isValueObject || mapped.isDomainType
-        ? `${packageName}.${moduleName}.domain.valueobject.${mapped.javaType}`
-        : null);
+    // importHint: null in type-mapper. Derive the import from the correct domain sub-package.
+    let importHint = mapped.importHint;
+    if (!importHint && (mapped.isValueObject || mapped.isDomainType)) {
+      const isEnum = enumNames.has(mapped.javaType);
+      const subPackage = isEnum ? 'enums' : 'valueobject';
+      importHint = `${packageName}.${moduleName}.domain.${subPackage}.${mapped.javaType}`;
+    }
     return {
       javaType: mapped.javaType,
       importHint,
@@ -101,12 +103,14 @@ function javaTypeForEventField(payloadField, packageName, moduleName) {
       isValueObject: mapped.isValueObject || mapped.isDomainType || false,
     };
   } catch (_) {
-    // Unknown/domain type (Value Object, etc.) — treat as same-module reference
+    // Unknown/domain type — check if enum or value object
+    const isEnum = enumNames.has(type);
+    const subPackage = isEnum ? 'enums' : 'valueobject';
     return {
       javaType: type,
-      importHint: `${packageName}.${moduleName}.domain.valueobject.${type}`,
+      importHint: `${packageName}.${moduleName}.domain.${subPackage}.${type}`,
       innerImportHint: null,
-      isValueObject: true,
+      isValueObject: !isEnum,
     };
   }
 }
@@ -127,7 +131,7 @@ function toRoutingKeyKebab(eventName) {
 /**
  * Builds the per-event context object used across all messaging templates.
  */
-function buildEventContext(event, packageName, moduleName, asyncApiDoc) {
+function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumNames = new Set(), voNames = new Set()) {
   const topicNameKebab = toRoutingKeyKebab(event.name);
   const topicNameCamel = toCamelCase(topicNameKebab);
   const integrationEventClassName = `${event.name}IntegrationEvent`;
@@ -142,7 +146,7 @@ function buildEventContext(event, packageName, moduleName, asyncApiDoc) {
   }
 
   const eventFields = rawPayload.map((p) =>
-    Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName))
+    Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName, enumNames, voNames))
   );
 
   return {
@@ -160,10 +164,10 @@ function buildEventContext(event, packageName, moduleName, asyncApiDoc) {
 /**
  * Generates {EventName}Event.java record in domain/events/.
  */
-async function generateDomainEvent(event, packageName, moduleName, eventsDir) {
+async function generateDomainEvent(event, packageName, moduleName, eventsDir, enumNames = new Set(), voNames = new Set()) {
   const imports = new Set();
   const fields = (event.payload || []).map((p) => {
-    const mapped = javaTypeForEventField(p, packageName, moduleName);
+    const mapped = javaTypeForEventField(p, packageName, moduleName, enumNames, voNames);
     if (mapped.importHint) imports.add(mapped.importHint);
     if (mapped.innerImportHint) imports.add(mapped.innerImportHint);
     return { type: mapped.javaType, name: p.name };
@@ -267,13 +271,13 @@ async function generateDomainEventHandler(publishedEventCtxs, packageName, modul
  *   queueKey  — key in rabbitmq.yaml queues section (e.g. orders-cart-checked-out)
  *   payload   — list of { name, type } fields
  */
-async function generateRabbitListener(consumedEvent, packageName, moduleName, listenersDir) {
+async function generateRabbitListener(consumedEvent, packageName, moduleName, listenersDir, enumNames = new Set(), voNames = new Set()) {
   const listenerClassName = `${toPascalCase(consumedEvent.name)}RabbitListener`;
   const commandClassName = `${toPascalCase(consumedEvent.command)}Command`;
   const queueKey = consumedEvent.queueKey || `${moduleName}-${toRoutingKeyKebab(consumedEvent.name)}`;
 
   const mapField = (p) => {
-    const mapped = Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName));
+    const mapped = Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName, enumNames, voNames));
     // Commands use String for UUID fields (for validation); normalize to match command signature
     if (mapped.javaType === 'UUID') {
       mapped.javaType = 'String';
@@ -461,13 +465,13 @@ async function generateKafkaMessageBrokerAdapter(publishedEventCtxs, packageName
 /**
  * Generates one {MessageName}KafkaListener.java per consumed event.
  */
-async function generateKafkaListener(consumedEvent, packageName, moduleName, listenersDir) {
+async function generateKafkaListener(consumedEvent, packageName, moduleName, listenersDir, enumNames = new Set(), voNames = new Set()) {
   const listenerClassName = `${toPascalCase(consumedEvent.name)}KafkaListener`;
   const commandClassName  = `${toPascalCase(consumedEvent.command)}Command`;
   const topicKey = consumedEvent.topicKey || `${moduleName}-${toRoutingKeyKebab(consumedEvent.name)}`;
 
   const fields = (consumedEvent.payload || []).map((p) =>
-    Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName))
+    Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName, enumNames, voNames))
   );
 
   await renderAndWrite(
@@ -659,15 +663,18 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir) {
   const usecasesDir     = path.join(bcBase, 'application',   'usecases');
   const adaptersDir     = path.join(bcBase, 'infrastructure', 'adapters');
 
+  const enumNames = new Set((bcYaml.enums || []).map((e) => e.name));
+  const voNames = new Set((bcYaml.valueObjects || []).map((v) => v.name));
+
   const publishedEventCtxs = publishedEvents.map((e) =>
-    buildEventContext(e, packageName, moduleName, asyncApiDoc)
+    buildEventContext(e, packageName, moduleName, asyncApiDoc, enumNames, voNames)
   );
 
   let eventCount = 0;
   let integrationEventCount = 0;
 
   for (const event of publishedEvents) {
-    await generateDomainEvent(event, packageName, moduleName, domainEventsDir);
+    await generateDomainEvent(event, packageName, moduleName, domainEventsDir, enumNames, voNames);
     eventCount++;
   }
 
@@ -708,10 +715,10 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir) {
 
     if (config.broker === 'kafka') {
       const listenersDir = path.join(bcBase, 'infrastructure', 'kafkaListener');
-      await generateKafkaListener(consumed, packageName, moduleName, listenersDir);
+      await generateKafkaListener(consumed, packageName, moduleName, listenersDir, enumNames, voNames);
     } else {
       const listenersDir = path.join(bcBase, 'infrastructure', 'rabbitListener');
-      await generateRabbitListener(consumed, packageName, moduleName, listenersDir);
+      await generateRabbitListener(consumed, packageName, moduleName, listenersDir, enumNames, voNames);
     }
     listenerCount++;
   }

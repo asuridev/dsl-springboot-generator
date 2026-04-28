@@ -16,6 +16,8 @@ import java.util.UUID;
 @Repository
 public interface <%- aggregateName %>JpaRepository extends JpaRepository<<%- jpaEntityName %>, UUID> {
 <% customMethods.forEach(method => { %>
-<% if (method.query) { %>    @Query("<%- method.query %>")
+<% if (method.modifying) { %>    @Modifying
+    @Transactional
+<% } %><% if (method.query) { %>    @Query("<%- method.query %>")
 <% } %>    <%- method.returnType %> <%- method.name %>(<%- method.paramsStr %>);
 <% }); %>}

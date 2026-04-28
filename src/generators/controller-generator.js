@@ -15,15 +15,25 @@ const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 function buildOpsMap(openApiDoc) {
   const map = new Map();
   const paths = openApiDoc.paths || {};
+  const componentParams = openApiDoc.components?.parameters || {};
+
+  // Resolve a parameter that might be a $ref to components/parameters
+  function resolveParam(p) {
+    if (p.$ref) {
+      const refName = p.$ref.split('/').pop();
+      return componentParams[refName] || null;
+    }
+    return p;
+  }
 
   for (const [fullPath, pathItem] of Object.entries(paths)) {
-    const pathLevelParams = pathItem.parameters || [];
+    const pathLevelParams = (pathItem.parameters || []).map(resolveParam).filter(Boolean);
 
     for (const [httpMethod, operation] of Object.entries(pathItem)) {
       if (httpMethod === 'parameters') continue;
       if (typeof operation !== 'object' || !operation.operationId) continue;
 
-      const opParams = [...pathLevelParams, ...(operation.parameters || [])];
+      const opParams = [...pathLevelParams, ...(operation.parameters || []).map(resolveParam).filter(Boolean)];
       const pathParams = opParams.filter((p) => !p.$ref && p.in === 'path').map((p) => p.name);
       const queryParams = opParams
         .filter((p) => !p.$ref && p.in === 'query')
@@ -37,7 +47,9 @@ function buildOpsMap(openApiDoc) {
       const responses = operation.responses || {};
       const primaryCode = Object.keys(responses).find((c) => c !== 'default') || '200';
       const responseBody = responses[primaryCode];
-      const responseSchemaRef = responseBody?.content?.['application/json']?.schema?.$ref || null;
+      const responseSchema = responseBody?.content?.['application/json']?.schema;
+      const responseSchemaRef = responseSchema?.$ref || responseSchema?.items?.$ref || null;
+      const isResponseArray = !responseSchema?.$ref && responseSchema?.type === 'array' && !!responseSchema?.items?.$ref;
 
       map.set(operation.operationId, {
         httpMethod: httpMethod.toUpperCase(),
@@ -48,6 +60,7 @@ function buildOpsMap(openApiDoc) {
         primaryResponseCode: parseInt(primaryCode, 10),
         summary: operation.summary || operation.operationId,
         responseSchemaRef,
+        isResponseArray,
       });
     }
   }
@@ -469,15 +482,74 @@ function buildQueryParamAnnotations(queryFields, openApiQueryParams) {
  * Builds a controller operation object for an internal API endpoint.
  * Internal ops use POST with a Query record as the request body and return a typed DTO.
  */
-function buildInternalOperation(uc, internalApiOp, commonPrefix) {
-  const { httpMethod, fullPath, primaryResponseCode, summary, hasRequestBody, responseSchemaRef } = internalApiOp;
+function buildInternalOperation(uc, internalApiOp, commonPrefix, agg, repoMethods) {
+  const { httpMethod, fullPath, primaryResponseCode, summary, hasRequestBody, responseSchemaRef, isResponseArray, pathParams, queryParams } = internalApiOp;
   const mappingPath = fullPath.startsWith(commonPrefix)
     ? fullPath.slice(commonPrefix.length) || ''
     : fullPath;
 
   const ucClassName = toPascalCase(uc.name);
+  const isCommand = uc.type === 'command';
   const responseSchemaName = responseSchemaRef ? responseSchemaRef.split('/').pop() : null;
-  const returnType = responseSchemaName ? `${responseSchemaName}Dto` : 'void';
+  const returnType = isCommand
+    ? 'void'
+    : responseSchemaName
+      ? (isResponseArray ? `List<${responseSchemaName}Dto>` : `${responseSchemaName}Dto`)
+      : 'void';
+
+  // Build dispatchCall
+  let dispatchCall;
+  let bodyFieldNames = [];
+  let commandHasId = false;
+
+  if (isCommand) {
+    const allCmdFields = getCommandFields(uc, agg);
+    const pathFieldNames = new Set(pathParams);
+    const aggNameCamel = toCamelCase(agg.name);
+    const aggIdPathVar = pathParams.find((v) => v === `${aggNameCamel}Id`) || null;
+    const resolveToPathVar = (fieldName) => {
+      if (pathFieldNames.has(fieldName)) return fieldName;
+      if (fieldName === 'id' && aggIdPathVar) return aggIdPathVar;
+      return null;
+    };
+    bodyFieldNames = allCmdFields.filter((f) => resolveToPathVar(f) === null);
+    commandHasId = allCmdFields.includes('id');
+    const hasOnlyPathFields = allCmdFields.length > 0 && bodyFieldNames.length === 0 && !hasRequestBody;
+
+    if (allCmdFields.length === 0) {
+      dispatchCall = `new ${ucClassName}Command()`;
+    } else if (hasOnlyPathFields || (!hasRequestBody && allCmdFields.length > 0)) {
+      const args = allCmdFields.map((f) => resolveToPathVar(f) || f).join(', ');
+      dispatchCall = `new ${ucClassName}Command(${args})`;
+    } else if (hasRequestBody && commandHasId) {
+      const args = allCmdFields
+        .map((f) => { const pv = resolveToPathVar(f); return pv ? pv : `command.${f}()`; })
+        .join(', ');
+      dispatchCall = `new ${ucClassName}Command(${args})`;
+    } else {
+      dispatchCall = 'command';
+    }
+  }
+
+  // For GET-style internal queries (no request body), derive @RequestParam fields and dispatch args
+  // from the repository method signature — same logic as public queries in buildOperation.
+  let internalQueryParamsList = [];
+  if (!isCommand) {
+    if (hasRequestBody) {
+      dispatchCall = 'query';
+    } else {
+      const queryFields = getQueryFields(uc, agg, repoMethods);
+      if (queryFields.length > 0) {
+        const pathFieldSet = new Set(pathParams);
+        const args = queryFields.map((f) => f.name).join(', ');
+        dispatchCall = `new ${ucClassName}Query(${args})`;
+        internalQueryParamsList = buildQueryParamAnnotations(queryFields, queryParams || [])
+          .filter((qp) => !pathFieldSet.has(qp.name));
+      } else {
+        dispatchCall = `new ${ucClassName}Query(${pathParams.join(', ')})`;
+      }
+    }
+  }
 
   return {
     httpAnnotation: METHOD_ANNOTATION[httpMethod] || 'PostMapping',
@@ -485,15 +557,15 @@ function buildInternalOperation(uc, internalApiOp, commonPrefix) {
     httpStatus: httpStatus(primaryResponseCode),
     methodName: toCamelCase(uc.trigger.operationId),
     summary,
-    isCommand: false,
+    isCommand,
     isScaffold: true,
     returnType,
-    pathVarNames: [],
-    queryParamsList: [],
-    hasRequestBody,
-    bodyFieldNames: [],
-    commandHasId: false,
-    dispatchCall: 'query',
+    pathVarNames: pathParams,
+    queryParamsList: internalQueryParamsList,
+    hasRequestBody: isCommand ? (hasRequestBody && bodyFieldNames.length > 0) : hasRequestBody,
+    bodyFieldNames,
+    commandHasId,
+    dispatchCall,
     ucName: ucClassName,
     aggName: uc.aggregate,
     isInternal: true,
@@ -682,7 +754,7 @@ async function generateControllerLayer(bcYaml, openApiDoc, internalApiDoc, confi
     // Build operation objects for template (with pre-computed strings)
     const operations = rawOperations.map(({ uc, openApiOp, isInternal }) => {
       const op = isInternal
-        ? buildInternalOperation(uc, openApiOp, commonPrefix)
+        ? buildInternalOperation(uc, openApiOp, commonPrefix, agg, repoMethods)
         : buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods);
       const strings = buildMethodStrings(op);
       return { ...op, ...strings };
