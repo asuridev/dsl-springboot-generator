@@ -51,12 +51,24 @@ public class <%= name %> {
 <% if (creationParams.length > 0 || autoInits.length > 0) { %>
 
     // ─── Creation constructor (new <%= name %>) ───────────────────────────────
-    public <%= name %>(<% creationParams.forEach((p, idx) => { %><%- p.javaType %> <%= p.name %><%= idx < creationParams.length - 1 ? ', ' : '' %><% }); %>) {
+    private <%= name %>(<% creationParams.forEach((p, idx) => { %><%- p.javaType %> <%= p.name %><%= idx < creationParams.length - 1 ? ', ' : '' %><% }); %>) {
         this.id = UUID.randomUUID();
 <% creationParams.forEach(p => { %>        this.<%= p.name %> = <%= p.name %>;
 <% }); %>
 <% autoInits.forEach(ai => { %>        this.<%= ai.name %> = <%- ai.value %>;
 <% }); %>    }
+<% } %>
+<% if (staticFactory) { %>
+
+    // ─── Static factory ───────────────────────────────────────────────────────
+
+    /** derived_from: <%= staticFactory.derivedFrom %> */
+    public static <%= name %> create(<% staticFactory.params.forEach((p, idx) => { %><%- p.javaType %> <%= p.name %><%= idx < staticFactory.params.length - 1 ? ', ' : '' %><% }); %>) {
+        <%= name %> instance = new <%= name %>(<%= staticFactory.ctorCallArgs %>);
+<% if (staticFactory.scaffoldRulesComment) { %>        <%- staticFactory.scaffoldRulesComment %>
+<% } %><% if (staticFactory.raiseCall) { %>        instance.<%- staticFactory.raiseCall %>
+<% } %>        return instance;
+    }
 <% } %>
 
     // ─── Getters ──────────────────────────────────────────────────────────────
@@ -86,6 +98,10 @@ public class <%= name %> {
 <% if (hasSoftDelete) { %>
     public Instant getDeletedAt() {
         return deletedAt;
+    }
+
+    public boolean isDeleted() {
+        return this.deletedAt != null;
     }
 <% } %>
 <% if (businessMethods.length > 0) { %>

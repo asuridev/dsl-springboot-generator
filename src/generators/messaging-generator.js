@@ -548,35 +548,15 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir) {
 
     // If the event already declares its own payload, use it directly.
     if (ev.payload && ev.payload.length > 0) {
-      // Derive command param names from the UC method signature so we know which
-      // payload fields map to the command constructor (event-only metadata fields
-      // like occurredAt must NOT be passed to the command).
-      const ucMethod = uc.method || '';
-      const fp = ucMethod.indexOf('(');
-      let ucParamsStr = '';
-      if (fp !== -1) {
-        let depth = 0, cp = -1;
-        for (let i = fp; i < ucMethod.length; i++) {
-          if (ucMethod[i] === '(') depth++;
-          else if (ucMethod[i] === ')') { depth--; if (depth === 0) { cp = i; break; } }
-        }
-        if (cp !== -1) ucParamsStr = ucMethod.substring(fp + 1, cp).trim();
-      }
-      const commandParamNames = new Set();
-      if (ucParamsStr) {
-        const toParamName = (raw) => { const c = raw.replace('?', '').trim(); const ci = c.indexOf(':'); return ci !== -1 ? c.substring(0, ci).trim() : c; };
-        let cur = '', d = 0;
-        for (const ch of ucParamsStr) {
-          if (ch === '(') { d++; cur += ch; }
-          else if (ch === ')') { d--; cur += ch; }
-          else if (ch === ',' && d === 0) { commandParamNames.add(toParamName(cur.trim())); cur = ''; }
-          else { cur += ch; }
-        }
-        if (cur.trim()) commandParamNames.add(toParamName(cur.trim()));
-      }
-      const commandPayload = commandParamNames.size > 0
-        ? ev.payload.filter((p) => commandParamNames.has(p.name))
-        : ev.payload;
+      // Event-triggered commands carry only the aggregate id.
+      // method: describes the aggregate method — extra params like 'reason' are
+      // derived by the handler from context, not forwarded through the command.
+      // Locate the id field in the payload: {aggregateCamelId} → 'id' → first Uuid field.
+      const aggCamelId = `${toCamelCase(uc.aggregate)}Id`;
+      const idField = ev.payload.find((p) => p.name === aggCamelId)
+        || ev.payload.find((p) => p.name === 'id')
+        || ev.payload.find((p) => p.type === 'Uuid');
+      const commandPayload = idField ? [idField] : [];
       return {
         name:          ev.name,
         channel:       ev.channel || null,
@@ -626,24 +606,20 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir) {
       return { name: paramName, type: prop ? prop.type : 'String' };
     });
 
-    // Non-create commands with notFoundError get an auto-injected 'id' field in the command
-    // (mirrors buildCommandFields logic). For event-triggered listeners the id must come from
-    // the event payload — prepend it here when not already present.
-    const isCreate = /^create\(/.test(uc.method || '');
-    const hasNotFoundError = !!(uc.notFoundError &&
-      (Array.isArray(uc.notFoundError) ? uc.notFoundError.length > 0 : true));
-    if (!isCreate && hasNotFoundError && !payload.some((p) => p.name === 'id')) {
-      payload.unshift({ name: 'id', type: 'Uuid' });
-    }
+    // Event-triggered commands carry only the aggregate id.
+    // Build a single-field commandPayload with the conventional {aggregateCamelCase}Id name.
+    const aggCamelId = `${toCamelCase(uc.aggregate)}Id`;
+    const commandPayload = [{ name: aggCamelId, type: 'Uuid' }];
 
     return {
-      name:      ev.name,
-      channel:   ev.channel || null,
-      producer:  ev.channel ? ev.channel.split('.')[0] : 'unknown',
-      command:   uc.name,   // use case name becomes the command class base
-      useCase:   uc.id,
+      name:          ev.name,
+      channel:       ev.channel || null,
+      producer:      ev.channel ? ev.channel.split('.')[0] : 'unknown',
+      command:       uc.name,
+      useCase:       uc.id,
       queueKey,
-      payload,
+      payload:       commandPayload,
+      commandPayload,
     };
   });
 

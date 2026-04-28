@@ -19,6 +19,7 @@ type            → clasificación DDD
 description     → propósito del BC
 enums           → tipos con valores cerrados (estados, clasificaciones)
 valueObjects    → tipos de valor compuestos
+projections     → shapes de lectura (retornos de queries no 1:1 con agregados)
 aggregates      → modelo del dominio (entidades, reglas, propiedades)
 useCases        → operaciones que el BC expone o reacciona
 repositories    → contratos de acceso a datos
@@ -163,6 +164,88 @@ valueObjects:
 | `Email` | Email validado | Genera validación automática. |
 | `Url` | URL absoluta validada | |
 | `Money` | VO monetario | Siempre declarar como Value Object, no como primitivo. |
+
+---
+
+## `projections` — Shapes de lectura
+
+Una proyección es un shape de lectura que **no existe como estado del dominio** — nunca vive
+como propiedad de un agregado o entidad. Su único rol es tipificar el `returns` de un use
+case de tipo `query`.
+
+**Regla de clasificación:**
+
+| Pregunta | Respuesta → Dónde va |
+|---|---|
+| ¿El tipo vive como propiedad de un agregado/entidad? | `valueObjects[]` |
+| ¿El tipo solo aparece en `returns` de queries? | `projections[]` (nombrado) o inline |
+| ¿El mismo shape lo retornan ≥2 UCs, o tiene nombre semántico en el negocio? | `projections[]` nombrado |
+| ¿Shape simple de un único UC? | Lista inline en `returns` del UC |
+
+```yaml
+projections:
+
+  # Proyección para listados: subconjunto del agregado sin campos pesados
+  - name: ProductSummary
+    description: >
+      Lightweight view of a product for listing endpoints. Excludes description
+      and images to keep list payloads lightweight.
+    properties:
+      - name: id
+        type: Uuid
+        required: true
+      - name: name
+        type: String(200)
+        required: true
+      - name: price
+        type: Money
+        required: true
+      - name: status
+        type: ProductStatus
+        required: true
+      - name: categoryId
+        type: Uuid
+        required: true
+
+  # Proyección para integración interna: shape mínimo para un contrato BC-a-BC
+  - name: ProductPriceSnapshot
+    description: >
+      Authoritative price captured at query time. Used by the orders BC at checkout
+      to prevent OWASP A04 monetary fraud through stale or manipulated prices.
+    properties:
+      - name: productId
+        type: Uuid
+        required: true
+      - name: price
+        type: Money
+        required: true
+```
+
+Referenciadas desde `returns` del use case:
+
+```yaml
+returns: Page[ProductSummary]      # colección paginada
+returns: ProductPriceSnapshot      # objeto simple
+returns: ProductDetail             # detalle completo
+```
+
+`returns` inline para shapes simples de un único UC:
+
+```yaml
+- id: UC-INT-001
+  name: ValidateProductAndSnapPrice
+  type: query
+  ...
+  returns:
+    - name: productId
+      type: Uuid
+    - name: price
+      type: Money
+```
+
+**Naming:** el nombre expresa **qué es el dato**, no cómo se transfiere.
+- Prohibidos: `*Response`, `*Dto`, `*Request`, `*Payload`
+- Correctos: `ProductSummary`, `ProductDetail`, `ProductPriceSnapshot`, `OrderLineSummary`
 
 ---
 
@@ -331,11 +414,77 @@ Las invariantes que el sistema debe hacer cumplir siempre, independientemente de
 
 ---
 
+## `domainMethods` — Métodos de dominio del agregado
+
+Cada agregado declara en `domainMethods` sus métodos de comportamiento invocables por commands.
+Esta sección es la **fuente de verdad** para parámetros, retornos y eventos de commands.
+Las queries **no referencian** `domainMethods`.
+
+Se declara dentro del agregado, después de `domainRules`. Solo en agregados que **no** son `readModel: true`.
+Agregados con `readModel: true` usan `upsert` / `delete` como valores especiales de `method` en el UC
+— esos son operaciones de repositorio directo, no métodos de dominio, y no se declaran aquí.
+
+```yaml
+aggregates:
+  - name: Product
+    ...
+    domainMethods:
+      - name: activate
+        params: []           # omitir si el método no recibe parámetros externos
+        returns: void
+        emits: ProductActivated
+
+      - name: discontinue
+        params: []
+        returns: void
+        emits: ProductDiscontinued
+
+      - name: updatePrice
+        params:
+          - name: newPrice
+            type: Money
+        returns: void
+        emits: ProductPriceUpdated
+
+  - name: Cart
+    ...
+    domainMethods:
+      - name: create
+        params:
+          - name: customerId
+            type: Uuid
+        returns: Cart        # tipo del agregado cuando el método es una factory (creación)
+        emits: null
+
+      - name: checkout
+        params:
+          - name: addressSnapshotId
+            type: Uuid
+          - name: catalogPrices
+            type: List[ProductPriceSnapshot]  # VO declarado en valueObjects[] del BC consumidor
+        returns: void
+        emits: OrderPlaced
+```
+
+**Propiedades de `domainMethods`:**
+
+| Campo | Obligatorio | Descripción |
+|---|---|---|
+| `name` | sí | camelCase. Referenciado desde `useCases[].method` en commands. |
+| `params` | no (omitir si vacío) | Parámetros del método. El generador los resuelve desde `input[]`, `outgoingCalls[]` y constantes en la Fase 3. |
+| `params[].name` | sí | camelCase. |
+| `params[].type` | sí | Tipo DSL del parámetro. |
+| `returns` | sí | `void` si no devuelve nada; tipo del agregado para factories (ej: `Cart`). |
+| `emits` | sí | Evento de dominio publicado tras la ejecución exitosa. `null` si no emite. |
+
+---
+
 ## `useCases` — Operaciones del BC
 
 Cada use case es una operación con nombre, actor, trigger, y comportamiento definido.
+Hay tres tipos según su naturaleza y trigger.
 
-### Use case de comando (modifica estado)
+### Command disparado por HTTP
 
 ```yaml
 useCases:
@@ -346,19 +495,97 @@ useCases:
     actor: operator
     trigger:
       kind: http
-      operationId: activateProduct   # coincide con el operationId del OpenAPI
+      operationId: activateProduct
     aggregate: Product
-    method: activate(): void
-    repositoryMethod: save(product)
+    method: activate              # → aggregates[Product].domainMethods[activate]
+    input: []                     # activate() no recibe parámetros externos
     rules: [PRD-RULE-001]
-    emits: ProductActivated
+    notFoundError: [PRODUCT_NOT_FOUND]
+    fkValidations: []
     implementation: full
+
+  - id: UC-PRD-003
+    name: UpdateProductPrice
+    type: command
+    actor: operator
+    trigger:
+      kind: http
+      operationId: updateProductPrice
+    aggregate: Product
+    method: updatePrice           # → aggregates[Product].domainMethods[updatePrice]
+    input:
+      - name: id
+        type: Uuid
+        required: true
+        source: path
+        loadAggregate: true       # carga Product via repository.findById(id)
+      - name: newPrice
+        type: Money
+        required: true
+        source: body
+    rules: []
+    notFoundError: [PRODUCT_NOT_FOUND]
+    fkValidations: []
+    implementation: full
+
+  - id: UC-ORD-005
+    name: CheckoutCart
+    type: command
+    actor: customer
+    trigger:
+      kind: http
+      operationId: checkoutCart
+    aggregate: Cart
+    method: checkout              # → aggregates[Cart].domainMethods[checkout]
+    input:
+      - name: cartId
+        type: Uuid
+        required: true
+        source: path
+        loadAggregate: true       # carga Cart via repository.findById(cartId)
+      - name: addressSnapshotId
+        type: Uuid
+        required: true
+        source: body
+    rules: [ORD-RULE-001]
+    notFoundError: [CART_NOT_FOUND, CUSTOMER_ADDRESS_SNAPSHOT_NOT_FOUND]
+    fkValidations:
+      - aggregate: CustomerAddressSnapshot
+        param: addressSnapshotId
+        error: CUSTOMER_ADDRESS_SNAPSHOT_NOT_FOUND
+    outgoingCalls:
+      - port: CatalogPort
+        method: validateProductsAndPrices
+        params: [cartId]
+        bindsTo: catalogPrices    # → domainMethods[checkout].params[catalogPrices]
+    implementation: full          # outgoingCalls cubre catalogPrices — todos los params resolvibles
 ```
 
-### Use case de query (solo lectura)
+### Query disparada por HTTP
 
 ```yaml
+  # Query por ID (Path A: loadAggregate)
   - id: UC-PRD-001
+    name: GetProduct
+    type: query
+    actor: operator
+    trigger:
+      kind: http
+      operationId: getProduct
+    aggregate: Product
+    input:
+      - name: id
+        type: Uuid
+        required: true
+        source: path
+        loadAggregate: true       # Path A: el generador invoca findById(id) directamente
+    returns: ProductDetail        # nombre en projections[], o nombre del agregado si retorna el modelo completo
+    rules: []
+    notFoundError: [PRODUCT_NOT_FOUND]
+    implementation: full
+
+  # Query con filtros y paginación (Path B: name matching)
+  - id: UC-PRD-002
     name: ListProducts
     type: query
     actor: operator
@@ -366,51 +593,108 @@ useCases:
       kind: http
       operationId: listProducts
     aggregate: Product
-    repositoryMethod: list(filters, page)
+    input:
+      - name: status
+        type: ProductStatus
+        required: false
+        source: query
+      - name: page
+        type: PageRequest
+        required: false
+        source: query
+    returns: Page[ProductSummary]
     rules: []
-    emits: null
     implementation: full
 ```
 
-### Use case disparado por evento (reacción a mensaje)
+> **Path A vs Path B:** Cuando un `input[]` tiene `loadAggregate: true`, el generador usa **Path A**
+> (`repository.findById`). Cuando ningún `input[]` tiene `loadAggregate: true`, el generador usa **Path B**
+> (cruza los nombres de `input[]` contra `repositories[aggregate].queryMethods` para identificar el método).
+
+### Command disparado por evento
 
 ```yaml
-  - id: UC-CAT-010
-    name: HandleStockUpdated
+  - id: UC-ORD-012
+    name: CancelOrderOnStockFailed
     type: command
     actor: system
     trigger:
       kind: event
-      event: StockUpdated
-      channel: inventory.stock.updated   # canal AsyncAPI donde llega el evento
-    aggregate: CatalogProductSnapshot    # readModel que se actualiza
-    method: updateAvailability(productId, available): void
-    repositoryMethod: save(snapshot)
+      event: StockReservationFailed
+      channel: inventory.stock.reservation-failed
+    aggregate: Order
+    method: cancel                # → aggregates[Order].domainMethods[cancel]
+    input:
+      - name: orderId
+        type: Uuid
+        required: true
+        source: event.orderId
+        loadAggregate: true       # carga Order via repository.findById(orderId)
+      - name: occurredAt
+        type: DateTime
+        required: true
+        source: event.occurredAt
+    rules: [ORD-RULE-005]
+    notFoundError: [ORDER_NOT_FOUND]
+    fkValidations: []
+    implementation: scaffold      # TODO: reason = constante STOCK_RESERVATION_FAILED
+
+  # LRM event handler (upsert de proyección)
+  - id: UC-ORD-019
+    name: HandleAddressCreated
+    type: command
+    actor: system
+    trigger:
+      kind: event
+      event: AddressCreated
+      channel: customers.address.created
+    aggregate: CustomerAddressSnapshot  # readModel: true
+    method: upsert                      # operación de repositorio directo — no en domainMethods
+    input:
+      - name: addressId
+        type: Uuid
+        required: true
+        source: event.addressId
+      - name: customerId
+        type: Uuid
+        required: true
+        source: event.customerId
     rules: []
-    emits: null
+    fkValidations: []
     implementation: full
 ```
 
 **Campos de un use case:**
 
-| Campo | Descripción |
-|---|---|
-| `id` | `UC-{ABREV}-{NNN}`. La abreviatura es del BC (ej: `PRD`, `ORD`, `CAT`). |
-| `name` | PascalCase. Nombre descriptivo de la operación. |
-| `type` | `command` (modifica estado) \| `query` (solo lectura). |
-| `actor` | `customer` \| `operator` \| `driver` \| `system`. |
-| `trigger.kind` | `http` (llamada API) \| `event` (mensaje del broker). |
-| `trigger.operationId` | Si `kind: http`, el `operationId` exacto del OpenAPI. |
-| `trigger.event` | Si `kind: event`, nombre del evento consumido. |
-| `trigger.channel` | Si `kind: event`, canal AsyncAPI del evento. |
-| `aggregate` | Agregado sobre el que actúa el use case. |
-| `method` | Firma del método de dominio en el agregado (para commands). |
-| `repositoryMethod` | Método del repositorio llamado al final. |
-| `rules` | Lista de RULE-IDs evaluados dentro del use case. |
-| `emits` | Evento emitido al completar (`null` si ninguno). |
-| `notFoundError` | ERROR_CODE lanzado si `findById` no retorna resultado. |
-| `fkValidations` | Lista de validaciones de FK recibidas en el request. |
-| `implementation` | `full` = generación completa. `scaffold` = esqueleto con TODOs. |
+| Campo | Obligatorio | Descripción |
+|---|---|---|
+| `id` | sí | `UC-{ABREV}-{NNN}`. La abreviatura es del BC (ej: `PRD`, `ORD`, `CAT`). |
+| `name` | sí | PascalCase. Nombre descriptivo de la operación. |
+| `type` | sí | `command` (modifica estado) \| `query` (solo lectura). |
+| `actor` | sí | `customer` \| `operator` \| `driver` \| `system`. |
+| `trigger.kind` | sí | `http` (llamada API) \| `event` (mensaje del broker). |
+| `trigger.operationId` | si `kind: http` | `operationId` exacto del OpenAPI. |
+| `trigger.event` | si `kind: event` | Nombre del evento consumido. |
+| `trigger.channel` | si `kind: event` | Canal AsyncAPI del evento. |
+| `aggregate` | sí | Agregado sobre el que actúa el use case. |
+| `method` | si `type: command` | Nombre del método de dominio. Resuelto como `aggregates[aggregate].domainMethods[method]`. **Ausente en queries.** Para `readModel: true`: `upsert` o `delete` (operaciones de repositorio directo). |
+| `input` | no (omitir si vacío) | Parámetros externos que recibe el handler (evento, HTTP, authContext). |
+| `input[].source` | sí | `event.{campo}` \| `path` \| `query` \| `body` \| `authContext`. |
+| `input[].loadAggregate` | no | `true` activa `findById(param)` antes de invocar el método (commands) o como Path A (queries). Un único param por UC puede declararlo; tipo `Uuid`. |
+| `returns` | si `type: query` + `kind: http` | Nombre en `projections[]`, nombre de un agregado del BC, o lista inline de propiedades. **Ausente en commands.** |
+| `rules` | sí | Lista de RULE-IDs evaluados dentro del use case. `[]` si no aplica ninguna. |
+| `notFoundError` | no | Lista de códigos lanzados cuando la entidad no existe. Siempre lista: `[ERROR_CODE]`. Omitir cuando no aplica. |
+| `fkValidations` | si `type: command` | Lista de validaciones de FK. `[]` si no hay FK. |
+| `fkValidations[].aggregate` | sí | Agregado cuya existencia se valida. |
+| `fkValidations[].param` | sí | Nombre del `input[]` que contiene el UUID de FK. |
+| `fkValidations[].error` | sí | Código de error si el FK no existe. |
+| `outgoingCalls` | no | Llamadas explícitas a puertos externos. Omitir si no hay. |
+| `outgoingCalls[].port` | sí | Nombre del puerto. Debe existir en `integrations.outbound[]`. |
+| `outgoingCalls[].method` | sí | Método del puerto a invocar. |
+| `outgoingCalls[].params` | no | Nombres de `input[]` pasados al puerto. Omitir si ninguno. |
+| `outgoingCalls[].bindsTo` | sí | Parámetro de `domainMethods[method].params` al que se asigna el resultado. |
+| `implementation` | sí | `full`: todos los params resolvibles. `scaffold`: TODOs para params no resolvibles. |
+| `sagaStep` | no | Solo si es paso o compensación de una Saga declarada en `system.yaml`. |
 
 ---
 
@@ -419,21 +703,75 @@ useCases:
 Declara los métodos que el dominio necesita para leer y escribir sus agregados. Son
 interfaces del dominio — el generador produce la implementación concreta.
 
-Cada entrada tiene dos campos raíz:
+Cada entrada tiene tres campos raíz:
 
 | Campo | Descripción |
 |---|---|
 | `aggregate` | PascalCase. Nombre del agregado al que pertenece este repositorio. Un repositorio por agregado. |
-| `methods` | Lista de métodos del repositorio. |
+| `queryMethods` | Lista de métodos de lectura usados por queries (Path B de resolución). |
+| `methods` | Lista de métodos de escritura/lectura por ID (save, findById, delete, countBy…). |
+
+### `queryMethods` — métodos de lectura para queries
+
+Son la fuente de verdad para el **Path B**: cuando un query UC no tiene `loadAggregate: true`,
+el generador cruza los nombres de `input[]` del UC contra los `params` de cada `queryMethod`
+para identificar unívocamente el método a invocar.
+
+```yaml
+repositories:
+
+  - aggregate: Order
+    queryMethods:
+      - name: listByCustomerId
+        params:
+          - name: customerId
+            type: Uuid
+            required: true
+          - name: status
+            type: OrderStatus
+            required: false
+          - name: page
+            type: PageRequest
+            required: false
+        returns: "Page[Order]"
+        derivedFrom: openapi:listOrders
+
+      - name: listByDriverId
+        params:
+          - name: driverId
+            type: Uuid
+            required: true
+        returns: "List[Order]"
+        derivedFrom: openapi:listOrdersByDriver
+```
+
+El nombre del `queryMethod` sigue las mismas convenciones que `methods`:
+- `list` — query con filtros opcionales + paginación
+- `listBy{Param}` — filtrada por un único param obligatorio
+- `findBy{Campo}` — búsqueda por campo único (retorna nullable)
+
+> **Separación estricta:** los métodos de `queryMethods` son de solo lectura. Los métodos de
+> `methods` son los implícitos (`findById`, `save`, `delete`) y los derivados de domainRules.
+> Un método de listado (con parámetros de filtro) **nunca va en `methods`** — va en `queryMethods`.
 
 ### Campos de un método
 
 | Campo | Descripción |
 |---|---|
 | `name` | camelCase. Nombre del método. Ver convenciones de naming más abajo. |
-| `params` | Lista de parámetros de entrada. Cada uno con `name`, `type`, y opcionalmente `required: false` si es un filtro opcional. |
+| `params` | Lista de parámetros de entrada. Ver campos de cada param en la tabla siguiente. |
 | `returns` | Tipo de retorno. Ver tabla de tipos de retorno más abajo. |
 | `derivedFrom` | Por qué existe este método. Ver valores válidos más abajo. |
+
+### Campos de un `param`
+
+| Campo | Descripción |
+|---|---|
+| `name` | camelCase. Si el nombre coincide con una propiedad del agregado, el generador infiere el predicado `EQ` automáticamente. |
+| `type` | Tipo canónico del parámetro. |
+| `required` | `false` para filtros opcionales. Omitir (o `true`) para params obligatorios. |
+| `filterOn` | Array de propiedades del agregado que filtra este param. **Requerido cuando el nombre del param no corresponde a ninguna propiedad del agregado** (ej: `search`, `q`, `keyword`). El generador no puede derivar el predicado sin este campo. Ejemplo: `filterOn: [name, sku]`. |
+| `operator` | Operador SQL del predicado. **Requerido cuando `filterOn` está presente.** Valores válidos: `EQ` (igualdad exacta — default implícito cuando el nombre mapea a una propiedad), `LIKE_CONTAINS` (`LIKE '%:v%'`), `LIKE_STARTS` (`LIKE ':v%'`), `LIKE_ENDS` (`LIKE '%:v'`), `GTE` (`>=`), `LTE` (`<=`), `IN`. |
 
 ### `derivedFrom` — origen del método
 
@@ -462,8 +800,11 @@ Cada entrada tiene dos campos raíz:
 | `list` | Query con filtros opcionales. Acepta `PageRequest`. |
 | `listBy{Param}` | Query filtrada por un único parámetro **obligatorio** (ej: `listByCategory`). |
 | `countBy{Campo}` | Cuenta instancias que referencian otro agregado. Para reglas `crossAggregateConstraint`. |
+| `countNonDeletedBy{Campo}` | Igual que `countBy{Campo}` pero el agregado tiene `softDelete: true`. El generador deriva `WHERE {campo} = :v AND deleted_at IS NULL`. Usar este nombre en lugar de `countActiveBy{Campo}` — el calificador `Active` es ambiguo cuando el agregado no tiene campo `status`. |
 | `save` | Siempre. INSERT o UPDATE del agregado. |
 | `delete` | Solo si hay regla `deleteGuard`. Eliminación física. |
+
+> **Calificadores en `count`/`list` sobre agregados `softDelete: true`:** El calificador `Active` (ej: `countActiveByCustomerId`, `listActiveByOwnerId`) implica `status = 'ACTIVE'`, pero en agregados soft-deleted no hay `status`. El generador no puede resolver la ambigüedad y produce un predicado incorrecto. Usar siempre `NonDeleted` como calificador de exclusión de borrados lógicos — el generador lo mapea inequívocamente a `deleted_at IS NULL`.
 
 ### Ejemplo completo
 
@@ -489,9 +830,14 @@ repositories:
 
       - name: list                  # derivado del endpoint GET /products del OpenAPI
         params:
-          - name: status            # filtro opcional — el cliente puede omitirlo
+          - name: status            # filtro opcional — mapea a Product.status (EQ implícito)
             type: ProductStatus
             required: false
+          - name: search            # param de búsqueda textual — no mapea a ninguna propiedad
+            type: String
+            required: false
+            filterOn: [name, sku]   # filtra sobre Product.name y Product.sku
+            operator: LIKE_CONTAINS # genera: WHERE (p.name LIKE %:search% OR p.sku LIKE %:search%)
           - name: page              # siempre requerido en métodos list
             type: PageRequest
             required: true
@@ -764,11 +1110,13 @@ Campos de cada evento consumido:
 | `name` | PascalCase en tiempo pasado. Nombre del evento tal como lo publica el BC emisor. Debe coincidir con el `name` en `contracts` de `system.yaml` para las integraciones `channel: message-broker` donde este BC es el `to`. |
 | `sourceBc` | kebab-case. BC que publica este evento. Debe existir en `system.yaml`. |
 | `description` | Qué efecto produce este evento en este BC — qué agregado se actualiza o qué use case se dispara. |
-| `payload` | Campos que llegan con el evento. Deben reflejar exactamente el payload del evento en el BC emisor. |
+| `payload` | Campos que llegan con el evento. Deben reflejar exactamente el payload del evento en el BC emisor. Obligatorio salvo que `acknowledgeOnly: true`. |
+| `acknowledgeOnly` | `true` (opcional). El BC suscribe al canal pero no ejecuta lógica de dominio — no hay UC asociado. El generador solo produce el canal `subscribe` en el AsyncAPI. Usar para acuses de compensación de saga o señales de fin de paso donde el BC no cambia ningún agregado. Si está ausente se asume `false`. |
 
 ```yaml
   consumed:
 
+    # Evento con UC — el BC ejecuta lógica de dominio al recibirlo
     - name: StockUpdated
       sourceBc: inventory       # inventory es quien publica este evento
       description: >
@@ -784,6 +1132,14 @@ Campos de cada evento consumido:
         - name: occurredAt
           type: DateTime
           required: true
+
+    # Evento sin UC — el BC solo necesita suscribirse, sin lógica de dominio
+    - name: StockReleased
+      sourceBc: inventory
+      acknowledgeOnly: true     # acuse de compensación — saga solo necesita saber que ocurrió
+      description: >
+        Inventory confirms stock was released after order cancellation.
+        No domain logic executed — orders has already emitted OrderCancelled.
 ```
 
 ---

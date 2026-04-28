@@ -97,28 +97,20 @@ function httpStatus(code) {
 // command fields without re-running the full SP-5 generator.
 
 function getCommandFields(uc, agg) {
-  const { methodName, params } = parseMethodSignature(uc.method || '');
-  const propMap = buildPropertyMap(agg);
-  const isCreate = methodName.startsWith('create');
-  const notFoundErrors = normalizeNotFoundErrors(uc.notFoundError);
-  const hasNotFoundError = notFoundErrors.length > 0;
   const fields = [];
 
-  if (!isCreate && hasNotFoundError && !params.some((p) => p.name === 'id')) {
-    fields.push('id');
-  }
+  // Event-triggered commands have no external inputs
+  if (uc.trigger && uc.trigger.kind === 'event') return fields;
 
-  for (const param of params) {
-    const prop = propMap.get(param.name);
-    // Only skip auto-generated fields for create operations (they're set server-side)
-    if (isCreate && prop && prop.readOnly && prop.defaultValue === 'generated') continue;
-    if (prop && prop.source === 'authContext') continue;
-    const rawType = resolveParamType(param.name, propMap);
+  for (const input of (uc.input || [])) {
+    // Fields sourced from authContext are injected in the handler
+    if (input.source === 'authContext') continue;
+    const rawType = input.type;
     if (rawType === 'Money') {
-      fields.push(`${param.name}Amount`);
-      fields.push(`${param.name}Currency`);
+      fields.push(`${input.name}Amount`);
+      fields.push(`${input.name}Currency`);
     } else {
-      fields.push(param.name);
+      fields.push(input.name);
     }
   }
 
@@ -189,40 +181,14 @@ function normalizeNotFoundErrors(nfe) {
 // ─── Query field extraction ───────────────────────────────────────────────────
 
 function getQueryFields(uc, agg, repoMethods) {
-  const repoMethodName = parseRepoMethodNameStr(uc.repositoryMethod);
-  const methodEntry = (repoMethods[agg.name] || {})[repoMethodName] || {};
-  const methodParams = methodEntry.params || [];
   const fields = [];
 
-  if (methodParams.length > 0) {
-    for (const param of methodParams) {
-      if (param.type === 'PageRequest' || param.type === 'Pageable') {
-        fields.push({ name: 'page', type: 'int' });
-        fields.push({ name: 'size', type: 'int' });
-      } else if ((param.name === 'page' || param.name === 'size') && param.type === 'Integer') {
-        fields.push({ name: param.name, type: 'int' });
-      } else {
-        fields.push({ name: param.name, type: 'String' });
-      }
-    }
-    return fields;
-  }
-
-  // Fallback: parse repositoryMethod string
-  if (uc.repositoryMethod) {
-    const match = uc.repositoryMethod.match(/\(([^)]*)\)/);
-    if (match && match[1].trim()) {
-      for (const p of match[1].split(',')) {
-        const t = p.trim().replace('?', '');
-        if (t === 'PageRequest' || t === 'Pageable') {
-          fields.push({ name: 'page', type: 'int' });
-          fields.push({ name: 'size', type: 'int' });
-        } else if (t === 'Uuid') {
-          fields.push({ name: 'id', type: 'String' });
-        } else {
-          fields.push({ name: toCamelCase(t), type: 'String' });
-        }
-      }
+  for (const input of (uc.input || [])) {
+    const type = input.type;
+    if (type === 'Integer' && (input.name === 'page' || input.name === 'size')) {
+      fields.push({ name: input.name, type: 'int' });
+    } else {
+      fields.push({ name: input.name, type: 'String' });
     }
   }
 
@@ -239,7 +205,9 @@ function normalizeRepoMethods(repositories) {
   const result = {};
   for (const repo of repositories || []) {
     result[repo.aggregate] = {};
-    for (const method of repo.methods || []) {
+    // Merge both standard methods and query-only methods into a single lookup map
+    const allMethods = [...(repo.methods || []), ...(repo.queryMethods || [])];
+    for (const method of allMethods) {
       result[repo.aggregate][method.name] = {
         params: normalizeMethodParams(method),
         returns: method.returns || null,
@@ -294,12 +262,8 @@ function parseSignatureParams(signature) {
 }
 
 function isPagedQuery(uc, agg, repoMethods) {
-  const repoMethodName = parseRepoMethodNameStr(uc.repositoryMethod);
-  const methodEntry = (repoMethods[agg.name] || {})[repoMethodName] || {};
-  const methodParams = methodEntry.params || [];
-  return methodParams.some((p) => p.type === 'PageRequest' || p.type === 'Pageable')
-    || (methodParams.some((p) => p.name === 'page' && p.type === 'Integer')
-       && methodParams.some((p) => p.name === 'size' && p.type === 'Integer'));
+  // Paged when uc.returns declares Page[X]
+  return (uc.returns || '').startsWith('Page[');
 }
 
 // ─── Common path prefix ───────────────────────────────────────────────────────
@@ -336,37 +300,49 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods) {
   const isQuery = uc.type === 'query';
   const isScaffold = uc.implementation === 'scaffold';
 
-  // Paged / list query detection
+  // Paged / list query detection — use uc.returns directly
   const paged = isQuery && isPagedQuery(uc, agg, repoMethods);
-  const repoMethodNameQ = isQuery ? parseRepoMethodNameStr(uc.repositoryMethod) : '';
-  const repoMethodEntryQ = isQuery ? ((repoMethods[agg.name] || {})[repoMethodNameQ] || {}) : {};
-  const repoReturns = repoMethodEntryQ.returns || '';
-  const isList = !paged && isQuery && (repoReturns.startsWith('List[') || repoReturns.startsWith('List<'));
+  const isList = !paged && isQuery && /^List\[/.test(uc.returns || '');
+  const normalizeInner = (inner) =>
+    inner === `${agg.name}Response` ? `${agg.name}ResponseDto` : inner;
   const returnType = isQuery
     ? paged
-      ? `PagedResponse<${agg.name}ResponseDto>`
+      ? (() => {
+          const inner = /^Page\[(.+)\]$/.exec(uc.returns || '')?.[1] || `${agg.name}ResponseDto`;
+          return `PagedResponse<${normalizeInner(inner)}>`;
+        })()
       : isList
-        ? `List<${agg.name}ResponseDto>`
-        : `${agg.name}ResponseDto`
+        ? (() => {
+            const inner = /^List\[(.+)\]$/.exec(uc.returns || '')?.[1] || `${agg.name}ResponseDto`;
+            return `List<${normalizeInner(inner)}>`;
+          })()
+        : (() => {
+            const raw = uc.returns || `${agg.name}ResponseDto`;
+            // Normalize OpenAPI schema name → Java class name (e.g. "CategoryResponse" → "CategoryResponseDto")
+            return normalizeInner(raw);
+          })()
     : 'void';
 
   // Command fields (in declaration order from the record)
   const allCmdFields = isQuery ? [] : getCommandFields(uc, agg);
   // Fields that come from path variables (by name)
   const pathFieldNames = new Set(pathVarNames);
-  // getCommandFields auto-injects 'id' for non-create commands with notFoundError,
-  // but OpenAPI paths name it '{aggName}Id' (e.g. customerId, addressId).
-  // aggIdPathVar bridges this mismatch so dispatches resolve to the real path variable.
+  // aggIdPathVar: handles the case where path var is '{aggName}Id' but field is 'id'
   const aggNameCamel = toCamelCase(agg.name);
   const aggIdPathVar = pathVarNames.find((v) => v === `${aggNameCamel}Id`) || null;
   // Returns the path variable name a field resolves to, or null if it's a body/param field.
   const resolveToPathVar = (fieldName) => {
     if (pathFieldNames.has(fieldName)) return fieldName;
+    // field 'id' → path var '{aggName}Id' (old schema compat)
     if (fieldName === 'id' && aggIdPathVar) return aggIdPathVar;
+    // field '{anything}Id' → path var 'id' (new schema: loadAggregate inputs named after aggregate)
+    if (fieldName.endsWith('Id') && pathFieldNames.has('id')) return 'id';
     return null;
   };
   const bodyFieldNames = allCmdFields.filter((f) => resolveToPathVar(f) === null);
-  const commandHasId = allCmdFields.includes('id');
+  // commandHasPathId: true when any command field resolves to a path variable (not just 'id')
+  const commandHasPathId = allCmdFields.some((f) => resolveToPathVar(f) !== null);
+  const commandHasId = commandHasPathId; // keep alias for dispatch branch logic
   const hasOnlyPathFields =
     allCmdFields.length > 0 && bodyFieldNames.length === 0 && !hasRequestBody;
 
@@ -491,11 +467,23 @@ function buildInternalOperation(uc, internalApiOp, commonPrefix, agg, repoMethod
   const ucClassName = toPascalCase(uc.name);
   const isCommand = uc.type === 'command';
   const responseSchemaName = responseSchemaRef ? responseSchemaRef.split('/').pop() : null;
+  // Use uc.returns as source of truth (same normalisation as buildQueryReturnType) so that
+  // projection / custom names like "ProductPriceSnapshot" are not incorrectly suffixed with Dto.
+  const normalizeInner = (inner) =>
+    inner === `${agg.name}Response` ? `${agg.name}ResponseDto` : inner;
   const returnType = isCommand
     ? 'void'
-    : responseSchemaName
-      ? (isResponseArray ? `List<${responseSchemaName}Dto>` : `${responseSchemaName}Dto`)
-      : 'void';
+    : uc.returns
+      ? (() => {
+          const paged = /^Page\[(.+)\]$/.exec(uc.returns);
+          if (paged) return `PagedResponse<${normalizeInner(paged[1])}>`;
+          const list = /^List\[(.+)\]$/.exec(uc.returns);
+          if (list) return `List<${normalizeInner(list[1])}>`;
+          return normalizeInner(uc.returns);
+        })()
+      : responseSchemaName
+        ? (isResponseArray ? `List<${responseSchemaName}Dto>` : `${responseSchemaName}Dto`)
+        : 'void';
 
   // Build dispatchCall
   let dispatchCall;

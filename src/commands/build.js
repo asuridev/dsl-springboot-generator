@@ -14,7 +14,7 @@ const { generateValueObjects } = require('../generators/value-object-generator')
 const { generateAggregates } = require('../generators/aggregate-generator');
 const { generateJpaEntities } = require('../generators/jpa-entity-generator');
 const { generateRepositories } = require('../generators/repository-generator');
-const { generateApplicationLayer } = require('../generators/application-generator');
+const { generateApplicationLayer, generateProjections } = require('../generators/application-generator');
 const { generateOutboundHttpAdapters } = require('../generators/outbound-http-generator');
 const { generateControllerLayer } = require('../generators/controller-generator');
 const { generateMessagingLayer, generateSharedBrokerConfig, buildRabbitMQTopology, buildKafkaTopology } = require('../generators/messaging-generator');
@@ -250,8 +250,10 @@ async function buildCommand() {
     // ── 8. Per-BC application layer generation (SP-5) ──────────────────────
     const appSpinner = ora('Generating application layer…').start();
     for (const bcYaml of allBcYamls) {
+      await generateProjections(bcYaml, resolvedConfig, outputDir);
       const internalApiDocForApp = await readInternalApiYaml(bcYaml.bc);
-      await generateApplicationLayer(bcYaml, resolvedConfig, outputDir, internalApiDocForApp);
+      const publicApiDocForApp = await readOpenApiYaml(bcYaml.bc);
+      await generateApplicationLayer(bcYaml, resolvedConfig, outputDir, internalApiDocForApp, publicApiDocForApp);
     }
     appSpinner.succeed(`Application layer generated for ${allBcYamls.length} bounded context(s)`);
 

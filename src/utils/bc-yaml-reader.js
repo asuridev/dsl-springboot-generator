@@ -80,6 +80,15 @@ function validate(doc) {
     }
   }
 
+  // ── Projections ────────────────────────────────────────────────────────────
+  const projectionNames = new Set();
+  for (const proj of doc.projections || []) {
+    if (!proj.name) fail('A projection entry is missing required field "name".');
+    if (projectionNames.has(proj.name)) fail(`Duplicate projection name: "${proj.name}"`);
+    projectionNames.add(proj.name);
+    validateProperties(proj.properties, `projection ${proj.name}`);
+  }
+
   // ── 1. Referential integrity ───────────────────────────────────────────────
   for (const uc of useCases) {
     // rules must reference declared rule IDs
@@ -104,10 +113,11 @@ function validate(doc) {
       }
     }
 
-    // fkValidations notFoundError
+    // fkValidations error (new schema: fk.error; legacy: fk.notFoundError)
     for (const fk of uc.fkValidations || []) {
-      if (fk.notFoundError && !allErrorCodes.has(fk.notFoundError)) {
-        fail(`Use case "${uc.id}" fkValidation notFoundError "${fk.notFoundError}" not found in errors[].`);
+      const fkErrorCode = fk.error || fk.notFoundError;
+      if (fkErrorCode && !allErrorCodes.has(fkErrorCode)) {
+        fail(`Use case "${uc.id}" fkValidation error "${fkErrorCode}" not found in errors[].`);
       }
     }
   }
@@ -118,6 +128,35 @@ function validate(doc) {
       if (rule.errorCode && !allErrorCodes.has(rule.errorCode)) {
         fail(`domainRule "${rule.id}" errorCode "${rule.errorCode}" not found in errors[].`);
       }
+    }
+
+    // domainMethods[].emits must reference a published event (if not null)
+    for (const dm of agg.domainMethods || []) {
+      if (dm.emits && dm.emits !== 'null' && dm.emits !== null) {
+        if (!allEventNames.has(dm.emits)) {
+          fail(`domainMethod "${dm.name}" in aggregate "${agg.name}" emits "${dm.emits}" which is not declared in domainEvents.published.`);
+        }
+      }
+    }
+  }
+
+  // command UCs must reference a declared domainMethod
+  const aggByName = new Map((doc.aggregates || []).map((a) => [a.name, a]));
+  for (const uc of useCases) {
+    if (uc.type !== 'command' || !uc.method) continue;
+    const agg = aggByName.get(uc.aggregate);
+    if (!agg) continue;
+    const dm = (agg.domainMethods || []).find((m) => m.name === uc.method);
+    if (!dm) {
+      fail(`Use case "${uc.id}" references method "${uc.method}" which is not declared in aggregate "${agg.name}" domainMethods.`);
+    }
+  }
+
+  // query UCs with trigger.kind: http must declare uc.returns
+  for (const uc of useCases) {
+    if (uc.type !== 'query') continue;
+    if (uc.trigger && uc.trigger.kind === 'http' && !uc.returns) {
+      fail(`Use case "${uc.id}" (query, http) is missing required field "returns".`);
     }
   }
 
@@ -161,7 +200,7 @@ async function readBcYaml(bcName) {
   // Pre-process: method signatures like `method: create(x, y?): ReturnType` contain
   // ": " which YAML interprets as a mapping entry. Quote these values before parsing.
   const preprocessed = raw.replace(
-    /^(\s+(?:method|repositoryMethod|returns|signature):\s+)([^\n"'`#][^\n]*)$/gm,
+    /^(\s+(?:returns|signature):\s+)([^\n"'`#][^\n]*)$/gm,
     (match, prefix, value) => {
       if (value.startsWith('"') || value.startsWith("'")) return match;
       if (value.includes(': ') || value.includes('?')) {

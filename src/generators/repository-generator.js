@@ -291,6 +291,8 @@ function buildSearchQuery(methodName, jpaEntityName, aggregate) {
 function classifyMethod(method) {
   if (method.derivedFrom === 'implicit') return 'skip';
   if (method.name === 'findById' || method.name === 'save') return 'skip';
+  // 'delete(id)' is inherited from JpaRepository as deleteById — do not redeclare
+  if (method.name === 'delete' && (method.params || []).length === 1) return 'skip';
 
   // Spring Data derived: findByXxx with a single non-Pageable param
   if (/^findBy[A-Z]/.test(method.name)) {
@@ -740,6 +742,10 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
     return `return toDomain(jpaRepository.save(toJpa(${entityParam})));`;
   }
 
+  if (name === 'delete') {
+    return `jpaRepository.deleteById(${paramNames});`;
+  }
+
   if (methodReturnType === 'void') {
     return `jpaRepository.${name}(${paramNames});`;
   }
@@ -1009,7 +1015,9 @@ async function generateRepositories(bcYaml, config, outputDir) {
     }
 
     // Normalize methods — attach derivedFrom for classification
-    const normalizedMethods = (repoEntry.methods || []).map((m) => {
+    // queryMethods (list/page queries) + methods (findBy, save, delete, etc.) are both valid repo methods
+    const allMethods = [...(repoEntry.queryMethods || []), ...(repoEntry.methods || [])];
+    const normalizedMethods = allMethods.map((m) => {
       const normalized = normalizeMethod(m);
       return { ...normalized, derivedFrom: m.derivedFrom };
     });

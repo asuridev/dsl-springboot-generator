@@ -133,37 +133,58 @@ function detectStateTransition(ucId, aggregate, bcEnums) {
   return null;
 }
 
+// ─── Helper: build raise(new XxxEvent(...)) call string ────────────────────────
+// Returns the raise statement string, or null if the event is not found.
+function buildRaiseCall(eventName, publishedEvents, aggregate, methodParams) {
+  if (!eventName || !publishedEvents || publishedEvents.length === 0) return null;
+  const event = publishedEvents.find((e) => e.name === eventName);
+  if (!event) return null;
+
+  const aggregateCamelId = aggregate.name.charAt(0).toLowerCase() + aggregate.name.slice(1) + 'Id';
+  const aggregatePropNames = new Set((aggregate.properties || []).map((pr) => pr.name));
+  const methodParamNames = new Set((methodParams || []).map((p) => p.name));
+
+  const args = (event.payload || []).map((p) => {
+    if (p.name === aggregateCamelId) return 'this.getId()';
+    if (aggregatePropNames.has(p.name)) {
+      return `this.get${p.name.charAt(0).toUpperCase() + p.name.slice(1)}()`;
+    }
+    if (methodParamNames.has(p.name)) return p.name;
+    if (p.type === 'DateTime' || p.type === 'Instant') return 'Instant.now()';
+    return `null /* TODO: provide value for ${p.name} */`;
+  });
+  return `raise(new ${event.name}Event(${args.join(', ')}));`;
+}
+
 // ─── Helper: compute the body string for a business method ───────────────────
 function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents) {
-  const scaffoldBody =
-    `// TODO: implement business logic — ver ${bcName}-flows.md\n        throw new UnsupportedOperationException("Not implemented yet");`;
-
-  if (uc.implementation === 'scaffold') return scaffoldBody;
+  const rules = uc.rules || [];
+  const rulesComment = rules.length > 0 ? `\n        // Validate: ${rules.join(', ')}` : '';
+  const scaffoldBody = `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}`;
 
   const { name: methodName, params } = sig;
+
+  // ── Case 0: softDelete — always deterministic, overrides scaffold ─────────
+  if (methodName === 'softDelete' && aggregate.softDelete === true) {
+    return 'this.deletedAt = Instant.now();';
+  }
+
+  if (uc.implementation === 'scaffold') {
+    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
+    if (raiseCall) {
+      return `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}\n        ${raiseCall}`;
+    }
+    return scaffoldBody;
+  }
 
   // ── Case 1: state transition (no params, full, enum field) ───────────────
   if (params.length === 0) {
     const transition = detectStateTransition(uc.id, aggregate, bcEnums);
     if (transition) {
       let body = `this.${transition.statusField} = this.${transition.statusField}.transitionTo(${transition.enumType}.${transition.targetValue});`;
-      if (transition.emits && publishedEvents && publishedEvents.length > 0) {
-        const event = publishedEvents.find((e) => e.name === transition.emits);
-        if (event) {
-          const aggregateCamelId = aggregate.name.charAt(0).toLowerCase() + aggregate.name.slice(1) + 'Id';
-          const aggregatePropNames = new Set((aggregate.properties || []).map((pr) => pr.name));
-          const args = (event.payload || []).map((p) => {
-            if (p.name === aggregateCamelId) return 'this.getId()';
-            if (aggregatePropNames.has(p.name)) {
-              return `this.get${p.name.charAt(0).toUpperCase() + p.name.slice(1)}()`;
-            }
-            // Timestamp of occurrence — not a persisted aggregate field
-            if (p.type === 'DateTime' || p.type === 'Instant') return 'Instant.now()';
-            return `null /* TODO: provide value for ${p.name} */`;
-          });
-          body += `\n        raise(new ${event.name}Event(${args.join(', ')}));`;
-        }
-      }
+      const emitsName = sig.emits || transition.emits;
+      const raiseCall = buildRaiseCall(emitsName, publishedEvents, aggregate, params);
+      if (raiseCall) body += `\n        ${raiseCall}`;
       return body;
     }
     // No transition detected → scaffold
@@ -188,7 +209,10 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
         return true;
       });
       const ctorArgs = entityCreationParams.map((ep) => ep.name).join(', ');
-      return `this.${fieldName}.add(new ${entity.name}(${ctorArgs}));`;
+      let body = `this.${fieldName}.add(new ${entity.name}(${ctorArgs}));`;
+      const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
+      if (raiseCall) body += `\n        ${raiseCall}`;
+      return body;
     }
   }
 
@@ -203,7 +227,10 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
       const fieldName = toCamelCase(pluralizeWord(entity.name));
       const idParam = params[0].name;
       const varName = entity.name.charAt(0).toLowerCase() + entity.name.slice(1);
-      return `this.${fieldName}.removeIf(${varName} -> ${varName}.getId().equals(${idParam}));`;
+      let body = `this.${fieldName}.removeIf(${varName} -> ${varName}.getId().equals(${idParam}));`;
+      const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
+      if (raiseCall) body += `\n        ${raiseCall}`;
+      return body;
     }
   }
 
@@ -212,10 +239,19 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
     (aggregate.properties || []).some((prop) => prop.name === p.name)
   );
   if (allMatch) {
-    return params.map((p) => `this.${p.name} = ${p.name};`).join('\n        ');
+    let body = params.map((p) => `this.${p.name} = ${p.name};`).join('\n        ');
+    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
+    if (raiseCall) body += `\n        ${raiseCall}`;
+    return body;
   }
 
   // ── Fallback: scaffold ─────────────────────────────────────────────────────
+  {
+    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
+    if (raiseCall) {
+      return `// TODO: implement business logic — ver ${bcName}-flows.md\n        ${raiseCall}`;
+    }
+  }
   return scaffoldBody;
 }
 
@@ -475,37 +511,93 @@ async function generateAggregates(bcYaml, config, outputDir) {
         return { name: p.name, value };
       });
 
-    // ── 5. Collect business methods from useCases ──────────────────────────────
+    // ── 5. Collect business methods from domainMethods (NEW: explicit typed params) ─
     const seenMethods = new Set();
     const businessMethods = [];
+
+    let staticFactory = null;
+    let softDeleteUc = null; // UC with method: delete on a softDelete aggregate
 
     for (const uc of useCases) {
       if (uc.type !== 'command') continue;
       if (!uc.method) continue;
       if (uc.aggregate !== aggregate.name) continue;
+      if (seenMethods.has(uc.method)) continue;
+      seenMethods.add(uc.method);
 
-      const sig = parseMethodSignature(uc.method);
-      if (!sig) continue;
-      if (sig.name === 'create') continue; // handled by creation constructor
-      if (seenMethods.has(sig.name)) continue;
-      seenMethods.add(sig.name);
+      // ── Static factory: 'create' method with returns = aggregate name ────────
+      if (uc.method === 'create') {
+        const dmCreate = (aggregate.domainMethods || []).find((m) => m.name === 'create');
+        if (dmCreate && dmCreate.returns === aggregate.name) {
+          const factoryParams = (dmCreate.params || []).map((p) => ({
+            name: p.name,
+            javaType: resolveParamType(p.name, aggregate.properties, aggregate.entities, p.type, bcYaml),
+          }));
+          const factoryParamNames = new Set(factoryParams.map((p) => p.name));
+          // Constructor receives ALL creationParams; factory maps each one:
+          // — dm.params fields → pass argument directly
+          // — readOnly fields not in dm.params (e.g. slug) → null TODO for Phase 3
+          const ctorCallArgs = creationParams.map((p) =>
+            factoryParamNames.has(p.name) ? p.name : `null /* TODO: compute ${p.name} */`
+          ).join(', ');
+          const raiseCall = buildRaiseCall(dmCreate.emits, aggregatePublishedEvents, aggregate, dmCreate.params || []);
+          staticFactory = {
+            params: factoryParams,
+            ctorCallArgs,
+            raiseCall: raiseCall || null,
+            derivedFrom: `${uc.id} ${uc.name}`,
+            scaffoldRulesComment: uc.implementation === 'scaffold' && (uc.rules || []).length > 0
+              ? `// TODO: implement business logic — ver ${bc}-flows.md\n        // Validate: ${(uc.rules || []).join(', ')}`
+              : null,
+          };
+        }
+        continue;
+      }
 
-      // Resolve Java types for each parameter
-      const params = sig.params.map((p) => ({
+      // Look up the domainMethod definition for explicit typed params
+      const dm = (aggregate.domainMethods || []).find((m) => m.name === uc.method);
+      if (!dm) continue; // defensive — should have been caught by bc-yaml-reader validation
+
+      // Resolve Java types for each parameter using explicit dm.params[].type as typeHint
+      const params = (dm.params || []).map((p) => ({
         name: p.name,
-        javaType: resolveParamType(p.name, aggregate.properties, aggregate.entities, p.typeHint, bcYaml),
-        optional: p.optional,
+        javaType: resolveParamType(p.name, aggregate.properties, aggregate.entities, p.type, bcYaml),
+        optional: false,
       }));
 
-      const returnType = resolveReturnType(sig.returnType, aggregate.name);
-      const body = computeMethodBody(uc, sig, aggregate, bcEnums, bc, aggregatePublishedEvents);
+      // ── When aggregate has softDelete: true and the method is "delete",
+      //    skip generating delete() — the auto-inject below will emit softDelete() instead.
+      if (dm.name === 'delete' && aggregate.softDelete === true) {
+        softDeleteUc = uc; // carry rules and derivedFrom to the auto-inject block
+        continue;
+      }
+
+      const returnType = resolveReturnType(dm.returns, aggregate.name);
+      // computeMethodBody receives a sig-like object with {name, params, emits}
+      const sigForBody = { name: dm.name, params: (dm.params || []).map((p) => ({ name: p.name, optional: false, typeHint: p.type })), emits: dm.emits || null };
+      const body = computeMethodBody(uc, sigForBody, aggregate, bcEnums, bc, aggregatePublishedEvents);
 
       businessMethods.push({
-        name: sig.name,
+        name: dm.name,
         params,
         returnType,
         derivedFrom: `${uc.id} ${uc.name}`,
         body,
+      });
+    }
+
+    // ── Auto-inject softDelete() when aggregate has softDelete: true but no UC covers it
+    if (aggregate.softDelete && !seenMethods.has('softDelete')) {
+      const deleteRules = softDeleteUc ? (softDeleteUc.rules || []) : [];
+      const softDeleteBody = deleteRules.length > 0
+        ? `// TODO: implement business logic — ver ${bc}-flows.md\n        // Validate: ${deleteRules.join(', ')}\n        this.deletedAt = Instant.now();`
+        : 'this.deletedAt = Instant.now();';
+      businessMethods.push({
+        name: 'softDelete',
+        params: [],
+        returnType: 'void',
+        derivedFrom: softDeleteUc ? `${softDeleteUc.id} ${softDeleteUc.name}` : 'softDelete: true',
+        body: softDeleteBody,
       });
     }
 
@@ -527,6 +619,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
       childEntities,
       creationParams,
       autoInits,
+      staticFactory,
       businessMethods,
     };
 
