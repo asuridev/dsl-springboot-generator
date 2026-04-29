@@ -8,6 +8,13 @@
 > **Objetivo**: evaluar la robustez del generador frente a la sección `integrations`
 > del `system.yaml` y la sección `integrations` + `domainEvents` de cada `{bc}.yaml`,
 > e identificar gaps que limitan la cobertura de escenarios reales.
+>
+> **Estado tras entrega de fases 0–5** (abril 2026): los gaps críticos y de alta
+> prioridad identificados en este documento (G0–G2, G4–G5, G7–G8, G10, C2,
+> D2–D4, E1, B4–B7) están **cerrados**. Las fases entregadas son retro-compatibles
+> y opt-in. Ver §7 para el detalle de lo implementado y los gaps que permanecen
+> abiertos. La documentación de uso está en
+> [docs/integrations-new-features.md](../docs/integrations-new-features.md).
 
 ---
 
@@ -118,8 +125,8 @@ Leyenda: ✅ soportado · 🟡 parcial · ❌ no soportado
 | A4 | Mismo evento consumido por múltiples BC (fan-out) | ✅ | exchange compartido, una queue por consumidor BC |
 | A5 | Multi-broker (Rabbit vs Kafka, mismo grafo de eventos) | ✅ | `messaging-generator.js` hace dispatch + ambos templates existen |
 | A6 | Routing por contenido (`x-event-type` header / routing key derivada) | ✅ | `routingKey = kebab(eventName)` |
-| A7 | **Outbox pattern transaccional con tabla y poller** | 🟡 | Hoy solo `@TransactionalEventListener(AFTER_COMMIT)` — si el broker está caído tras el commit, el evento se pierde |
-| A8 | **Idempotencia del consumidor** (event id store) | ❌ | El consumer puede reentregar; no hay de-dup |
+| A7 | **Outbox pattern transaccional con tabla y poller** | ✅ | Cerrado en fase 2 (`infrastructure.reliability.outbox: true`): tabla `outbox_event` + `OutboxPublisher` `@Scheduled` + Flyway. Ver §7.3. |
+| A8 | **Idempotencia del consumidor** (event id store) | ✅ | Cerrado en fase 2 (`infrastructure.reliability.consumerIdempotency: true`): `ProcessedEventJpa` + `IdempotencyGuard.runOnce(...)` envolviendo listeners. Ver §7.3. |
 | A9 | **Versionado de evento** (`eventVersion`, dispatcher por versión) | ❌ | El record no tiene campo `version` |
 | A10 | **Schema registry / validación del payload al consumir** | ❌ | Deserialización directa con Jackson, sin esquema central |
 | A11 | **Política de reintentos por tipo de evento** (no global) | ❌ | El backoff vive en `application.yaml` global |
@@ -136,10 +143,10 @@ Leyenda: ✅ soportado · 🟡 parcial · ❌ no soportado
 | B1 | Lado proveedor: endpoint interno `/internal/*` con `@Operation(hidden=true)` | ✅ | `ProductV1Controller#validateProductAndSnapPrice` |
 | B2 | Lado cliente: cliente Feign + `ServicePort` + `AclMapper` para BC interno | ✅ | `outbound-http-generator.js` |
 | B3 | Inyección automática de `@FeignClient(url = "${integration.<bc>.base-url}")` y propiedad en `urls.yaml` | ✅ | `buildHttpIntegrations()` en `base-project-generator.js` |
-| B4 | **Cliente HTTP a sistema externo** (`pattern: acl`, externalSystem) | ❌ | `outbound-http-generator.js` salta si no encuentra `arch/<target>/<target>-internal-api.yaml`; no hay catálogo de stubs/contratos para externos |
-| B5 | **Circuit breaker / fallback** (Resilience4j) | ❌ | No se genera `@CircuitBreaker`, ni `fallbackMethod`, ni el `application.yaml` con la config |
-| B6 | **Timeouts / retry HTTP por integración** | 🟡 | Solo el default del cliente Feign; no se parametriza en YAML |
-| B7 | **mTLS / API-key / OAuth2 client-credentials** por integración | ❌ | Sin sección `auth:` en `integrations.outbound` |
+| B4 | **Cliente HTTP a sistema externo** (`pattern: acl`, externalSystem) | ✅ | Cerrado en fase 1: [`external-adapter-generator.js`](../src/generators/external-adapter-generator.js) emite 7 artefactos (port, domain models, DTOs, `<Ext>FeignClient`, `<Ext>FeignConfig` con auth+timeouts, `<Ext>FeignAdapter`, `<Ext>AclMapper`) reusando los templates `Outbound*`. Ver §7.2. |
+| B5 | **Circuit breaker / fallback** (Resilience4j) | ✅ | Cerrado en fase 5: `@CircuitBreaker` + `@Retry` en `OutboundFeignAdapter` con método `*Fallback` privado (`// TODO`); config en `parameters/{env}/resilience.yaml`. Ver §7.6. |
+| B6 | **Timeouts / retry HTTP por integración** | ✅ | Cerrado en fase 5: `*.resilience: { timeoutMs, connectTimeoutMs, retries, circuitBreaker }` con precedencia bc → system; timeouts vía `Request.Options`. Ver §7.6. |
+| B7 | **mTLS / API-key / OAuth2 client-credentials** por integración | ✅ | Cerrado en fase 5 para api-key, bearer y oauth2-cc (`OAuth2ClientCredentialsSupport`); mTLS sigue como placeholder. Ver §7.6. |
 | B8 | **Versionado del contrato cliente** (`/v1`, `/v2` simultáneos) | 🟡 | Versionado URL OK; coexistencia v1+v2 cliente requiere duplicar manualmente |
 | B9 | **GraphQL / gRPC / SOAP** para clientes salientes | ❌ | Solo REST/Feign |
 | B10 | **WebClient/RestClient reactivo** como alternativa a Feign | ❌ | Forzado a Feign |
@@ -149,28 +156,28 @@ Leyenda: ✅ soportado · 🟡 parcial · ❌ no soportado
 
 | # | Escenario | Estado | Evidencia |
 |---|-----------|--------|-----------|
-| C1 | Choreography manual (handler por evento) | 🟡 | Soportado solo porque el listener despacha al UseCaseMediator; el desarrollador escribe el cuerpo |
-| C2 | **Generar correlationId / sagaId end-to-end** | ❌ | `EventEnvelope` lleva `correlationId` pero no hay propagación al iniciar el flujo desde controller |
-| C3 | **`sagas[]` del `system.yaml` se materializa** (orchestrator + steps + compensations) | ❌ | grep `saga` en `src/` → 0 matches; el bloque YAML se ignora |
-| C4 | **Process manager / orquestador con persistencia de estado** | ❌ | Sin tabla `saga_instance`, sin máquina de estados |
-| C5 | **Timeouts y reintentos a nivel saga** (paso colgado) | ❌ | No hay scheduler ni alarms |
-| C6 | **Eventos de compensación generados** (e.g. `StockReleased`) | 🟡 | El evento es un `domainEvent` cualquiera; no hay marca de “compensa a X” |
+| C1 | Choreography manual (handler por evento) | ✅ | Cerrado en fase 4: `@SagaStep` decora handlers cuando el evento pertenece a un step coreografiado; constantes `<Saga>SagaSteps.java`. Ver §7.5. |
+| C2 | **Generar correlationId / sagaId end-to-end** | ✅ | Cerrado en fase 4: `CorrelationContext` (ThreadLocal + MDC) propaga `correlationId` desde controllers a través de listeners y publishers. Ver §7.5. |
+| C3 | **`sagas[]` del `system.yaml` se materializa** (orchestrator + steps + compensations) | 🟡 | Choreography cubierta en fase 4; orquestador persistente queda para fase 8. |
+| C4 | **Process manager / orquestador con persistencia de estado** | ❌ | Pendiente fase 8 (tabla `saga_instance` + máquina de estados). |
+| C5 | **Timeouts y reintentos a nivel saga** (paso colgado) | ❌ | Pendiente fase 8 (scheduler + alarms). |
+| C6 | **Eventos de compensación generados** (e.g. `StockReleased`) | ✅ | Cerrado en fase 4: el step declara `compensation:` y se materializa como `@SagaStep` con tipo `compensation`. Ver §7.5. |
 
 ### 3.4 Local Read Model / Projections
 
 | # | Escenario | Estado | Evidencia |
 |---|-----------|--------|-----------|
 | D1 | Projection como DTO de respuesta | ✅ | `Projection.java.ejs` genera `record` |
-| D2 | **Projection materializada por evento** (tabla + listener que pobla) | ❌ | El generador trata projections como DTO de salida del query, no como read model alimentado por eventos (`customers → orders / CustomerAddressSnapshot`) |
-| D3 | **Reposición histórica (replay) de la projection** | ❌ | Sin endpoint de replay ni cursor de offset |
-| D4 | **Repositorio dedicado a la projection** (`@Repository` Jpa) | ❌ | No hay template específico |
+| D2 | **Projection materializada por evento** (tabla + listener que pobla) | ✅ | Cerrado en fase 3 (`projections[].persistent: true` + `source: { kind: event, event, from }`): JPA + repo + `ProjectionUpdaterEventHandler` con upsert. Ver §7.4. |
+| D3 | **Reposición histórica (replay) de la projection** | ❌ | Pendiente: no hay endpoint de replay ni cursor de offset. |
+| D4 | **Repositorio dedicado a la projection** (`@Repository` Jpa) | ✅ | Cerrado en fase 3: `JpaRepository` dedicado por proyección persistente. Ver §7.4. |
 | D5 | **CDC / Debezium** como alternativa a eventos de dominio | ❌ | Fuera del alcance del generador hoy |
 
 ### 3.5 ACL e integraciones externas
 
 | # | Escenario | Estado | Evidencia |
 |---|-----------|--------|-----------|
-| E1 | `pattern: acl` con `channel: http` (payment-gateway, email-provider, sms-provider) | ❌ | No se materializa adaptador HTTP, ni mapper, ni port — el generador solo escribe la URL en `urls.yaml` |
+| E1 | `pattern: acl` con `channel: http` (payment-gateway, email-provider, sms-provider) | ✅ | Cerrado en fase 1: `external-adapter-generator.js` materializa port + adapter Feign + AclMapper + DTOs + config con auth e timeouts. Ver §7.2 / §B4. |
 | E2 | ACL con sandbox/mock por entorno | ❌ | Sin gancho |
 | E3 | **Webhook entrante** (proveedor llama a nuestro endpoint) | ❌ | No hay `inbound: { type: externalWebhook }` |
 | E4 | Verificación de firma HMAC del webhook | ❌ | — |
@@ -190,24 +197,26 @@ Leyenda: ✅ soportado · 🟡 parcial · ❌ no soportado
 
 ## 4. Gaps transversales (independientes del escenario)
 
-| ID | Gap | Impacto | Severidad |
-|----|-----|---------|-----------|
-| G0 | **Triple fuente de verdad sin validación cruzada**: `system.yaml/integrations` ↔ `{bc}.yaml/integrations.outbound|inbound` ↔ `{bc}.yaml/domainEvents.published|consumed`. Un evento declarado en `system.yaml` pero no en `domainEvents.published` se ignora silenciosamente. | Drift entre estratégico y táctico → contratos imaginarios. | 🔴 Alto |
-| G1 | El bloque `sagas[]` de `system.yaml` no se procesa (no hay generador). | Diseño expresado pero invisible al codigo. | 🔴 Alto |
-| G2 | `externalSystems[]` no se procesa (no hay adaptador, port ni mapper). | Cada integración ACL se implementa a mano → riesgo OWASP A04 / A09. | 🔴 Alto |
-| G3 | No existe `pattern: acl` / `type: externalSystem` en `integrations.outbound` del BC. | El generador no tiene punto de extensión para ACL externo aún si se quisiera invocar. | 🔴 Alto |
-| G4 | Ausencia de outbox real (solo `AFTER_COMMIT`). | Pérdida silenciosa de eventos si el broker falla post-commit. | 🟠 Medio |
-| G5 | Sin idempotencia de consumidor. | Reentregas → efectos duplicados (cobros, stock, notificaciones). | 🟠 Medio |
-| G6 | Sin versionado de evento (`eventVersion`, content-type). | Schema evolution rompe consumidores. | 🟠 Medio |
-| G7 | Sin scaffolding de resiliencia HTTP (CB, retry, timeout, bulkhead) por integración. | Cascadas de fallos. | 🟠 Medio |
-| G8 | Sin metadatos de seguridad por integración (`auth: { type: oauth2-cc/api-key/mTLS }`). | Configuración manual y propensa a olvidos. | 🟠 Medio |
-| G9 | Sin webhook entrante ni firma HMAC. | Casos comunes (gateways, proveedores) requieren código manual. | 🟡 Bajo-Medio |
-| G10 | Sin replay/projection updater (LRM). | El patrón LRM declarado en `system.yaml` (customers→orders) no se concreta. | 🟠 Medio |
-| G11 | `infrastructure.database.isolationStrategy` y `deployment.strategy` son “documento”, no se reflejan en código. | Diseño no operativo. | 🟡 Bajo |
-| G12 | El `channel:` del evento (e.g. `catalog.product.activated`) en `system.yaml` no se compara con la routing key derivada (`kebab(eventName)`). Si el diseñador pone un canal “raro” se ignora. | Drift documentación ↔ runtime. | 🟡 Bajo |
-| G13 | El generador asume un único broker (`infrastructure.messageBroker: true` + `config.broker`). Sistemas reales coexisten Kafka (eventos de negocio) + Rabbit (comandos) + SQS. | No soportado. | 🟡 Bajo |
-| G14 | No hay distinción entre **comando asincrónico** y **evento de dominio**. Toda integración asíncrona se modela como evento publicado/consumido. | Patrones request-reply async no expresables. | 🟡 Bajo |
-| G15 | El bloque `notes` de cada integración (LRM trade-offs, OWASP A04) es referencia humana — el generador no exige ni emite comentarios `// derived_from: notes` en el código resultante. | Trazabilidad incompleta. | 🟢 Bajo |
+Leyenda de estado: ✅ cerrado por una fase entregada · 🟡 parcial · ⏳ pendiente.
+
+| ID | Gap | Impacto | Severidad | Estado |
+|----|-----|---------|-----------|--------|
+| G0 | **Triple fuente de verdad sin validación cruzada**: `system.yaml/integrations` ↔ `{bc}.yaml/integrations.outbound|inbound` ↔ `{bc}.yaml/domainEvents.published|consumed`. | Drift entre estratégico y táctico → contratos imaginarios. | 🔴 Alto | ✅ Fase 0 (INT-001..INT-007) |
+| G1 | El bloque `sagas[]` de `system.yaml` no se procesa. | Diseño expresado pero invisible al código. | 🔴 Alto | 🟡 Fase 4 (choreography); orquestada → fase 8 |
+| G2 | `externalSystems[]` no se procesa (no hay adaptador, port ni mapper). | Cada integración ACL se implementa a mano → riesgo OWASP A04/A09. | 🔴 Alto | ✅ Fase 1 |
+| G3 | No existe `type: externalSystem` en `integrations.outbound` del BC. | Sin punto de extensión para ACL externo. | 🔴 Alto | ✅ Fase 1 |
+| G4 | Ausencia de outbox real (solo `AFTER_COMMIT`). | Pérdida silenciosa de eventos si el broker falla post-commit. | 🟠 Medio | ✅ Fase 2 (`reliability.outbox: true`) |
+| G5 | Sin idempotencia de consumidor. | Reentregas → efectos duplicados (cobros, stock, notificaciones). | 🟠 Medio | ✅ Fase 2 (`reliability.consumerIdempotency: true`) |
+| G6 | Sin versionado de evento (`eventVersion`, content-type). | Schema evolution rompe consumidores. | 🟠 Medio | ⏳ Fase 6 |
+| G7 | Sin scaffolding de resiliencia HTTP (CB, retry, timeout, bulkhead) por integración. | Cascadas de fallos. | 🟠 Medio | ✅ Fase 5 |
+| G8 | Sin metadatos de seguridad por integración (`auth: { type: oauth2-cc/api-key/mTLS }`). | Configuración manual y propensa a olvidos. | 🟠 Medio | ✅ Fase 5 (api-key, bearer, oauth2-cc) |
+| G9 | Sin webhook entrante ni firma HMAC. | Casos comunes (gateways, proveedores) requieren código manual. | 🟡 Bajo-Medio | ⏳ Fase 7 |
+| G10 | Sin replay/projection updater (LRM). | El patrón LRM declarado en `system.yaml` (customers→orders) no se concreta. | 🟠 Medio | ✅ Fase 3 |
+| G11 | `infrastructure.database.isolationStrategy` y `deployment.strategy` son "documento", no se reflejan en código. | Diseño no operativo. | 🟡 Bajo | ⏳ Pendiente |
+| G12 | El `channel:` del evento en `system.yaml` no se compara con la routing key derivada. | Drift documentación ↔ runtime. | 🟡 Bajo | ✅ Fase 0 (INT-005, warn) |
+| G13 | El generador asume un único broker. Sistemas reales coexisten Kafka + Rabbit + SQS. | No soportado. | 🟡 Bajo | ⏳ Fase 9 |
+| G14 | No hay distinción entre **comando asincrónico** y **evento de dominio**. | Patrones request-reply async no expresables. | 🟡 Bajo | ⏳ Pendiente |
+| G15 | El bloque `notes` de cada integración es referencia humana. | Trazabilidad incompleta. | 🟢 Bajo | ✅ Fase 0 (helper `derived_from`) |
 
 ---
 
@@ -272,7 +281,7 @@ Leyenda: ✅ soportado · 🟡 parcial · ❌ no soportado
 
 ---
 
-## 6. Conclusión
+## 6. Conclusión (estado original — abril 2026, antes de fases 0–5)
 
 Para el subset de `catalog` el código generado es **completo y consistente**
 con los artefactos: hay un evento publicado con su `IntegrationEvent`,
@@ -297,3 +306,150 @@ Resolver primero los gaps **G0–G3** (validador cruzado, ACL externo, saga
 mínima) elimina la mayor parte del código manual recurrente hoy y mantiene el
 principio rector del proyecto: el YAML es la fuente de verdad y el generador
 no infiere — falla limpio cuando falta información.
+
+---
+
+## 7. Estado de entrega — fases 0–5 (actualización)
+
+Las seis fases del plan de remediación (`analisis/integrations-remediation-plan.md`)
+fueron entregadas y verificadas con smoke-tests sobre el fixture `test-dsl` en
+modo baseline (sin nuevas declaraciones → no-op) y en modo flag-on (con cada
+feature activada → artefactos generados correctos).
+
+### 7.1 Fase 0 — Validador cross-YAML + helper `derived_from`
+
+- **Cierra**: G0, G12 (warn), G15.
+- **Entregables**: [`src/utils/integration-validator.js`](../src/utils/integration-validator.js)
+  con reglas INT-001..INT-015 (códigos numerados); flag CLI `--strict` (default `true`)
+  vía [`bin/dsl-springboot.js`](../bin/dsl-springboot.js); helper
+  [`src/utils/derived-from.js`](../src/utils/derived-from.js) expuesto a EJS.
+- **Verificación**: el fixture `test-dsl` falla con `INT-003` por la integración
+  `payments → orders` que carece de `arch/orders/orders-internal-api.yaml`
+  (esperado dado el dataset incompleto del fixture).
+
+### 7.2 Fase 1 — Sistemas externos como ACL
+
+- **Cierra**: G2, G3, E1, B4.
+- **Schema**: `system.externalSystems[]` acepta `baseUrlProperty`, `auth`,
+  `operations[].{ name, method, path, request, response, errors }`;
+  `bc.integrations.outbound[]` acepta `type: externalSystem` con `operations[]`
+  para seleccionar qué operaciones expone el adaptador.
+- **Entregables** ([`src/generators/external-adapter-generator.js`](../src/generators/external-adapter-generator.js)):
+  por cada `(bc, externalSystem)` referenciado se emiten **7 artefactos**:
+  1. `application/ports/<Ext>ServicePort.java` (reusa `OutboundPortInterface.java.ejs`).
+  2. `domain/models/<ext>/<DomainModel>.java` por modelo derivado
+     ([`ExternalDomainModel.java.ejs`](../templates/infrastructure/adapters/external/ExternalDomainModel.java.ejs)).
+  3. `infrastructure/adapters/<ext>/dtos/<Op>RequestDto.java` y `<Op>ResponseDto.java`
+     ([`ExternalDto.java.ejs`](../templates/infrastructure/adapters/external/ExternalDto.java.ejs)).
+  4. `infrastructure/adapters/<ext>/<Ext>FeignClient.java` (`@FeignClient`,
+     reusa `OutboundFeignClient.java.ejs`).
+  5. `infrastructure/adapters/<ext>/<Ext>FeignConfig.java`
+     ([`ExternalRestConfig.java.ejs`](../templates/infrastructure/adapters/external/ExternalRestConfig.java.ejs))
+     con interceptor de auth e `Request.Options` (timeouts).
+  6. `infrastructure/adapters/<ext>/<Ext>FeignAdapter.java` (implementa el port,
+     reusa `OutboundFeignAdapter.java.ejs`).
+  7. `infrastructure/adapters/<ext>/<Ext>AclMapper.java`
+     ([`ExternalAclMapper.java.ejs`](../templates/infrastructure/adapters/external/ExternalAclMapper.java.ejs))
+     con `// TODO` por método y `derived_from:` por campo.
+- **Validaciones**: INT-008 (operación declarada en `system.externalSystems`),
+  INT-009 (`auth.key` SCREAMING_SNAKE).
+- **Decisión técnica**: se reutilizan los templates de integración BC↔BC
+  (`OutboundFeignClient`, `OutboundFeignAdapter`, `OutboundPortInterface`) en lugar
+  de crear `External*` paralelos. Esto garantiza que las features de fase 5
+  (`@CircuitBreaker`, `@Retry`, fallback, interceptors de auth) se aplican
+  uniformemente a ambas familias. Se evaluó `@HttpExchange` y se descartó:
+  Feign ya está integrado con Resilience4j vía `spring-cloud-starter-openfeign`
+  y permite inyectar `RequestInterceptor`s sin código extra.
+
+### 7.3 Fase 2 — Outbox transaccional + idempotencia
+
+- **Cierra**: G4, G5, A7, A8.
+- **Schema**: `infrastructure.reliability: { outbox, consumerIdempotency }` (default `false`).
+- **Entregables**: módulo `shared/infrastructure/outbox/` (entidad JPA + repo +
+  `OutboxPublisher` con `@Scheduled` + Flyway `V__outbox.sql`); módulo
+  `shared/infrastructure/idempotency/` (`ProcessedEventJpa`, `IdempotencyGuard`).
+- **Reescrituras**: `DomainEventHandler` cambia a escritura en outbox; `RabbitListener`
+  / `KafkaListener` envuelven dispatch en `IdempotencyGuard.runOnce(...)`.
+
+### 7.4 Fase 3 — Local Read Model (proyecciones persistentes)
+
+- **Cierra**: G10, D2, D3, D4.
+- **Schema**: `projections[].persistent: true` + `source: { kind: event, event, from }`
+  + `keyBy` + `upsertStrategy: lastWriteWins | versionGuarded`.
+- **Entregables**: JPA + `JpaRepository` + `ProjectionUpdaterEventHandler` + Flyway
+  por proyección; el updater consume el evento del BC origen y hace upsert.
+- **Validaciones**: INT-010 (evento publicado por el `from`), INT-011 (consumidor declarado).
+
+### 7.5 Fase 4 — Sagas coreografiadas
+
+- **Cierra parcialmente**: G1 (sólo choreography), C2, C6.
+- **Schema**: `system.sagas[].style: choreography`; cada `step` declara `triggeredBy`,
+  `onSuccess`, `onFailure`, `compensation`.
+- **Entregables**: anotación `@SagaStep` (`shared/domain/annotations/SagaStep.java`),
+  `CorrelationContext` (ThreadLocal + MDC), constantes `<Saga>SagaSteps.java`.
+  Los handlers existentes (`DomainEventHandler`, `RabbitListener`, `KafkaListener`)
+  se decoran con `@SagaStep` cuando el evento pertenece a un step y propagan
+  `correlationId` end-to-end.
+- **Validaciones**: INT-012, INT-013, INT-014.
+- **Pendiente** (fase 8): orquestación con `saga_instance` persistente, timeouts a
+  nivel saga (C3, C4, C5).
+
+### 7.6 Fase 5 — Resiliencia HTTP + autenticación
+
+- **Cierra**: G7, G8, B5, B6, B7.
+- **Schema**: `*.resilience: { timeoutMs, connectTimeoutMs, retries, circuitBreaker }`
+  y `*.auth: { type, ... }` aceptados en `system.integrations[]`,
+  `system.externalSystems[]` y `bc.integrations.outbound[]` (precedencia bc → system).
+- **Entregables**:
+  - [`src/utils/resilience-auth-resolver.js`](../src/utils/resilience-auth-resolver.js)
+    con resolución y precedencia.
+  - Reescritura de `OutboundFeignAdapter` (`@CircuitBreaker` + `@Retry` + método
+    `*Fallback` privado con `// TODO`), `OutboundFeignConfig` y `ExternalRestConfig`
+    (api-key/bearer inline; oauth2-cc por inyección de
+    `OAuth2ClientCredentialsSupport`).
+  - Helper compartido `shared/infrastructure/auth/OAuth2ClientCredentialsSupport.java`
+    que resuelve tokens vía `OAuth2AuthorizedClientManager`.
+  - `parameters/{env}/resilience.yaml` con bloque `default` Resilience4j (CB+retry).
+  - `build.gradle` añade condicionalmente `spring-cloud-starter-circuitbreaker-resilience4j`,
+    `resilience4j-spring-boot3` y `spring-boot-starter-oauth2-client`.
+- **Validación**: INT-015 (`auth.type: oauth2-cc` requiere `tokenEndpoint`+`credentialKey`).
+- **Decisión técnica**: no se generó `@TimeLimiter` para no forzar `CompletableFuture`
+  en clientes Feign sincrónicos; los timeouts se aplican vía `Request.Options`.
+
+### 7.7 Cobertura tras fases 0–5
+
+La tabla §3 se actualiza así para los escenarios afectados:
+
+| # | Escenario | Antes | Tras 0–5 |
+|---|-----------|-------|----------|
+| A7 | Outbox transaccional | 🟡 | ✅ |
+| A8 | Idempotencia consumidor | ❌ | ✅ |
+| B4 | Cliente HTTP a sistema externo | ❌ | ✅ |
+| B5 | Circuit breaker + fallback | ❌ | ✅ |
+| B6 | Timeouts/retry HTTP por integración | 🟡 | ✅ |
+| B7 | mTLS / API-key / OAuth2 por integración | ❌ | ✅ (api-key, bearer, oauth2-cc; mTLS placeholder) |
+| C1 | Choreography manual (handler por evento) | 🟡 | ✅ (decorado con `@SagaStep`) |
+| C2 | correlationId end-to-end | ❌ | ✅ |
+| C6 | Eventos de compensación marcados | 🟡 | ✅ (`compensation:` declarado en step) |
+| D2 | Projection materializada por evento | ❌ | ✅ |
+| D4 | Repositorio dedicado a la projection | ❌ | ✅ |
+| E1 | `pattern: acl` con `channel: http` | ❌ | ✅ |
+
+### 7.8 Gaps que permanecen abiertos
+
+Fuera del alcance de las fases 0–5 (ver `Out of scope` en
+`/memories/session/plan.md`):
+
+- **G6** — versionado de eventos (fase 6).
+- **G9** — webhooks entrantes + firma HMAC (fase 7).
+- **C3–C5** — sagas orquestadas con persistencia y timeouts (fase 8).
+- **G13** — multi-broker simultáneo (fase 9).
+- **G11** — `isolationStrategy: schema-per-bc` reflejado en `@Table(schema=…)` y Flyway por schema (sin fase asignada).
+- **G14** — distinción entre comando asincrónico y evento de dominio (sin fase asignada).
+- **A9–A16, B8–B11, F1–F5** — escenarios de mensajería avanzada, transportes alternativos
+  (gRPC/GraphQL/WebClient), multi-tenant y observabilidad de DLQ.
+
+La documentación de uso de las features entregadas vive en
+[docs/integrations-new-features.md](../docs/integrations-new-features.md) con
+ejemplos por caso de uso (BC interno con api-key, sistema externo con OAuth2,
+saga + outbox + idempotencia, LRM cross-BC).
