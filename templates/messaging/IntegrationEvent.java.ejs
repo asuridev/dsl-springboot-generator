@@ -25,19 +25,28 @@ import java.time.LocalDateTime;
 <% } %><% if (needsList) { %>import java.util.List;
 <% } %><% customTypes.forEach(imp => { %>import <%= imp %>;
 <% }); %><% listInnerImports.forEach(imp => { %>import <%= imp %>;
-<% }); %>
+<% }); %><% if (typeof metadataEnabled !== 'undefined' && metadataEnabled) { %>import <%= packageName %>.shared.domain.EventMetadata;
+<% } %>
 /**
  * Integration Event — broker-side projection of the {@link <%= packageName %>.<%= moduleName %>.domain.events.<%= eventName %>Event} domain event.
- *
+<% if (typeof description !== 'undefined' && description) { %> *
+<% description.split(/\n+/).forEach(function(line) { %> * <%= line.trim() %>
+<% }); %><% } %> *
  * Intentionally decoupled from the domain event so that changes in broker
  * technology or serialization format never affect the domain model.
- * derived_from: domainEvents.published.<%= eventName %>
+<% if (typeof channel !== 'undefined' && channel) { %> *
+ * channel: <%= channel %>
+<% } %><% if (typeof eventVersion !== 'undefined') { %> * version: <%= eventVersion %>
+<% } %> * derived_from: domainEvents.published.<%= eventName %>
  */
 public record <%= integrationEventClassName %>(
-<% if (eventFields && eventFields.length > 0) { %>
-<% eventFields.forEach((field, idx) => { %>  <%- field.javaType %> <%= field.name %><%= idx < eventFields.length - 1 ? ',' : '' %>
+<% if (typeof metadataEnabled !== 'undefined' && metadataEnabled) { %>  EventMetadata metadata<% if (eventFields && eventFields.length > 0) { %>,<% } %>
+<% } %><% if (eventFields && eventFields.length > 0) { %>
+<% eventFields.forEach((field, idx) => { %><% if (field.description) { %>  /** <%= field.description.replace(/\s+/g, ' ').trim() %> */
+<% } %>  <%- field.javaType %> <%= field.name %><%= idx < eventFields.length - 1 ? ',' : '' %>
 <% }); %>
-<% } else { %>
+<% } else if (!metadataEnabled) { %>
   // TODO: Add event fields
 <% } %>
 ) {}
+

@@ -258,6 +258,12 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
     { packageName }
   );
 
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'shared', 'domain', 'EventMetadata.java.ejs'),
+    path.join(sharedDomainDir, 'EventMetadata.java'),
+    { packageName }
+  );
+
   // ── Shared: ErrorResponse ─────────────────────────────────────────────────
 
   const errorMsgDir = path.join(javaMainDir, 'shared', 'domain', 'errorMessage');

@@ -4,6 +4,11 @@ import <%= packageName %>.<%= moduleName %>.application.events.<%= event.integra
 <% }); %>
 import <%= packageName %>.<%= moduleName %>.application.ports.MessageBroker;
 import <%= packageName %>.shared.infrastructure.eventEnvelope.EventEnvelope;
+<% const _kBrokerNeedsHeaders = events.some(e => (e.headers && e.headers.length > 0) || e.partitionKey); %>
+<% if (_kBrokerNeedsHeaders) { %>import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.header.internals.RecordHeader;
+import java.nio.charset.StandardCharsets;
+<% } %>
 import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -34,7 +39,22 @@ public class <%= modulePascalCase %>KafkaMessageBroker implements MessageBroker 
       event,
       MDC.get("correlationId")
     );
+<% if (event.partitionKey) { %>
+    // derived_from: domainEvents.published.<%= event.name %>.broker.partitionKey=<%= event.partitionKey %>
+    String partitionKey = String.valueOf(event.<%= event.partitionKey %>());
+<% } %>
+<% if (event.headers && event.headers.length > 0) { %>
+    // derived_from: domainEvents.published.<%= event.name %>.broker.headers
+    ProducerRecord<String, Object> record = new ProducerRecord<>(<%= event.topicNameCamel %>Topic, <% if (event.partitionKey) { %>partitionKey<% } else { %>null<% } %>, envelope);
+<% event.headers.forEach(h => { %>
+    record.headers().add(new RecordHeader("<%= h.key %>", "<%= h.value %>".getBytes(StandardCharsets.UTF_8)));
+<% }); %>
+    kafkaTemplate.send(record);
+<% } else if (event.partitionKey) { %>
+    kafkaTemplate.send(<%= event.topicNameCamel %>Topic, partitionKey, envelope);
+<% } else { %>
     kafkaTemplate.send(<%= event.topicNameCamel %>Topic, envelope);
+<% } %>
   }
 <% }); %>
 }

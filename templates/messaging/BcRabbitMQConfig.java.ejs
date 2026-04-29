@@ -50,7 +50,10 @@ public class <%= modulePascalCase %>RabbitMQConfig {
     public Queue <%= event.fieldName %>Queue() {
         return QueueBuilder.durable(<%= event.fieldName %>QueueName)
                 .withArgument("x-dead-letter-exchange", <%= moduleCamelCase %>ExchangeName + ".dlx")
-                .build();
+<% if (event.dlqTarget) { %>                .withArgument("x-dead-letter-routing-key", "<%= event.dlqTarget %>")
+<% } %><% if (event.deliveryLimit) { %>                .withArgument("x-delivery-limit", <%= event.deliveryLimit %>)
+<% } %><% if (event.messageTtlMs) { %>                .withArgument("x-message-ttl", <%= event.messageTtlMs %>)
+<% } %>                .build();
     }
 
     @Bean
@@ -63,7 +66,7 @@ public class <%= modulePascalCase %>RabbitMQConfig {
 
     @Bean
     public Queue <%= event.fieldName %>Dlq() {
-        return QueueBuilder.durable(<%= event.fieldName %>QueueName + ".dlq").build();
+        return QueueBuilder.durable(<% if (event.dlqTarget) { %>"<%= event.dlqTarget %>"<% } else { %><%= event.fieldName %>QueueName + ".dlq"<% } %>).build();
     }
 
     @Bean
@@ -71,7 +74,7 @@ public class <%= modulePascalCase %>RabbitMQConfig {
         return BindingBuilder
                 .bind(<%= event.fieldName %>Dlq())
                 .to(<%= moduleCamelCase %>DlxExchange())
-                .with(<%= event.fieldName %>RoutingKey);
+                .with(<% if (event.dlqTarget) { %>"<%= event.dlqTarget %>"<% } else { %><%= event.fieldName %>RoutingKey<% } %>);
     }
 
 <% } %>
@@ -107,7 +110,10 @@ public class <%= modulePascalCase %>RabbitMQConfig {
     public Queue <%= event.fieldName %>Queue() {
         return QueueBuilder.durable(<%= event.fieldName %>QueueName)
                 .withArgument("x-dead-letter-exchange", <%= moduleCamelCase %>_<%= producerEntry.producerCamel %>ExchangeName + ".dlx")
-                .build();
+<% if (event.dlqTarget) { %>                .withArgument("x-dead-letter-routing-key", "<%= event.dlqTarget %>")
+<% } %><% if (event.deliveryLimit) { %>                .withArgument("x-delivery-limit", <%= event.deliveryLimit %>)
+<% } %><% if (event.messageTtlMs) { %>                .withArgument("x-message-ttl", <%= event.messageTtlMs %>)
+<% } %>                .build();
     }
 
     @Bean
@@ -120,7 +126,7 @@ public class <%= modulePascalCase %>RabbitMQConfig {
 
     @Bean
     public Queue <%= event.fieldName %>Dlq() {
-        return QueueBuilder.durable(<%= event.fieldName %>QueueName + ".dlq").build();
+        return QueueBuilder.durable(<% if (event.dlqTarget) { %>"<%= event.dlqTarget %>"<% } else { %><%= event.fieldName %>QueueName + ".dlq"<% } %>).build();
     }
 
     @Bean
@@ -128,7 +134,7 @@ public class <%= modulePascalCase %>RabbitMQConfig {
         return BindingBuilder
                 .bind(<%= event.fieldName %>Dlq())
                 .to(<%= moduleCamelCase %>_<%= producerEntry.producerCamel %>DlxExchange())
-                .with(<%= event.fieldName %>RoutingKey);
+                .with(<% if (event.dlqTarget) { %>"<%= event.dlqTarget %>"<% } else { %><%= event.fieldName %>RoutingKey<% } %>);
     }
 
 <% } %>

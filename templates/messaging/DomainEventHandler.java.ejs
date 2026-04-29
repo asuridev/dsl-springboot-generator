@@ -68,12 +68,14 @@ public class <%= bcPascal %>DomainEventHandler {
     /**
      * Handles {@link <%= event.name %>Event} synchronously inside the publishing transaction
      * and persists an outbox row for asynchronous broker delivery.
+     * derived_from: domainEvents.published.<%= event.name %>
      */
     @EventListener
 <% if (sagasEnabled && event.sagaSteps && event.sagaSteps.length > 0) { %><% event.sagaSteps.forEach(s => { %>    @SagaStep(saga = "<%= s.saga %>", order = <%= s.order %>, event = "<%= event.name %>", role = SagaStep.Role.<%= s.role %>)
 <% }); %><% } %>    public void on<%= event.name %>Event(<%= event.name %>Event event) {
         <%= event.integrationEventClassName %> integrationEvent = new <%= event.integrationEventClassName %>(
-<% event.fields.forEach((f, idx) => { %>
+<% if (event.metadataEnabled) { %>                event.metadata()<% if (event.fields.length > 0) { %>,<% } %>
+<% } %><% event.fields.forEach((f, idx) => { %>
                 event.<%= f.name %>()<%= idx < event.fields.length - 1 ? ',' : '' %>
 <% }); %>
         );
@@ -106,13 +108,15 @@ public class <%= bcPascal %>DomainEventHandler {
 <% domainEvents.forEach(event => { %>
     /**
      * Handles {@link <%= event.name %>Event} after the wrapping transaction commits.
+     * derived_from: domainEvents.published.<%= event.name %>
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
 <% if (sagasEnabled && event.sagaSteps && event.sagaSteps.length > 0) { %><% event.sagaSteps.forEach(s => { %>    @SagaStep(saga = "<%= s.saga %>", order = <%= s.order %>, event = "<%= event.name %>", role = SagaStep.Role.<%= s.role %>)
 <% }); %><% } %>    public void on<%= event.name %>Event(<%= event.name %>Event event) {
         messageBroker.publish<%= event.integrationEventClassName %>(
             new <%= event.integrationEventClassName %>(
-<% event.fields.forEach((f, idx) => { %>
+<% if (event.metadataEnabled) { %>                event.metadata()<% if (event.fields.length > 0) { %>,<% } %>
+<% } %><% event.fields.forEach((f, idx) => { %>
                 event.<%= f.name %>()<%= idx < event.fields.length - 1 ? ',' : '' %>
 <% }); %>
             )

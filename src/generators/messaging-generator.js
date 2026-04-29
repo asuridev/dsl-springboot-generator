@@ -128,10 +128,23 @@ function toRoutingKeyKebab(eventName) {
 
 // ─── Event context builder ────────────────────────────────────────────────────
 
+// Canonical metadata field names that, if present in the YAML payload, are
+// considered duplicates of the EventMetadata record (Phase 1). When the
+// metadata feature is enabled, these are filtered out and a deprecation
+// warning is emitted so the human cleans up the YAML.
+const CANONICAL_METADATA_FIELDS = new Set([
+  'eventId', 'eventType', 'eventVersion', 'occurredAt', 'correlationId', 'causationId',
+]);
+
 /**
  * Builds the per-event context object used across all messaging templates.
+ *
+ * @param {boolean} metadataEnabled — if true, an EventMetadata record component
+ *   is rendered as the FIRST field of both the domain and integration event
+ *   records, and any payload field whose name collides with a canonical metadata
+ *   field is filtered out (with a deprecation warning).
  */
-function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumNames = new Set(), voNames = new Set()) {
+function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumNames = new Set(), voNames = new Set(), metadataEnabled = true) {
   const topicNameKebab = toRoutingKeyKebab(event.name);
   const topicNameCamel = toCamelCase(topicNameKebab);
   const integrationEventClassName = `${event.name}IntegrationEvent`;
@@ -145,17 +158,51 @@ function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumName
     }
   }
 
+  // Filter canonical metadata fields when metadata is enabled.
+  if (metadataEnabled) {
+    const dropped = rawPayload.filter((p) => CANONICAL_METADATA_FIELDS.has(p.name));
+    if (dropped.length > 0) {
+      logger.warn(
+        `[${moduleName}] Event "${event.name}" declares canonical metadata field(s) in payload: ${dropped.map((d) => d.name).join(', ')}. ` +
+        `These are now provided by EventMetadata and will be ignored. Remove them from the YAML payload.`
+      );
+    }
+    rawPayload = rawPayload.filter((p) => !CANONICAL_METADATA_FIELDS.has(p.name));
+  }
+
   const eventFields = rawPayload.map((p) =>
-    Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName, enumNames, voNames))
+    Object.assign({ name: p.name, description: p.description || null }, javaTypeForEventField(p, packageName, moduleName, enumNames, voNames))
   );
+
+  // Phase 4 — scope + broker hints. Default scope is 'both' for backward compatibility.
+  const scope = event.scope || 'both';
+  const broker = event.broker || {};
+  const partitionKey = broker.partitionKey || null;
+  const headersMap = broker.headers && typeof broker.headers === 'object' && !Array.isArray(broker.headers)
+    ? Object.entries(broker.headers).map(([key, value]) => ({ key, value: String(value) }))
+    : [];
+  const retry = broker.retry || null;
+  const dlq = broker.dlq || null;
 
   return {
     name: event.name,                           // e.g. ProductActivated
+    version: event.version || 1,                // schema version (Phase 1, gap #8 base)
     integrationEventClassName,                  // e.g. ProductActivatedIntegrationEvent
     topicNameKebab,                             // e.g. product-activated
     topicNameCamel,                             // e.g. productActivated
+    description: event.description || null,    // gap #2: propagate to Javadoc
+    channel: event.channel || null,             // gap #1: propagate for traceability
+    metadataEnabled,                            // Phase 1: drives template branching
     fields: eventFields,                        // for DomainEventHandler record accessor calls
     eventFields,                                // for IntegrationEvent record fields
+    // Phase 4 — scope + broker hints (gap #13, #9, #11)
+    scope,                                      // 'internal' | 'integration' | 'both'
+    isInternalOnly: scope === 'internal',
+    publishToBroker: scope !== 'internal',      // drives whether broker/port/topology is generated
+    partitionKey,                               // Kafka: aggregate field used as message key
+    headers: headersMap,                        // [{key, value}] static/template-string headers
+    retry,                                      // {maxAttempts, backoff, initialMs, maxMs} or null
+    dlq,                                        // {afterAttempts, target} or null
   };
 }
 
@@ -164,14 +211,22 @@ function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumName
 /**
  * Generates {EventName}Event.java record in domain/events/.
  */
-async function generateDomainEvent(event, packageName, moduleName, eventsDir, enumNames = new Set(), voNames = new Set()) {
+async function generateDomainEvent(event, packageName, moduleName, eventsDir, enumNames = new Set(), voNames = new Set(), metadataEnabled = true) {
   const imports = new Set();
-  const fields = (event.payload || []).map((p) => {
+  // Filter canonical metadata fields when metadata is enabled (already warned in buildEventContext).
+  const rawPayload = metadataEnabled
+    ? (event.payload || []).filter((p) => !CANONICAL_METADATA_FIELDS.has(p.name))
+    : (event.payload || []);
+  const fields = rawPayload.map((p) => {
     const mapped = javaTypeForEventField(p, packageName, moduleName, enumNames, voNames);
     if (mapped.importHint) imports.add(mapped.importHint);
     if (mapped.innerImportHint) imports.add(mapped.innerImportHint);
-    return { type: mapped.javaType, name: p.name };
+    return { type: mapped.javaType, name: p.name, description: p.description || null };
   });
+
+  if (metadataEnabled) {
+    imports.add(`${packageName}.shared.domain.EventMetadata`);
+  }
 
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'messaging', 'DomainEvent.java.ejs'),
@@ -180,6 +235,10 @@ async function generateDomainEvent(event, packageName, moduleName, eventsDir, en
       packageName,
       moduleName,
       eventName: event.name,
+      eventVersion: event.version || 1,
+      description: event.description || null,
+      channel: event.channel || null,
+      metadataEnabled,
       fields,
       imports: [...imports].sort(),
     }
@@ -197,6 +256,10 @@ async function generateIntegrationEvent(eventCtx, packageName, moduleName, event
       packageName,
       moduleName,
       eventName: eventCtx.name,
+      eventVersion: eventCtx.version || 1,
+      description: eventCtx.description || null,
+      channel: eventCtx.channel || null,
+      metadataEnabled: !!eventCtx.metadataEnabled,
       integrationEventClassName: eventCtx.integrationEventClassName,
       eventFields: eventCtx.eventFields,
     }
@@ -371,20 +434,32 @@ async function generateBcRabbitMQConfig(
 
   // Build per-published-event context
   const publishedForConfig = publishedEventCtxs.map((ctx) => ({
-    name:      ctx.name,
-    queueKey:  ctx.topicNameKebab,
-    fieldName: ctx.topicNameCamel,
+    name:           ctx.name,
+    queueKey:       ctx.topicNameKebab,
+    fieldName:      ctx.topicNameCamel,
+    // Phase 4.3 — queue arguments derived from broker.retry / broker.dlq
+    deliveryLimit:  ctx.retry && ctx.retry.maxAttempts ? ctx.retry.maxAttempts : null,
+    messageTtlMs:   ctx.retry && ctx.retry.initialMs   ? ctx.retry.initialMs   : null,
+    dlqTarget:      ctx.dlq   && ctx.dlq.target        ? ctx.dlq.target        : null,
   }));
 
   // Group consumed events by producer BC
-  const producerMap = new Map(); // producerBc → [{name, queueKey, fieldName}]
+  const producerMap = new Map(); // producerBc → [{name, queueKey, fieldName, deliveryLimit, messageTtlMs, dlqTarget}]
   for (const ev of resolvedConsumedEvents) {
     const producerBc = producerBcFromChannel(ev.channel) || ev.producer || 'unknown';
     if (!producerMap.has(producerBc)) producerMap.set(producerBc, []);
     const eventKebab  = toKebabCase(ev.name);
     const queueKey    = ev.queueKey || `${moduleName}-${eventKebab}`;
     const fieldName   = toCamelCase(queueKey);
-    producerMap.get(producerBc).push({ name: ev.name, queueKey, fieldName });
+    producerMap.get(producerBc).push({
+      name: ev.name,
+      queueKey,
+      fieldName,
+      // Phase 4.3 — consumed[].retry / consumed[].dlq overrides apply to the consumer queue.
+      deliveryLimit: ev.retry && ev.retry.maxAttempts ? ev.retry.maxAttempts : null,
+      messageTtlMs:  ev.retry && ev.retry.initialMs   ? ev.retry.initialMs   : null,
+      dlqTarget:     ev.dlq   && ev.dlq.target        ? ev.dlq.target        : null,
+    });
   }
 
   const consumersByProducer = [...producerMap.entries()].map(([producerBc, events]) => ({
@@ -655,46 +730,54 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
   const enumNames = new Set((bcYaml.enums || []).map((e) => e.name));
   const voNames = new Set((bcYaml.valueObjects || []).map((v) => v.name));
 
+  const metadataEnabled = !(config.events && config.events.metadata && config.events.metadata.enabled === false);
+
   const publishedEventCtxs = publishedEvents.map((e) =>
-    buildEventContext(e, packageName, moduleName, asyncApiDoc, enumNames, voNames)
+    buildEventContext(e, packageName, moduleName, asyncApiDoc, enumNames, voNames, metadataEnabled)
   );
+
+  // Phase 4 (gap #13) — events with scope:internal must NOT generate IntegrationEvent,
+  // MessageBroker port methods, broker adapter publish methods, handler bridge methods,
+  // nor queue/exchange topology. They still get the DomainEvent record because the
+  // aggregate emits it via raise() and the internal Spring event bus consumes it.
+  const brokerEventCtxs = publishedEventCtxs.filter((ctx) => ctx.publishToBroker);
 
   let eventCount = 0;
   let integrationEventCount = 0;
 
   for (const event of publishedEvents) {
-    await generateDomainEvent(event, packageName, moduleName, domainEventsDir, enumNames, voNames);
+    await generateDomainEvent(event, packageName, moduleName, domainEventsDir, enumNames, voNames, metadataEnabled);
     eventCount++;
   }
 
-  for (const eventCtx of publishedEventCtxs) {
+  for (const eventCtx of brokerEventCtxs) {
     await generateIntegrationEvent(eventCtx, packageName, moduleName, appEventsDir);
     integrationEventCount++;
   }
 
-  if (publishedEventCtxs.length > 0) {
-    await generateMessageBrokerPort(publishedEventCtxs, packageName, moduleName, portsDir);
+  if (brokerEventCtxs.length > 0) {
+    await generateMessageBrokerPort(brokerEventCtxs, packageName, moduleName, portsDir);
     // Phase 4 — annotate published events with their saga steps (if any).
-    const annotatedCtxs = publishedEventCtxs.map((ctx) => ({
+    const annotatedCtxs = brokerEventCtxs.map((ctx) => ({
       ...ctx,
       sagaSteps: sagaEventIndex.get(ctx.name) || [],
     }));
     await generateDomainEventHandler(annotatedCtxs, packageName, moduleName, usecasesDir, outboxEnabled, sagasEnabled);
 
     if (config.broker === 'kafka') {
-      await generateKafkaMessageBrokerAdapter(publishedEventCtxs, packageName, moduleName, adaptersDir);
+      await generateKafkaMessageBrokerAdapter(brokerEventCtxs, packageName, moduleName, adaptersDir);
     } else {
       // Default: rabbitmq
-      await generateRabbitMessageBrokerAdapter(publishedEventCtxs, packageName, moduleName, adaptersDir);
+      await generateRabbitMessageBrokerAdapter(brokerEventCtxs, packageName, moduleName, adaptersDir);
     }
   }
 
   // ── Per-BC RabbitMQ config (exchanges, queues, bindings, DLQs) ──────────
-  if (config.broker === 'rabbitmq' && (publishedEventCtxs.length > 0 || resolvedConsumedEvents.length > 0)) {
+  if (config.broker === 'rabbitmq' && (brokerEventCtxs.length > 0 || resolvedConsumedEvents.length > 0)) {
     // Only include consumed events that have a listener (command field present)
     const consumedWithListener = resolvedConsumedEvents.filter((ev) => ev.command);
     await generateBcRabbitMQConfig(
-      publishedEventCtxs,
+      brokerEventCtxs,
       consumedWithListener,
       packageName,
       moduleName,
@@ -748,14 +831,20 @@ function buildRabbitMQTopology(allBcYamls) {
     const consumed     = (bcYaml.domainEvents || {}).consumed  || [];
 
     if (published.length > 0) {
-      // One exchange per publishing BC
-      exchangeMap.set(bcName, `${bcName}.events`);
+      // One exchange per publishing BC — only declared if at least one event has scope != 'internal'.
+      const externalPublished = published.filter((e) => (e.scope || 'both') !== 'internal');
+      if (externalPublished.length > 0) {
+        exchangeMap.set(bcName, `${bcName}.events`);
+      }
 
-      for (const event of published) {
+      for (const event of externalPublished) {
         const eventKebab = toKebabCase(event.name);
         const dotCase    = eventKebab.replace(/-/g, '.');
+        // gap #1: when published[].channel is declared in the YAML, it takes
+        // precedence over the derived kebab→dot fallback.
+        const routingKey = event.channel || dotCase;
         queueMap.set(eventKebab,  `${bcName}.${eventKebab}`);
-        rkMap.set(eventKebab,     dotCase);
+        rkMap.set(eventKebab,     routingKey);
       }
     }
 
@@ -763,8 +852,10 @@ function buildRabbitMQTopology(allBcYamls) {
       const eventKebab = toKebabCase(event.name);
       const dotCase    = eventKebab.replace(/-/g, '.');
       const queueKey   = event.queueKey || `${bcName}-${eventKebab}`;
+      // gap #1: honour declared channel as the routing-key value.
+      const routingKey = event.channel || dotCase;
       queueMap.set(queueKey, `${bcName}.${eventKebab}`);
-      rkMap.set(queueKey,    dotCase);
+      rkMap.set(queueKey,    routingKey);
       // Add producer BC exchange derived from channel (e.g. "inventory.stock-item.reserved" → "inventory")
       // This ensures external producer exchanges are declared even if that BC is not in allBcYamls.
       const producerBc = event.channel ? event.channel.split('.')[0] : null;
@@ -816,6 +907,8 @@ function buildKafkaTopology(allBcYamls) {
     const consumed  = (bcYaml.domainEvents || {}).consumed  || [];
 
     for (const event of published) {
+      // Phase 4 (gap #13) — internal-only events have no broker topic.
+      if ((event.scope || 'both') === 'internal') continue;
       const eventKebab = toKebabCase(event.name);
       topicMap.set(eventKebab, `${bcName}.${eventKebab}`);
     }

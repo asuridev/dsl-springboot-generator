@@ -178,7 +178,16 @@ async function buildCommand(options = {}) {
     // Normalise springBootVersion: "3.4.x" → "3.4.5" (use a pinned patch version)
     const resolvedSpringBootVersion = config.springBootVersion.replace('.x', '.5');
 
-    const resolvedConfig = { ...config, springBootVersion: resolvedSpringBootVersion };
+    // Resolve feature flags. `events.metadata.enabled` controls whether each
+    // generated domain event record carries a canonical `EventMetadata`
+    // component (default: true; opt-out via dsl-springboot.json).
+    const metadataEnabled = !(config.events && config.events.metadata && config.events.metadata.enabled === false);
+
+    const resolvedConfig = {
+      ...config,
+      springBootVersion: resolvedSpringBootVersion,
+      events: { metadata: { enabled: metadataEnabled } },
+    };
 
     // ── 3. Determine output directory ───────────────────────────────────────
     const outputDir = process.cwd();
@@ -215,10 +224,19 @@ async function buildCommand(options = {}) {
       }
     }
 
-    // ── 3.6. Cross-YAML integration coherence (Phase 0 / INT-001..INT-011) ─────
+    // ── 3.6. Cross-YAML integration coherence (Phase 0 / INT-001..INT-021) ─────
     const archDir = path.join(outputDir, 'arch');
     const validationSpinner = ora('Validating integration coherence…').start();
-    const diagnostics = validateIntegrationCoherence(system, allBcYamls, archDir);
+    const asyncApiByBc = new Map();
+    for (const bcYaml of allBcYamls) {
+      try {
+        const doc = await readAsyncApiYaml(bcYaml.bc);
+        if (doc) asyncApiByBc.set(bcYaml.bc, doc);
+      } catch (_err) {
+        // AsyncAPI is optional; ignore read errors here — validators downstream warn.
+      }
+    }
+    const diagnostics = validateIntegrationCoherence(system, allBcYamls, archDir, asyncApiByBc);
     if (diagnostics.length === 0) {
       validationSpinner.succeed('Integration coherence validated — no issues');
     } else {

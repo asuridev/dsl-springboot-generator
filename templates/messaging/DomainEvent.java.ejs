@@ -5,10 +5,17 @@ import <%= packageName %>.shared.domain.DomainEvent;
 
 /**
  * Domain event: <%= eventName %>.
- * Immutable record representing something that happened in the <%= moduleName %> bounded context.
+<% if (typeof description !== 'undefined' && description) { %> *
+<% description.split(/\n+/).forEach(function(line) { %> * <%= line.trim() %>
+<% }); %><% } %> * Immutable record representing something that happened in the <%= moduleName %> bounded context.
+<% if (typeof channel !== 'undefined' && channel) { %> *
+ * channel: <%= channel %>
+<% } %><% if (typeof eventVersion !== 'undefined') { %> * version: <%= eventVersion %>
+<% } %> * derived_from: domainEvents.published.<%= eventName %>
  */
 public record <%= eventName %>Event(
-<% fields.forEach(function(f, i) { %>
+<% if (typeof metadataEnabled !== 'undefined' && metadataEnabled) { %>        EventMetadata metadata<% if (fields.length > 0) { %>,<% } %>
+<% } %><% fields.forEach(function(f, i) { %>
         <%- f.type %> <%= f.name %><% if (i < fields.length - 1) { %>,<% } %>
 <% }); %>
 ) implements DomainEvent {}

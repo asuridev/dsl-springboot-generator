@@ -38,7 +38,17 @@ public class <%= modulePascalCase %>RabbitMessageBroker implements MessageBroker
       event,
       MDC.get("correlationId")
     );
+<% if (event.headers && event.headers.length > 0) { %>
+    // derived_from: domainEvents.published.<%= event.name %>.broker.headers
+    rabbitTemplate.convertAndSend(exchange, <%= event.topicNameCamel %>RoutingKey, envelope, message -> {
+<% event.headers.forEach(h => { %>
+      message.getMessageProperties().setHeader("<%= h.key %>", "<%= h.value %>");
+<% }); %>
+      return message;
+    });
+<% } else { %>
     rabbitTemplate.convertAndSend(exchange, <%= event.topicNameCamel %>RoutingKey, envelope);
+<% } %>
   }
 <% }); %>
 }

@@ -5,6 +5,7 @@ const { renderAndWrite } = require('../utils/template-engine');
 const { toPackagePath, toCamelCase, pluralizeWord } = require('../utils/naming');
 const { mapType, isListType, getListElementType } = require('../utils/type-mapper');
 const { buildDomainChecks } = require('../utils/validation-mapper');
+const logger = require('../utils/logger');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -139,21 +140,24 @@ function detectStateTransition(ucId, aggregate, bcEnums) {
 // S22: accepts a single eventName (string) or a list (string[]). When a list,
 // emits one raise() per event, joined by newline + 8 spaces (consumed at the
 // method body indentation level).
-function buildRaiseCall(eventNameOrList, publishedEvents, aggregate, methodParams) {
+//
+// eventConfig (Phase 1): { bcName, metadataEnabled } — when metadataEnabled,
+// prepends an EventMetadata.now("<EventName>", <version>, "<bcName>") argument.
+function buildRaiseCall(eventNameOrList, publishedEvents, aggregate, methodParams, eventConfig = null) {
   if (!eventNameOrList) return null;
   if (!publishedEvents || publishedEvents.length === 0) return null;
 
   if (Array.isArray(eventNameOrList)) {
     const calls = eventNameOrList
-      .map((n) => buildRaiseCallSingle(n, publishedEvents, aggregate, methodParams))
+      .map((n) => buildRaiseCallSingle(n, publishedEvents, aggregate, methodParams, eventConfig))
       .filter(Boolean);
     if (calls.length === 0) return null;
     return calls.join('\n        ');
   }
-  return buildRaiseCallSingle(eventNameOrList, publishedEvents, aggregate, methodParams);
+  return buildRaiseCallSingle(eventNameOrList, publishedEvents, aggregate, methodParams, eventConfig);
 }
 
-function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParams) {
+function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParams, eventConfig = null) {
   const event = publishedEvents.find((e) => e.name === eventName);
   if (!event) return null;
 
@@ -161,20 +165,101 @@ function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParam
   const aggregatePropNames = new Set((aggregate.properties || []).map((pr) => pr.name));
   const methodParamNames = new Set((methodParams || []).map((p) => p.name));
 
-  const args = (event.payload || []).map((p) => {
-    if (p.name === aggregateCamelId) return 'this.getId()';
-    if (aggregatePropNames.has(p.name)) {
-      return `this.get${p.name.charAt(0).toUpperCase() + p.name.slice(1)}()`;
+  // Phase 1: when metadata is enabled, the canonical fields are carried by the
+  // EventMetadata record component, not by the payload. Filter them out so we
+  // do not emit redundant `null` arguments for fields that no longer exist on
+  // the record.
+  const CANONICAL = new Set(['eventId', 'eventType', 'eventVersion', 'occurredAt', 'correlationId', 'causationId']);
+  const metadataEnabled = !!(eventConfig && eventConfig.metadataEnabled);
+  const payloadFields = metadataEnabled
+    ? (event.payload || []).filter((p) => !CANONICAL.has(p.name))
+    : (event.payload || []);
+
+  const unresolved = [];
+  const getterFor = (propName) => `this.get${propName.charAt(0).toUpperCase() + propName.slice(1)}()`;
+  // Phase 3: explicit source mapping — payload[].source overrides the heuristic.
+  // Supported: aggregate | param | timestamp | constant | auth-context | derived
+  const resolveExplicit = (p) => {
+    const src = p.source;
+    if (!src) return null;
+    switch (src) {
+      case 'aggregate': {
+        const field = p.field || p.name;
+        if (!aggregatePropNames.has(field)) {
+          unresolved.push(`${p.name} (source: aggregate, field: ${field} not found)`);
+          return `null /* TODO domainEvent(${event.name}, ${p.name}): source=aggregate but field "${field}" not in aggregate ${aggregate.name} */`;
+        }
+        return field === 'id' ? 'this.getId()' : getterFor(field);
+      }
+      case 'param': {
+        const pname = p.param || p.name;
+        if (!methodParamNames.has(pname)) {
+          unresolved.push(`${p.name} (source: param, param: ${pname} not found)`);
+          return `null /* TODO domainEvent(${event.name}, ${p.name}): source=param but parameter "${pname}" not in method signature */`;
+        }
+        return pname;
+      }
+      case 'timestamp':
+        return 'Instant.now()';
+      case 'constant': {
+        if (p.value === undefined || p.value === null) {
+          unresolved.push(`${p.name} (source: constant, value missing)`);
+          return `null /* TODO domainEvent(${event.name}, ${p.name}): source=constant but value not declared */`;
+        }
+        if (typeof p.value === 'string') return JSON.stringify(p.value);
+        if (typeof p.value === 'number' || typeof p.value === 'boolean') return String(p.value);
+        return JSON.stringify(p.value);
+      }
+      case 'auth-context': {
+        // Aggregates must remain agnostic to authentication; surface a TODO so
+        // the human (or Phase 3 follow-up) wires the lookup at the handler layer.
+        const claim = p.claim ? ` claim="${p.claim}"` : '';
+        unresolved.push(`${p.name} (source: auth-context — must be resolved at handler)`);
+        return `null /* TODO domainEvent(${event.name}, ${p.name}): source=auth-context${claim} — populate from SecurityContext in the application handler, not in the aggregate */`;
+      }
+      case 'derived': {
+        const ref = p.derivedFrom || p.expression || '';
+        unresolved.push(`${p.name} (source: derived${ref ? ', derivedFrom: ' + ref : ''})`);
+        return `null /* TODO domainEvent(${event.name}, ${p.name}): source=derived${ref ? ', derivedFrom=' + ref : ''} — implement projection */`;
+      }
+      default:
+        unresolved.push(`${p.name} (unknown source "${src}")`);
+        return `null /* TODO domainEvent(${event.name}, ${p.name}): unknown source "${src}" */`;
     }
+  };
+
+  const args = payloadFields.map((p) => {
+    const explicit = resolveExplicit(p);
+    if (explicit !== null) return explicit;
+
+    if (p.name === aggregateCamelId) return 'this.getId()';
+    if (aggregatePropNames.has(p.name)) return getterFor(p.name);
     if (methodParamNames.has(p.name)) return p.name;
     if (p.type === 'DateTime' || p.type === 'Instant') return 'Instant.now()';
-    return `null /* TODO: provide value for ${p.name} */`;
+    // gap #19: surface unresolved mappings instead of silently emitting `null`.
+    unresolved.push(p.name);
+    return `null /* TODO domainEvent(${event.name}, ${p.name}): mapping not resolved — declare payload[].source or rename to match aggregate property/method param */`;
   });
-  return `raise(new ${event.name}Event(${args.join(', ')}));`;
+
+  if (unresolved.length > 0) {
+    logger.warn(
+      `[aggregate=${aggregate.name}] Event "${event.name}" has unresolved payload field(s): ${unresolved.join(', ')}. ` +
+      `Add a matching aggregate property/method param, or declare payload[].source.`
+    );
+  }
+
+  // Phase 1: prepend EventMetadata.now(...) when metadata is enabled.
+  if (metadataEnabled) {
+    const version = event.version || 1;
+    const sourceBc = eventConfig.bcName || 'unknown';
+    args.unshift(`EventMetadata.now("${event.name}", ${version}, "${sourceBc}")`);
+  }
+
+  return `// derived_from: domainEvents.published.${event.name}\n        raise(new ${event.name}Event(${args.join(', ')}));`;
 }
 
 // ─── Helper: compute the body string for a business method ───────────────────
-function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents) {
+function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents, eventConfig = null) {
   const rules = uc.rules || [];
   // Split rule IDs into validation-style vs side-effect-style based on the
   // aggregate's domainRules catalog (S13). Side effects are scaffolded as a
@@ -209,12 +294,12 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
         let body = `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}\n`;
         body += `        this.${transition.statusField} = this.${transition.statusField}.transitionTo(${transition.enumType}.${transition.targetValue});`;
         const emitsName = sig.emits || transition.emits;
-        const raiseCall = buildRaiseCall(emitsName, publishedEvents, aggregate, params);
+        const raiseCall = buildRaiseCall(emitsName, publishedEvents, aggregate, params, eventConfig);
         if (raiseCall) body += `\n        ${raiseCall}`;
         return body;
       }
     }
-    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
+    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig);
     if (raiseCall) {
       return `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}\n        ${raiseCall}`;
     }
@@ -227,7 +312,7 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
     if (transition) {
       let body = `this.${transition.statusField} = this.${transition.statusField}.transitionTo(${transition.enumType}.${transition.targetValue});`;
       const emitsName = sig.emits || transition.emits;
-      const raiseCall = buildRaiseCall(emitsName, publishedEvents, aggregate, params);
+      const raiseCall = buildRaiseCall(emitsName, publishedEvents, aggregate, params, eventConfig);
       if (raiseCall) body += `\n        ${raiseCall}`;
       return body;
     }
@@ -260,7 +345,7 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
       let body = isOneToOne
         ? `this.${fieldName} = new ${entity.name}(${ctorArgs});`
         : `this.${fieldName}.add(new ${entity.name}(${ctorArgs}));`;
-      const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
+      const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig);
       if (raiseCall) body += `\n        ${raiseCall}`;
       return body;
     }
@@ -284,7 +369,7 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
       let body = isOneToOne
         ? `if (this.${fieldName} != null && this.${fieldName}.getId().equals(${idParam})) {\n            this.${fieldName} = null;\n        }`
         : `this.${fieldName}.removeIf(${varName} -> ${varName}.getId().equals(${idParam}));`;
-      const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
+      const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig);
       if (raiseCall) body += `\n        ${raiseCall}`;
       return body;
     }
@@ -296,14 +381,14 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
   );
   if (allMatch) {
     let body = params.map((p) => `this.${p.name} = ${p.name};`).join('\n        ');
-    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
+    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig);
     if (raiseCall) body += `\n        ${raiseCall}`;
     return body;
   }
 
-  // ── Fallback: scaffold ─────────────────────────────────────────────────────
+  // ── Fallback: scaffold ──────────────────────────────────────────
   {
-    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
+    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig);
     if (raiseCall) {
       return `// TODO: implement business logic — ver ${bcName}-flows.md\n        ${raiseCall}`;
     }
@@ -334,6 +419,7 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
   const bc = bcYaml.bc;
   const pkg = config.packageName;
   const imports = new Set();
+  const metadataEnabled = !(config.events && config.events.metadata && config.events.metadata.enabled === false);
 
   imports.add('import java.util.UUID;');
 
@@ -399,6 +485,9 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
     imports.add('import java.util.ArrayList;');
     imports.add('import java.util.Collections;');
     imports.add(`import ${pkg}.shared.domain.DomainEvent;`);
+    if (metadataEnabled) {
+      imports.add(`import ${pkg}.shared.domain.EventMetadata;`);
+    }
     for (const event of publishedEvents) {
       imports.add(`import ${pkg}.${bc}.domain.events.${event.name}Event;`);
       // If any payload field is a DateTime/Instant not on the aggregate, Instant.now() is generated
@@ -492,6 +581,10 @@ async function generateAggregates(bcYaml, config, outputDir) {
   const bcEnums = bcYaml.enums || [];
   const useCases = bcYaml.useCases || [];
   const publishedEvents = (bcYaml.domainEvents || {}).published || [];
+
+  // Phase 1 — feature flag for canonical EventMetadata on every event record.
+  const metadataEnabled = !(config.events && config.events.metadata && config.events.metadata.enabled === false);
+  const eventConfig = { bcName: bc, metadataEnabled };
 
   for (const aggregate of aggregates) {
     // ── 0. Determine if this aggregate is a read model (no domain events) ────────
@@ -630,7 +723,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
             factoryParamNames.has(p.name) ? p.name : `null /* TODO: compute ${p.name} */`
           ).join(', ');
           const dmCreateEmits = (dmCreate.emitsList && dmCreate.emitsList.length > 0) ? dmCreate.emitsList : null;
-          const raiseCall = buildRaiseCall(dmCreateEmits, aggregatePublishedEvents, aggregate, dmCreate.params || []);
+          const raiseCall = buildRaiseCall(dmCreateEmits, aggregatePublishedEvents, aggregate, dmCreate.params || [], eventConfig);
           // Split rule IDs into validate vs sideEffect so the scaffold comment
           // distinguishes invariant checks from required side effects (S13).
           const ruleByIdF = new Map((aggregate.domainRules || []).map((r) => [r.id, r]));
@@ -681,7 +774,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
       // computeMethodBody receives a sig-like object with {name, params, emits}
       const dmEmits = (dm.emitsList && dm.emitsList.length > 0) ? dm.emitsList : null;
       const sigForBody = { name: dm.name, params: (dm.params || []).map((p) => ({ name: p.name, optional: false, typeHint: p.type })), emits: dmEmits };
-      const body = computeMethodBody(uc, sigForBody, aggregate, bcEnums, bc, aggregatePublishedEvents);
+      const body = computeMethodBody(uc, sigForBody, aggregate, bcEnums, bc, aggregatePublishedEvents, eventConfig);
 
       businessMethods.push({
         name: dm.name,

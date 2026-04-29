@@ -327,6 +327,94 @@ function validate(doc) {
     }
   }
 
+  // ── domainEvents schema (Phase 4: scope, broker hints, retry/dlq) ─────────
+  const ALLOWED_SCOPES = new Set(['internal', 'integration', 'both']);
+  const ALLOWED_BROKER_KEYS = new Set(['partitionKey', 'headers', 'retry', 'dlq']);
+  const ALLOWED_RETRY_KEYS = new Set(['maxAttempts', 'backoff', 'initialMs', 'maxMs']);
+  const ALLOWED_BACKOFF = new Set(['fixed', 'exponential']);
+  const ALLOWED_DLQ_KEYS = new Set(['afterAttempts', 'target']);
+
+  function validateRetry(retry, ctx) {
+    if (retry == null) return;
+    if (typeof retry !== 'object' || Array.isArray(retry)) {
+      fail(`${ctx} "retry" must be a mapping.`);
+    }
+    for (const k of Object.keys(retry)) {
+      if (!ALLOWED_RETRY_KEYS.has(k)) {
+        fail(`${ctx} "retry.${k}" is not a recognised key. Allowed: ${[...ALLOWED_RETRY_KEYS].join(', ')}.`);
+      }
+    }
+    if (retry.maxAttempts != null && (!Number.isInteger(retry.maxAttempts) || retry.maxAttempts < 1)) {
+      fail(`${ctx} "retry.maxAttempts" must be a positive integer.`);
+    }
+    if (retry.backoff != null && !ALLOWED_BACKOFF.has(retry.backoff)) {
+      fail(`${ctx} "retry.backoff" must be one of: ${[...ALLOWED_BACKOFF].join(', ')}.`);
+    }
+    if (retry.initialMs != null && (!Number.isInteger(retry.initialMs) || retry.initialMs < 0)) {
+      fail(`${ctx} "retry.initialMs" must be a non-negative integer (milliseconds).`);
+    }
+    if (retry.maxMs != null && (!Number.isInteger(retry.maxMs) || retry.maxMs < 0)) {
+      fail(`${ctx} "retry.maxMs" must be a non-negative integer (milliseconds).`);
+    }
+  }
+
+  function validateDlq(dlq, ctx) {
+    if (dlq == null) return;
+    if (typeof dlq !== 'object' || Array.isArray(dlq)) {
+      fail(`${ctx} "dlq" must be a mapping.`);
+    }
+    for (const k of Object.keys(dlq)) {
+      if (!ALLOWED_DLQ_KEYS.has(k)) {
+        fail(`${ctx} "dlq.${k}" is not a recognised key. Allowed: ${[...ALLOWED_DLQ_KEYS].join(', ')}.`);
+      }
+    }
+    if (dlq.afterAttempts != null && (!Number.isInteger(dlq.afterAttempts) || dlq.afterAttempts < 1)) {
+      fail(`${ctx} "dlq.afterAttempts" must be a positive integer.`);
+    }
+    if (dlq.target != null && typeof dlq.target !== 'string') {
+      fail(`${ctx} "dlq.target" must be a string (queue/topic name).`);
+    }
+  }
+
+  for (const ev of (doc.domainEvents || {}).published || []) {
+    const ctx = `domainEvents.published "${ev.name}"`;
+    if (ev.scope != null && !ALLOWED_SCOPES.has(ev.scope)) {
+      fail(`${ctx} declares unsupported scope "${ev.scope}". Allowed: ${[...ALLOWED_SCOPES].join(', ')}.`);
+    }
+    if (ev.broker != null) {
+      if (typeof ev.broker !== 'object' || Array.isArray(ev.broker)) {
+        fail(`${ctx} "broker" must be a mapping.`);
+      }
+      for (const k of Object.keys(ev.broker)) {
+        if (!ALLOWED_BROKER_KEYS.has(k)) {
+          fail(`${ctx} declares unsupported broker key "${k}". Allowed: ${[...ALLOWED_BROKER_KEYS].join(', ')}.`);
+        }
+      }
+      if (ev.broker.partitionKey != null) {
+        if (typeof ev.broker.partitionKey !== 'string') {
+          fail(`${ctx} "broker.partitionKey" must be a string (payload field name).`);
+        }
+        const fields = (ev.payload || []).map((p) => p.name);
+        if (fields.length > 0 && !fields.includes(ev.broker.partitionKey)) {
+          fail(`${ctx} "broker.partitionKey" references "${ev.broker.partitionKey}" which is not declared in payload.`);
+        }
+      }
+      if (ev.broker.headers != null) {
+        if (typeof ev.broker.headers !== 'object' || Array.isArray(ev.broker.headers)) {
+          fail(`${ctx} "broker.headers" must be a mapping of header name → value template.`);
+        }
+      }
+      validateRetry(ev.broker.retry, ctx);
+      validateDlq(ev.broker.dlq, ctx);
+    }
+  }
+
+  for (const ev of (doc.domainEvents || {}).consumed || []) {
+    const ctx = `domainEvents.consumed "${ev.name}"`;
+    validateRetry(ev.retry, ctx);
+    validateDlq(ev.dlq, ctx);
+  }
+
   // ── 4. readModel validation ────────────────────────────────────────────────
   for (const agg of doc.aggregates || []) {
     if (agg.readModel) {

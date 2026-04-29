@@ -39,6 +39,26 @@ const { toKebabCase } = require('./naming');
  *   INT-015  Toda integración HTTP con `auth.type: oauth2-cc` debe declarar
  *            `tokenEndpoint` y `credentialKey`. Aplica a `system.integrations[].auth`,
  *            `system.externalSystems[].auth` y `bc.integrations.outbound[].auth`.
+ *
+ * Reglas Fase 2 (cross-YAML AsyncAPI ↔ bc.yaml — gaps G4, G7, G12):
+ *
+ *   INT-016  Cada `components.messages.{X}` referenciado por algún canal del
+ *            AsyncAPI del BC debe estar declarado en `domainEvents.published[]`
+ *            o `domainEvents.consumed[]` del mismo BC.
+ *   INT-017  Cada `domainEvents.published[].name` debe tener una entrada en el
+ *            AsyncAPI del BC (mensaje + canal con `message.$ref` válido).
+ *   INT-018  El `channel` declarado en `domainEvents.published[]` debe matchear
+ *            la dirección de un canal en el AsyncAPI que referencie el mensaje
+ *            correspondiente (warn).
+ *   INT-019  Los nombres de campo de `domainEvents.published[].payload[]` deben
+ *            existir en el schema del payload del mensaje AsyncAPI; los tipos
+ *            primitivos deben ser compatibles (warn ante drift de tipo).
+ *   INT-020  Cada `domainEvents.consumed[].payload[]` debe ser un subconjunto
+ *            (por nombre) del payload publicado por el BC productor declarado
+ *            en `consumed[].sourceBc`.
+ *   INT-021  Si un campo de `published[].payload[]` coincide en nombre con una
+ *            propiedad de aggregate del BC productor marcada `hidden: true`, el
+ *            evento debe declarar `allowHiddenLeak: true`; de lo contrario error.
  */
 
 // ─── Tipos auxiliares ────────────────────────────────────────────────────────
@@ -510,15 +530,334 @@ function checkOAuth2ClientCredentials(system, bcYamls, diagnostics) {
   }
 }
 
+// ─── Reglas Fase 2 — AsyncAPI ↔ bc.yaml ────────────────────────────────────
+
+function resolveRef(doc, ref) {
+  if (!ref || typeof ref !== 'string' || !ref.startsWith('#/')) return null;
+  const parts = ref.slice(2).split('/');
+  let cur = doc;
+  for (const p of parts) {
+    if (cur == null) return null;
+    cur = cur[p];
+  }
+  return cur || null;
+}
+
+/**
+ * Extrae mensajes y canales de un AsyncAPI doc (2.x o 3.x).
+ *
+ * @returns {{
+ *   messages: Map<string, { payloadFields: Map<string, object>, raw: object }>,
+ *   channelsByAddress: Map<string, { messageNames: string[] }>
+ * }}
+ */
+function extractAsyncApiContract(doc) {
+  const messages = new Map();
+  const channelsByAddress = new Map();
+  if (!doc) return { messages, channelsByAddress };
+
+  const components = doc.components || {};
+  const componentMessages = components.messages || {};
+
+  const buildEntry = (rawMsg) => {
+    if (!rawMsg) return null;
+    let payloadSchema = rawMsg.payload || null;
+    if (payloadSchema && payloadSchema.$ref) {
+      payloadSchema = resolveRef(doc, payloadSchema.$ref) || payloadSchema;
+    }
+    const payloadFields = new Map();
+    if (payloadSchema && typeof payloadSchema === 'object' && payloadSchema.properties) {
+      for (const [propName, propSchema] of Object.entries(payloadSchema.properties)) {
+        let resolved = propSchema;
+        if (propSchema && propSchema.$ref) {
+          resolved = resolveRef(doc, propSchema.$ref) || propSchema;
+        }
+        payloadFields.set(propName, resolved);
+      }
+    }
+    return { payloadFields, raw: rawMsg };
+  };
+
+  for (const [compKey, rawMsg] of Object.entries(componentMessages)) {
+    const entry = buildEntry(rawMsg);
+    if (!entry) continue;
+    messages.set(compKey, entry);
+    if (rawMsg.name && rawMsg.name !== compKey && !messages.has(rawMsg.name)) {
+      messages.set(rawMsg.name, entry);
+    }
+  }
+
+  const channels = doc.channels || {};
+  for (const [chKey, chDef] of Object.entries(channels)) {
+    if (!chDef || typeof chDef !== 'object') continue;
+    const address = typeof chDef.address === 'string' ? chDef.address : chKey;
+    const msgNames = [];
+
+    // 2.x: publish.message.$ref / subscribe.message.$ref
+    for (const op of ['publish', 'subscribe']) {
+      if (chDef[op] && chDef[op].message) {
+        const m = chDef[op].message;
+        const refs = Array.isArray(m.oneOf) ? m.oneOf : [m];
+        for (const r of refs) {
+          if (r && r.$ref) {
+            const parts = r.$ref.split('/');
+            msgNames.push(parts[parts.length - 1]);
+          } else if (r && r.name) {
+            msgNames.push(r.name);
+          }
+        }
+      }
+    }
+
+    // 3.x: chDef.messages = { id: { $ref: '#/components/messages/Foo' } }
+    if (chDef.messages && typeof chDef.messages === 'object' && msgNames.length === 0) {
+      for (const m of Object.values(chDef.messages)) {
+        if (m && m.$ref) {
+          const parts = m.$ref.split('/');
+          msgNames.push(parts[parts.length - 1]);
+        }
+      }
+    }
+
+    channelsByAddress.set(address, { messageNames: msgNames });
+  }
+
+  return { messages, channelsByAddress };
+}
+
+function dslToJsonSchemaType(dslType) {
+  if (!dslType || typeof dslType !== 'string') return null;
+  const base = dslType.replace(/\(.*\)$/, '').trim();
+  switch (base) {
+    case 'Uuid':       return { type: 'string', format: 'uuid' };
+    case 'String':
+    case 'Text':       return { type: 'string' };
+    case 'Integer':
+    case 'Int':
+    case 'Long':       return { type: 'integer' };
+    case 'Float':
+    case 'Double':     return { type: 'number' };
+    case 'BigDecimal':
+    case 'Decimal':    return { type: 'string' };
+    case 'Boolean':
+    case 'Bool':       return { type: 'boolean' };
+    case 'Date':       return { type: 'string', format: 'date' };
+    case 'DateTime':
+    case 'Instant':    return { type: 'string', format: 'date-time' };
+    default:           return null;
+  }
+}
+
+function jsonTypesIncompatible(expected, actual) {
+  if (!expected || !actual) return false;
+  if (expected.type && actual.type && expected.type !== actual.type) return true;
+  if (expected.format && actual.format && expected.format !== actual.format) return true;
+  return false;
+}
+
+function logicalNameOf(messageKey, entry) {
+  return (entry && entry.raw && entry.raw.name) ? entry.raw.name : messageKey;
+}
+
+function checkAsyncApiContractCoherence(bcYamls, asyncApiByBc, diagnostics) {
+  // Canonical metadata fields live in EventMetadata (Fase 1) — ignored when
+  // matching against AsyncAPI payload schemas.
+  const CANONICAL_METADATA = new Set([
+    'eventId', 'eventType', 'eventVersion', 'occurredAt', 'correlationId', 'causationId',
+  ]);
+
+  for (const bc of bcYamls) {
+    const doc = asyncApiByBc.get(bc.bc);
+    if (!doc) continue;
+
+    const contract = extractAsyncApiContract(doc);
+    const published = ((bc.domainEvents || {}).published) || [];
+    const consumed  = ((bc.domainEvents || {}).consumed)  || [];
+    const publishedByName = new Set(published.map((e) => e.name));
+    const consumedByName  = new Set(consumed.map((e) => e.name));
+
+    // INT-016 — every message used in any channel must be in published[] or consumed[].
+    const messagesInChannels = new Set();
+    for (const info of contract.channelsByAddress.values()) {
+      for (const m of info.messageNames) messagesInChannels.add(m);
+    }
+    for (const msgKey of messagesInChannels) {
+      const entry = contract.messages.get(msgKey);
+      const logical = logicalNameOf(msgKey, entry);
+      if (!publishedByName.has(logical) && !consumedByName.has(logical)) {
+        diagnostics.push({
+          code: 'INT-016',
+          level: 'error',
+          message: `${bc.bc}-async-api.yaml references message "${logical}" but it is not declared in domainEvents.published[] nor consumed[] of ${bc.bc}.yaml.`,
+          location: `${bc.bc}-async-api.yaml#/components/messages/${msgKey}`,
+        });
+      }
+    }
+
+    // INT-017 — every published[] must have a logical-name match in AsyncAPI messages.
+    const asyncLogicalNames = new Set();
+    for (const [key, entry] of contract.messages.entries()) {
+      asyncLogicalNames.add(logicalNameOf(key, entry));
+    }
+    for (let i = 0; i < published.length; i++) {
+      const ev = published[i];
+      if (!asyncLogicalNames.has(ev.name)) {
+        diagnostics.push({
+          code: 'INT-017',
+          level: 'error',
+          message: `Event "${ev.name}" is published by ${bc.bc}.yaml but has no corresponding message in ${bc.bc}-async-api.yaml#/components/messages.`,
+          location: `${bc.bc}.yaml#/domainEvents/published[${i}]`,
+        });
+      }
+    }
+
+    // Helpers reused below.
+    const channelAddressForEvent = (eventName) => {
+      for (const [addr, info] of contract.channelsByAddress.entries()) {
+        for (const m of info.messageNames) {
+          const entry = contract.messages.get(m);
+          if (logicalNameOf(m, entry) === eventName) return addr;
+        }
+      }
+      return null;
+    };
+    const messageEntryForEvent = (eventName) => {
+      for (const [key, entry] of contract.messages.entries()) {
+        if (logicalNameOf(key, entry) === eventName) return entry;
+      }
+      return null;
+    };
+
+    // INT-018 + INT-019 per published event.
+    for (let i = 0; i < published.length; i++) {
+      const ev = published[i];
+      const baseLoc = `${bc.bc}.yaml#/domainEvents/published[${i}]`;
+
+      // INT-018 (warn) — declared channel matches AsyncAPI channel address.
+      if (ev.channel) {
+        const matched = channelAddressForEvent(ev.name);
+        if (matched && matched !== ev.channel) {
+          diagnostics.push({
+            code: 'INT-018',
+            level: 'warn',
+            message: `Event "${ev.name}" declares channel "${ev.channel}" in ${bc.bc}.yaml but ${bc.bc}-async-api.yaml exposes the message at "${matched}".`,
+            location: `${baseLoc}/channel`,
+          });
+        }
+      }
+
+      // INT-019 — payload field name + type subset.
+      const msgEntry = messageEntryForEvent(ev.name);
+      if (!msgEntry) continue; // INT-017 already reported it.
+
+      for (let p = 0; p < (ev.payload || []).length; p++) {
+        const f = ev.payload[p];
+        if (!f || !f.name) continue;
+        if (CANONICAL_METADATA.has(f.name)) continue;
+        if (!msgEntry.payloadFields.has(f.name)) {
+          diagnostics.push({
+            code: 'INT-019',
+            level: 'error',
+            message: `Event "${ev.name}" payload field "${f.name}" (declared in ${bc.bc}.yaml) is missing from the AsyncAPI message schema.`,
+            location: `${baseLoc}/payload[${p}]`,
+          });
+          continue;
+        }
+        const expected = dslToJsonSchemaType(f.type);
+        const actual = msgEntry.payloadFields.get(f.name) || {};
+        if (expected && jsonTypesIncompatible(expected, actual)) {
+          diagnostics.push({
+            code: 'INT-019',
+            level: 'warn',
+            message: `Event "${ev.name}" payload field "${f.name}" type drift: ${bc.bc}.yaml declares "${f.type}" (${expected.type}${expected.format ? '/' + expected.format : ''}) but AsyncAPI declares "${actual.type || '?'}${actual.format ? '/' + actual.format : ''}".`,
+            location: `${baseLoc}/payload[${p}]/type`,
+          });
+        }
+      }
+    }
+  }
+}
+
+function checkConsumerPayloadSubset(bcYamls, bcIndex, diagnostics) {
+  // INT-020 — consumed[].payload field names must be a subset of the producer's
+  // published[].payload.
+  for (const bc of bcYamls) {
+    const consumed = ((bc.domainEvents || {}).consumed) || [];
+    for (let i = 0; i < consumed.length; i++) {
+      const ev = consumed[i];
+      if (!ev || !ev.name) continue;
+      const producerName = ev.sourceBc || ev.from || null;
+      if (!producerName) continue;
+      const producer = bcIndex.get(producerName);
+      if (!producer) continue;
+      const producerEvent = (((producer.domainEvents || {}).published) || [])
+        .find((p) => p.name === ev.name);
+      if (!producerEvent) continue;
+
+      const producerNames = new Set((producerEvent.payload || []).map((f) => f.name));
+      const loc = `${bc.bc}.yaml#/domainEvents/consumed[${i}]`;
+      const fields = ev.payload || [];
+      for (let p = 0; p < fields.length; p++) {
+        const f = fields[p];
+        if (!f || !f.name) continue;
+        if (!producerNames.has(f.name)) {
+          diagnostics.push({
+            code: 'INT-020',
+            level: 'error',
+            message: `${bc.bc} consumes "${ev.name}" with payload field "${f.name}" that is not published by ${producerName}.`,
+            location: `${loc}/payload[${p}]`,
+          });
+        }
+      }
+    }
+  }
+}
+
+function checkHiddenFieldLeak(bcYamls, _bcIndex, diagnostics) {
+  // INT-021 — published payload field names must not collide with aggregate
+  // properties marked hidden:true on the producing BC, unless the event opts
+  // in via allowHiddenLeak:true.
+  for (const bc of bcYamls) {
+    const aggregates = bc.aggregates || [];
+    const hiddenFields = new Set();
+    for (const agg of aggregates) {
+      for (const prop of agg.properties || []) {
+        if (prop && prop.hidden === true && prop.name) hiddenFields.add(prop.name);
+      }
+    }
+    if (hiddenFields.size === 0) continue;
+
+    const published = ((bc.domainEvents || {}).published) || [];
+    for (let i = 0; i < published.length; i++) {
+      const ev = published[i];
+      if (ev.allowHiddenLeak === true) continue;
+      const baseLoc = `${bc.bc}.yaml#/domainEvents/published[${i}]`;
+      for (let p = 0; p < (ev.payload || []).length; p++) {
+        const f = ev.payload[p];
+        if (!f || !f.name) continue;
+        if (hiddenFields.has(f.name)) {
+          diagnostics.push({
+            code: 'INT-021',
+            level: 'error',
+            message: `Event "${ev.name}" payload exposes field "${f.name}" which is marked hidden:true on an aggregate of ${bc.bc}. Add allowHiddenLeak:true on the event to acknowledge the leak, or remove the field.`,
+            location: `${baseLoc}/payload[${p}]`,
+          });
+        }
+      }
+    }
+  }
+}
+
 /**
  * Ejecuta todas las reglas de validación de integraciones.
  *
  * @param {object} system    — resultado de readSystemYaml()
  * @param {object[]} bcYamls — array de docs leídos por readBcYaml()
  * @param {string} archDir   — ruta absoluta a arch/ (para verificar archivos)
+ * @param {Map<string, object>} [asyncApiByBc] — bcName → AsyncAPI doc crudo (opcional)
  * @returns {Diagnostic[]}
  */
-function validateIntegrationCoherence(system, bcYamls, archDir) {
+function validateIntegrationCoherence(system, bcYamls, archDir, asyncApiByBc) {
   const diagnostics = [];
   const bcIndex = indexBcYamls(bcYamls);
   const externalNames = new Set((system.externalSystems || []).map((e) => e.name));
@@ -529,6 +868,12 @@ function validateIntegrationCoherence(system, bcYamls, archDir) {
   checkPersistentProjections(bcYamls, bcIndex, diagnostics);
   checkSagas(system, bcIndex, diagnostics);
   checkOAuth2ClientCredentials(system, bcYamls, diagnostics);
+
+  if (asyncApiByBc && asyncApiByBc.size > 0) {
+    checkAsyncApiContractCoherence(bcYamls, asyncApiByBc, diagnostics);
+    checkConsumerPayloadSubset(bcYamls, bcIndex, diagnostics);
+  }
+  checkHiddenFieldLeak(bcYamls, bcIndex, diagnostics);
 
   return diagnostics;
 }
