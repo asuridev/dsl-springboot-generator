@@ -1,0 +1,95 @@
+package <%- packageName %>.<%- moduleName %>.infrastructure.projectionUpdaters;
+
+import <%- packageName %>.<%- moduleName %>.infrastructure.persistence.projections.<%- projectionName %>Jpa;
+import <%- packageName %>.<%- moduleName %>.infrastructure.persistence.projections.<%- projectionName %>JpaRepository;
+import <%- packageName %>.shared.infrastructure.eventEnvelope.EventEnvelope;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rabbitmq.client.Channel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.io.IOException;
+import java.time.Instant;
+import java.util.Map;
+import java.util.Optional;
+<% if (needsBigDecimal) { %>import java.math.BigDecimal;
+<% } %><% if (needsLocalDate) { %>import java.time.LocalDate;
+<% } %><% if (needsUUID) { %>import java.util.UUID;
+<% } %>
+/**
+ * Persistent projection updater for <%- projectionName %>.
+ * Subscribes to <%- sourceFromBc %>.<%- sourceEventKebab %> and upserts the local read model.
+ * derived_from: bc.<%- moduleName %>.projections[<%- projectionName %>] (persistent: true)
+ * upsertStrategy: <%- upsertStrategy %>
+ */
+@Component("<%- moduleName %>.<%- projectionName %>ProjectionUpdater")
+public class <%- projectionName %>ProjectionUpdater {
+
+    private static final Logger log = LoggerFactory.getLogger(<%- projectionName %>ProjectionUpdater.class);
+
+    private final <%- projectionName %>JpaRepository repository;
+    private final ObjectMapper objectMapper;
+
+    public <%- projectionName %>ProjectionUpdater(<%- projectionName %>JpaRepository repository, ObjectMapper objectMapper) {
+        this.repository = repository;
+        this.objectMapper = objectMapper;
+    }
+
+    @RabbitListener(queues = "${queues.<%- queueKey %>}")
+    @Transactional
+    public void handle(Message message, Channel channel) throws IOException {
+        long deliveryTag = message.getMessageProperties().getDeliveryTag();
+
+        EventEnvelope<Map<String, Object>> event;
+        try {
+            event = objectMapper.readValue(
+                    message.getBody(),
+                    new TypeReference<EventEnvelope<Map<String, Object>>>() {});
+        } catch (JsonProcessingException e) {
+            log.error("Fatal deserialization error in projection updater — sending to DLQ: {}", e.getMessage());
+            channel.basicNack(deliveryTag, false, false);
+            return;
+        }
+
+        try {
+            Map<String, Object> data = event.data();
+            <%- keyJavaType %> key = objectMapper.convertValue(data.get("<%- keyByField %>"), <%- keyJavaType %>.class);
+            if (key == null) {
+                log.warn("Projection event for <%- projectionName %> missing keyBy field <%- keyByField %> — discarding");
+                channel.basicAck(deliveryTag, false);
+                return;
+            }
+
+            Optional<<%- projectionName %>Jpa> existing = repository.findById(key);
+<% if (upsertStrategy === 'versionGuarded' && versionField) { %>
+            // Version guard: skip stale updates
+            <%- versionJavaType %> incomingVersion = objectMapper.convertValue(data.get("<%- versionField %>"), <%- versionJavaType %>.class);
+            if (existing.isPresent() && incomingVersion != null && existing.get().get<%- versionFieldCap %>() != null
+                    && incomingVersion.compareTo(existing.get().get<%- versionFieldCap %>()) <= 0) {
+                log.debug("Skipping stale projection update for <%- projectionName %> key={} (incoming v{} <= stored v{})",
+                        key, incomingVersion, existing.get().get<%- versionFieldCap %>());
+                channel.basicAck(deliveryTag, false);
+                return;
+            }
+<% } %>
+            <%- projectionName %>Jpa row = existing.orElseGet(<%- projectionName %>Jpa::new);
+            row.set<%- keyByFieldCap %>(key);
+<% nonKeyFields.forEach(f => { %>            row.set<%- f.cap %>(objectMapper.convertValue(data.get("<%- f.name %>"), <%- f.javaType %>.class));
+<% }); %>            row.setLastUpdatedAt(Instant.now());
+            repository.save(row);
+
+            channel.basicAck(deliveryTag, false);
+        } catch (RuntimeException e) {
+            log.warn("Projection updater error — will retry. queue={}, error={}",
+                    message.getMessageProperties().getConsumerQueue(), e.getMessage(), e);
+            throw e;
+        }
+    }
+}

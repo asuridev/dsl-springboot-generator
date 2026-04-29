@@ -16,10 +16,15 @@ const { generateJpaEntities } = require('../generators/jpa-entity-generator');
 const { generateRepositories } = require('../generators/repository-generator');
 const { generateApplicationLayer, generateProjections } = require('../generators/application-generator');
 const { generateOutboundHttpAdapters } = require('../generators/outbound-http-generator');
+const { generateExternalAdapters } = require('../generators/external-adapter-generator');
+const { generateOutboxArtifacts } = require('../generators/outbox-generator');
+const { generateProjectionUpdaters } = require('../generators/projection-updater-generator');
+const { generateSagaArtifacts } = require('../generators/saga-generator');
 const { generateControllerLayer } = require('../generators/controller-generator');
 const { generateMessagingLayer, generateSharedBrokerConfig, buildRabbitMQTopology, buildKafkaTopology } = require('../generators/messaging-generator');
 const { readBcYaml } = require('../utils/bc-yaml-reader');
 const { readOpenApiYaml, readAsyncApiYaml, readInternalApiYaml } = require('../utils/arch-yaml-reader');
+const { validateIntegrationCoherence, reportDiagnostics } = require('../utils/integration-validator');
 
 // ─── BC discovery ─────────────────────────────────────────────────────────────
 
@@ -138,7 +143,8 @@ async function promptConfig(systemName, system) {
  * Main handler for the `build` command.
  * Orchestrates the full code generation pipeline.
  */
-async function buildCommand() {
+async function buildCommand(options = {}) {
+  const strict = options.strict !== false;
   try {
     // ── 0. Pre-flight: validate arch/ structure in CWD ─────────────────────
     try {
@@ -179,27 +185,7 @@ async function buildCommand() {
     logger.info(`Output directory: ${outputDir}`);
     console.log('');
 
-    // ── 4. Generate base project (gradle + shared infra) ───────────────────
-    const baseSpinner = ora('Generating base project structure…').start();
-    try {
-      await generateBaseProject(resolvedConfig, system, outputDir);
-      baseSpinner.succeed('Base project structure generated');
-    } catch (err) {
-      baseSpinner.fail(`Base project generation failed: ${err.message}`);
-      throw err;
-    }
-
-    // ── 5. Generate Docker Compose and Dockerfile ────────────────────────────
-    const dockerSpinner = ora('Generating Docker Compose and Dockerfile…').start();
-    try {
-      await generateDockerFiles(resolvedConfig, outputDir);
-      dockerSpinner.succeed('Docker Compose and Dockerfile generated');
-    } catch (err) {
-      dockerSpinner.fail(`Docker generation failed: ${err.message}`);
-      throw err;
-    }
-
-    // ── 6. Load all BC YAMLs once — shared across remaining steps ──────────
+    // ── 3.5. Discover BCs + load all bc.yaml docs (needed early for Flyway gating) ──
     const bcNames = await discoverBcNames(outputDir);
 
     // Cross-check: warn about BCs declared in system.yaml but missing from arch/
@@ -223,11 +209,50 @@ async function buildCommand() {
         if (err.message.includes('not found')) {
           // File not found: already warned via cross-check above, skip silently
         } else {
-          // Validation / parsing error: fail loudly so the bug is visible
           logger.error(`Failed to load BC "${bcName}": ${err.message}`);
           process.exit(1);
         }
       }
+    }
+
+    // ── 3.6. Cross-YAML integration coherence (Phase 0 / INT-001..INT-011) ─────
+    const archDir = path.join(outputDir, 'arch');
+    const validationSpinner = ora('Validating integration coherence…').start();
+    const diagnostics = validateIntegrationCoherence(system, allBcYamls, archDir);
+    if (diagnostics.length === 0) {
+      validationSpinner.succeed('Integration coherence validated — no issues');
+    } else {
+      validationSpinner.stop();
+      const { hasErrors, errors, warnings } = reportDiagnostics(diagnostics, logger);
+      if (hasErrors && strict) {
+        logger.error(`Integration validation failed: ${errors} error(s), ${warnings} warning(s). Re-run with --no-strict to continue.`);
+        process.exit(1);
+      }
+      if (hasErrors) {
+        logger.warn(`Integration validation reported ${errors} error(s), ${warnings} warning(s) — continuing because --no-strict was set.`);
+      } else {
+        logger.warn(`Integration validation reported ${warnings} warning(s).`);
+      }
+    }
+
+    // ── 4. Generate base project (gradle + shared infra) ───────────────
+    const baseSpinner = ora('Generating base project structure…').start();
+    try {
+      await generateBaseProject(resolvedConfig, system, outputDir, allBcYamls);
+      baseSpinner.succeed('Base project structure generated');
+    } catch (err) {
+      baseSpinner.fail(`Base project generation failed: ${err.message}`);
+      throw err;
+    }
+
+    // ── 5. Generate Docker Compose and Dockerfile ────────────────────────────
+    const dockerSpinner = ora('Generating Docker Compose and Dockerfile…').start();
+    try {
+      await generateDockerFiles(resolvedConfig, outputDir);
+      dockerSpinner.succeed('Docker Compose and Dockerfile generated');
+    } catch (err) {
+      dockerSpinner.fail(`Docker generation failed: ${err.message}`);
+      throw err;
     }
 
     // ── 6. Per-BC domain layer generation (SP-3) ───────────────────────────
@@ -266,7 +291,7 @@ async function buildCommand() {
       );
       if (outboundIntegrations.length === 0) continue;
       try {
-        await generateOutboundHttpAdapters(bcYaml, resolvedConfig, outputDir);
+        await generateOutboundHttpAdapters(bcYaml, resolvedConfig, outputDir, system);
         outboundAdapterCount += outboundIntegrations.length;
       } catch (err) {
         logger.warn(`Skipping outbound HTTP adapters for ${bcYaml.bc}: ${err.message}`);
@@ -276,6 +301,73 @@ async function buildCommand() {
       outboundSpinner.succeed(`Outbound HTTP adapters generated: ${outboundAdapterCount} integration(s)`);
     } else {
       outboundSpinner.info('No outbound HTTP integrations found — skipping adapter generation');
+    }
+
+    // ── 8c. External-system ACL adapters (Phase 1) ─────────────────────────
+    const externalSpinner = ora('Generating external-system ACL adapters…').start();
+    try {
+      const { adapters, operations: extOpCount } = await generateExternalAdapters(
+        allBcYamls,
+        system,
+        resolvedConfig,
+        outputDir
+      );
+      if (adapters > 0) {
+        externalSpinner.succeed(`External ACL adapters generated: ${adapters} system(s), ${extOpCount} operation(s)`);
+      } else {
+        externalSpinner.info('No external systems with operations declared — skipping ACL adapter generation');
+      }
+    } catch (err) {
+      externalSpinner.fail(`External adapter generation failed: ${err.message}`);
+      throw err;
+    }
+
+    // ── 8d. Shared transactional outbox + idempotency (Phase 2) ───────────────
+    const reliabilitySpinner = ora('Generating reliability artifacts (outbox / idempotency)…').start();
+    let reliabilityResult;
+    try {
+      reliabilityResult = await generateOutboxArtifacts(system, resolvedConfig, outputDir);
+      const { outboxEnabled, idempotencyEnabled } = reliabilityResult;
+      if (outboxEnabled || idempotencyEnabled) {
+        const parts = [];
+        if (outboxEnabled) parts.push('transactional outbox');
+        if (idempotencyEnabled) parts.push('consumer idempotency');
+        reliabilitySpinner.succeed(`Reliability artifacts generated: ${parts.join(', ')}`);
+      } else {
+        reliabilitySpinner.info('Reliability flags disabled — skipping outbox / idempotency artifacts');
+      }
+    } catch (err) {
+      reliabilitySpinner.fail(`Reliability artifact generation failed: ${err.message}`);
+      throw err;
+    }
+    const reliabilityFlags = (system.infrastructure && system.infrastructure.reliability) || {};
+
+    // ── 8e. Persistent projection updaters (Phase 3) ───────────────────
+    const projectionSpinner = ora('Generating persistent projection updaters…').start();
+    try {
+      const { count } = await generateProjectionUpdaters(allBcYamls, system, resolvedConfig, outputDir);
+      if (count > 0) {
+        projectionSpinner.succeed(`Persistent projection updaters generated: ${count} projection(s)`);
+      } else {
+        projectionSpinner.info('No persistent projections declared — skipping projection updaters');
+      }
+    } catch (err) {
+      projectionSpinner.fail(`Projection updater generation failed: ${err.message}`);
+      throw err;
+    }
+
+    // ── 8f. Saga choreography artifacts (Phase 4) ──────────────────────
+    const sagaSpinner = ora('Generating saga choreography artifacts…').start();
+    try {
+      const { count: sagaCount } = await generateSagaArtifacts(system.sagas, resolvedConfig, outputDir);
+      if (sagaCount > 0) {
+        sagaSpinner.succeed(`Saga choreography artifacts generated: ${sagaCount} saga(s)`);
+      } else {
+        sagaSpinner.info('No sagas declared — skipping saga artifacts');
+      }
+    } catch (err) {
+      sagaSpinner.fail(`Saga artifact generation failed: ${err.message}`);
+      throw err;
     }
 
     // ── 9. Shared broker config bean (SP-6b) ───────────────────────────────
@@ -309,7 +401,7 @@ async function buildCommand() {
       try {
         const asyncApiDoc = await readAsyncApiYaml(bcYaml.bc);
         const { integrationEventCount: iec, listenerCount: lc } =
-          await generateMessagingLayer(bcYaml, asyncApiDoc, resolvedConfig, outputDir);
+          await generateMessagingLayer(bcYaml, asyncApiDoc, resolvedConfig, outputDir, reliabilityFlags, system.sagas || []);
         messagingCount += iec + lc;
       } catch (err) {
         logger.warn(`Skipping messaging for ${bcYaml.bc}: ${err.message}`);

@@ -55,6 +55,8 @@ async function readSystemYaml() {
     infrastructure: doc.infrastructure || {},
     integrations: doc.integrations || [],
     externalSystems: doc.externalSystems || [],
+    // Phase 4 — choreographed sagas (optional). Pass-through when absent → [].
+    sagas: Array.isArray(doc.sagas) ? doc.sagas : [],
   };
 }
 

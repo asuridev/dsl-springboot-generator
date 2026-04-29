@@ -51,6 +51,19 @@ dependencies {
     <%- databaseDependency %>
 
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.13'
+<% if (resilienceEnabled) { %>
+    implementation 'org.springframework.cloud:spring-cloud-starter-circuitbreaker-resilience4j'
+    implementation 'io.github.resilience4j:resilience4j-spring-boot3'
+<% } %>
+<% if (oauth2ClientEnabled) { %>
+    implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
+<% } %>
+<% if (flywayEnabled) { %>
+    implementation 'org.flywaydb:flyway-core'
+<% if (databaseId === 'postgresql') { %>    implementation 'org.flywaydb:flyway-database-postgresql'
+<% } else if (databaseId === 'mysql') { %>    implementation 'org.flywaydb:flyway-mysql'
+<% } %>
+<% } %>
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 <% if (brokerTestDependency) { %>

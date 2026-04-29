@@ -7,12 +7,22 @@ const allOps = operations || [];
 const hasAnyList = allOps.some(op => op.returnList);
 const uniqueDomainTypes = [...new Set(allOps.filter(op => op.hasDomainReturn).map(op => op.domainType))];
 const uniqueReqDtos = [...new Set(allOps.filter(op => op.hasBody).map(op => op.requestDtoName))];
+const _resilience = (typeof resilience !== 'undefined') ? resilience : null;
+const _resilienceName = _resilience ? (targetBc) : null;
+const _retryEnabled = !!(_resilience && _resilience.retries && Number(_resilience.retries.maxAttempts || 0) > 1);
+const _cbEnabled    = !!(_resilience && _resilience.circuitBreaker);
 %>
 <%_ if (hasAnyList) { _%>
 import java.util.List;
 import java.util.stream.Collectors;
 <%_ } _%>
 import java.util.UUID;
+<%_ if (_cbEnabled) { _%>
+import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
+<%_ } _%>
+<%_ if (_retryEnabled) { _%>
+import io.github.resilience4j.retry.annotation.Retry;
+<%_ } _%>
 <%_ uniqueDomainTypes.forEach(dt => { _%>
 import <%- packageName %>.<%- moduleName %>.domain.models.<%- targetBcPackage %>.<%- dt %>;
 <%_ }); _%>
@@ -24,6 +34,10 @@ import <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBc
  * Feign adapter — infrastructure implementation of {@link <%- portInterfaceName %>}.
  * Delegates HTTP calls to {@link <%- feignClientClassName %>} and maps
  * infrastructure DTOs to domain models via {@link <%- aclMapperClassName %>}.
+<%_ if (_resilience) { _%>
+ *
+ * derived_from: system.yaml#/integrations[from=<%- moduleName %>,to=<%- targetBc %>]/resilience
+<%_ } _%>
  */
 @Component
 public class <%- feignAdapterClassName %> implements <%- portInterfaceName %> {
@@ -45,7 +59,14 @@ public class <%- feignAdapterClassName %> implements <%- portInterfaceName %> {
       const args   = [];
       op.pathVariables.forEach(pv => { params.push(`String ${pv}`); args.push(pv); });
       if (op.hasBody) { params.push(`${op.requestDtoName} body`); args.push('body'); }
+      const fbParams = [...params, 'Throwable cause'];
 _%>
+<%_   if (_cbEnabled) { _%>
+    @CircuitBreaker(name = "<%- _resilienceName %>", fallbackMethod = "<%- op.methodName %>Fallback")
+<%_   } _%>
+<%_   if (_retryEnabled) { _%>
+    @Retry(name = "<%- _resilienceName %>")
+<%_   } _%>
     public <%- domainReturn %> <%- op.methodName %>(<%- params.join(', ') %>) {
 <%_   if (!op.hasDomainReturn) { _%>
         feignClient.<%- op.feignMethodName %>(<%- args.join(', ') %>);
@@ -57,6 +78,23 @@ _%>
         return aclMapper.to<%- op.domainType %>(feignClient.<%- op.feignMethodName %>(<%- args.join(', ') %>));
 <%_   } _%>
     }
+<%_   if (_cbEnabled) { _%>
+
+    /**
+     * Resilience fallback for {@link #<%- op.methodName %>}.
+     * Invoked when the circuit-breaker is open or after retries are exhausted.
+     */
+    @SuppressWarnings("unused")
+    private <%- domainReturn %> <%- op.methodName %>Fallback(<%- fbParams.join(', ') %>) {
+<%_     if (!op.hasDomainReturn) { _%>
+        // TODO: implement fallback for <%- op.methodName %> — derived_from: resilience.fallback
+        throw new UnsupportedOperationException("Fallback for <%- op.methodName %> not implemented yet", cause);
+<%_     } else { _%>
+        // TODO: implement fallback for <%- op.methodName %> — derived_from: resilience.fallback
+        throw new UnsupportedOperationException("Fallback for <%- op.methodName %> not implemented yet", cause);
+<%_     } _%>
+    }
+<%_   } _%>
 <%_ }); _%>
 <%_ fkMethods.forEach(fk => { _%>
 

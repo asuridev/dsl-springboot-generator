@@ -5,6 +5,7 @@ spring:
       - "classpath:parameters/production/cors.yaml"
 <%- hasMessaging ? '      - "classpath:parameters/production/' + broker + '.yaml"' : '' %>
 <%- hasHttpIntegrations ? '      - "classpath:parameters/production/urls.yaml"' : '' %>
+<%- resilienceEnabled ? '      - "classpath:parameters/production/resilience.yaml"' : '' %>
 
 springdoc:
   swagger-ui:

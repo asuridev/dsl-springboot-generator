@@ -4,7 +4,11 @@ import <%= packageName %>.<%= moduleName %>.application.commands.<%= commandClas
 import <%= packageName %>.shared.domain.customExceptions.DomainException;
 import <%= packageName %>.shared.infrastructure.configurations.useCaseConfig.UseCaseMediator;
 import <%= packageName %>.shared.infrastructure.eventEnvelope.EventEnvelope;
-import com.fasterxml.jackson.core.JsonProcessingException;
+<% if (consumerIdempotencyEnabled) { %>import <%= packageName %>.shared.infrastructure.idempotency.IdempotencyGuard;
+<% } %><% if (sagasEnabled) { %>import <%= packageName %>.shared.infrastructure.correlation.CorrelationContext;
+<% } %>
+<% if (sagasEnabled && sagaSteps && sagaSteps.length > 0) { %>import <%= packageName %>.shared.domain.annotations.SagaStep;
+<% } %>import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.rabbitmq.client.Channel;
@@ -43,14 +47,18 @@ public class <%= listenerClassName %> {
 
     private final UseCaseMediator useCaseMediator;
     private final ObjectMapper objectMapper;
-
-    public <%= listenerClassName %>(UseCaseMediator useCaseMediator, ObjectMapper objectMapper) {
+<% if (consumerIdempotencyEnabled) { %>    private final IdempotencyGuard idempotencyGuard;
+    private static final String HANDLER_ID = "<%= packageName %>.<%= moduleName %>.<%= listenerClassName %>";
+<% } %>
+    public <%= listenerClassName %>(UseCaseMediator useCaseMediator, ObjectMapper objectMapper<% if (consumerIdempotencyEnabled) { %>, IdempotencyGuard idempotencyGuard<% } %>) {
         this.useCaseMediator = useCaseMediator;
         this.objectMapper = objectMapper;
-    }
+<% if (consumerIdempotencyEnabled) { %>        this.idempotencyGuard = idempotencyGuard;
+<% } %>    }
 
     @RabbitListener(queues = "${queues.<%= queueKey %>}")
-    public void handle(Message message, Channel channel) throws IOException {
+<% if (sagasEnabled && sagaSteps && sagaSteps.length > 0) { %><% sagaSteps.forEach(s => { %>    @SagaStep(saga = "<%= s.saga %>", order = <%= s.order %>, event = "<%= eventName %>", role = SagaStep.Role.<%= s.role %>)
+<% }); %><% } %>    public void handle(Message message, Channel channel) throws IOException {
         long deliveryTag = message.getMessageProperties().getDeliveryTag();
 
         EventEnvelope<Map<String, Object>> event;
@@ -63,6 +71,19 @@ public class <%= listenerClassName %> {
             channel.basicNack(deliveryTag, false, false);
             return;
         }
+<% if (sagasEnabled) { %>
+        // derived_from: system.yaml#/sagas — propagate correlationId across hops
+        String correlationId = event.metadata() != null ? event.metadata().correlationId() : null;
+        CorrelationContext.set(correlationId);
+<% } %><% if (consumerIdempotencyEnabled) { %>
+        // derived_from: system.yaml#/infrastructure/reliability/consumerIdempotency
+        String eventId = event.metadata() != null ? event.metadata().eventId() : null;
+        if (eventId != null && !idempotencyGuard.tryRecord(HANDLER_ID, eventId)) {
+            log.debug("Duplicate eventId={} for handler={} — acknowledging without dispatch", eventId, HANDLER_ID);
+            channel.basicAck(deliveryTag, false);
+            return;
+        }
+<% } %>
 
 <% (fields || []).forEach(f => { %>
 <%   const listMatch = f.javaType && f.javaType.match(/^List<(.+)>$/); %>
@@ -90,6 +111,8 @@ public class <%= listenerClassName %> {
             log.warn("Infrastructure error — will retry. queue={}, error={}",
                 message.getMessageProperties().getConsumerQueue(), e.getMessage(), e);
             throw e;
-        }
+<% if (sagasEnabled) { %>        } finally {
+            CorrelationContext.clear();
+<% } %>        }
     }
 }

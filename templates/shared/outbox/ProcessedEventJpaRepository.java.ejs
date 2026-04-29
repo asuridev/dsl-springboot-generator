@@ -1,0 +1,8 @@
+// derived_from: system.yaml#/infrastructure/reliability/consumerIdempotency
+package <%= packageName %>.shared.infrastructure.idempotency;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface ProcessedEventJpaRepository
+    extends JpaRepository<ProcessedEventJpa, ProcessedEventJpa.ProcessedEventId> {
+}

@@ -1,0 +1,54 @@
+package <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>;
+
+import org.springframework.stereotype.Component;
+<%
+const responseMethods = operations.filter(op => op.hasDomainReturn);
+const uniqueDomainTypes = [...new Set(responseMethods.map(op => op.domainType))];
+const uniqueInfraDtos   = [...new Set(responseMethods.map(op => op.infraDtoName))];
+%>
+<%_ uniqueDomainTypes.forEach(dt => { _%>
+import <%- packageName %>.<%- moduleName %>.domain.models.<%- targetBcPackage %>.<%- dt %>;
+<%_ }); _%>
+<%_ uniqueInfraDtos.forEach(dto => { _%>
+import <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>.dtos.<%- dto %>;
+<%_ }); _%>
+
+<%- derivedFromComment %>
+/**
+ * ACL (Anti-Corruption Layer) mapper for {@link <%- portInterfaceName %>}.
+ *
+ * <p>Translates wire-format DTOs from the <%- targetBc %> external API into
+ * domain models. The provider's wire format and error semantics never reach
+ * the domain — they stop here.
+ *
+ * <p>Each mapping method is generated as a scaffold ({@code // TODO}). Implement
+ * the translation manually because external responses often require domain
+ * decisions (status normalization, error code mapping, derived fields) that
+ * cannot be generated deterministically.
+ */
+@Component
+public class <%- aclMapperClassName %> {
+<%_ responseMethods.forEach(op => { _%>
+
+    /**
+<%_   op.domainFields.forEach(f => { _%>
+<%_     if (f.source) { _%>
+     * <code><%- f.name %></code> ← {@code dto.<%- f.source %>()}
+<%_     } else if (f.derivedFromExpr) { _%>
+     * <code><%- f.name %></code> derived_from: <%- f.derivedFromExpr %>
+<%_     } _%>
+<%_   }); _%>
+     */
+    public <%- op.domainType %> to<%- op.domainType %>(<%- op.infraDtoName %> dto) {
+        if (dto == null) return null;
+        // TODO: implement mapping — see <%- op.yamlPointer %>
+        throw new UnsupportedOperationException("<%- op.methodName %> ACL mapping not implemented yet");
+    }
+<%_ }); _%>
+<%_ const requestMethods = operations.filter(op => op.hasBody); _%>
+<%_ requestMethods.forEach(op => { _%>
+
+    // Request mapping (domain → wire) is intentionally left to the adapter caller.
+    // If a domain command type is needed in a future phase, generate {@code to<%- op.requestDtoName %>()} here.
+<%_ }); _%>
+}

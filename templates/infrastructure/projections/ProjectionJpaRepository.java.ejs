@@ -1,0 +1,13 @@
+package <%- packageName %>.<%- moduleName %>.infrastructure.persistence.projections;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+<% if (keyImport) { %>import <%- keyImport %>;
+<% } %>
+/**
+ * Spring Data repository for <%- projectionName %>Jpa.
+ * derived_from: bc.<%- moduleName %>.projections[<%- projectionName %>] (persistent: true)
+ */
+@Repository
+public interface <%- projectionName %>JpaRepository extends JpaRepository<<%- projectionName %>Jpa, <%- keyJavaType %>> {
+}

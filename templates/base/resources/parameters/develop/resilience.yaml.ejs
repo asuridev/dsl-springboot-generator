@@ -1,0 +1,26 @@
+# derived_from: system.yaml#/integrations[*]/resilience
+#
+# Resilience4j defaults for outbound HTTP integrations.
+# Each integration's @CircuitBreaker(name = "<targetBc>") and
+# @Retry(name = "<targetBc>") resolves to the "default" config below unless
+# you override it under instances.<targetBc>.
+resilience4j:
+  circuitbreaker:
+    configs:
+      default:
+        registerHealthIndicator: true
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 20
+        minimumNumberOfCalls: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+        permittedNumberOfCallsInHalfOpenState: 3
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+  retry:
+    configs:
+      default:
+        maxAttempts: 3
+        waitDuration: 500ms
+        retryExceptions:
+          - feign.RetryableException
+          - java.io.IOException

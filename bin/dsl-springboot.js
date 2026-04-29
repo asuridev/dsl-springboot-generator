@@ -19,6 +19,8 @@ const { buildCommand } = require('../src/commands/build');
 program
   .command('build')
   .description('Generate a complete Spring Boot project from arch/ YAML artifacts')
+  .option('--strict', 'Abort on integration coherence errors (default: true)', true)
+  .option('--no-strict', 'Continue on integration coherence errors (warnings only)')
   .action(buildCommand);
 
 program.parse(process.argv);

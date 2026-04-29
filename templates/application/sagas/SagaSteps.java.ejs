@@ -1,0 +1,47 @@
+package <%= packageName %>.shared.application.sagas;
+
+/**
+ * <%= sagaPascal %> — choreographed saga descriptor.
+ *
+ * derived_from: system.yaml#/sagas[<%= sagaName %>]
+ * style: choreography
+ *
+ * <%- description %>
+ *
+ * Trigger: {@code <%= trigger.event %>} (bc: {@code <%= trigger.bc %>}).
+ *
+ * Steps (in order):
+ * <ul>
+<% steps.forEach(s => { %> *   <li>#<%= s.order %> {@code <%= s.bc %>} reacts to {@code <%= s.triggeredBy %>}<% if (s.onSuccess) { %> → emits {@code <%= s.onSuccess %>}<% } %><% if (s.onFailure) { %> (failure: {@code <%= s.onFailure %>})<% } %><% if (s.compensation) { %> (compensates with {@code <%= s.compensation %>})<% } %></li>
+<% }); %> * </ul>
+ *
+ * This class is generated and is intentionally side-effect free. It exposes the
+ * saga name and event constants so other components (handlers, tracing, tests)
+ * can reference the saga without hard-coding string literals.
+ */
+public final class <%= sagaPascal %>Steps {
+
+    private <%= sagaPascal %>Steps() {
+        // constants holder
+    }
+
+    /** Saga name as declared in {@code system.yaml#/sagas}. */
+    public static final String NAME = "<%= sagaName %>";
+
+    /** Event that triggers the saga. */
+    public static final String TRIGGER_EVENT = "<%= trigger.event %>";
+
+    /** Bounded context that publishes the trigger event. */
+    public static final String TRIGGER_BC = "<%= trigger.bc %>";
+
+    // ── Step events ─────────────────────────────────────────────────────────
+<% steps.forEach(s => { %>
+    /** Step <%= s.order %> — handled by {@code <%= s.bc %>}. */
+    public static final int STEP_<%= s.order %>_ORDER = <%= s.order %>;
+    public static final String STEP_<%= s.order %>_BC = "<%= s.bc %>";
+    public static final String STEP_<%= s.order %>_TRIGGERED_BY = "<%= s.triggeredBy %>";
+<% if (s.onSuccess) { %>    public static final String STEP_<%= s.order %>_SUCCESS = "<%= s.onSuccess %>";
+<% } %><% if (s.onFailure) { %>    public static final String STEP_<%= s.order %>_FAILURE = "<%= s.onFailure %>";
+<% } %><% if (s.compensation) { %>    public static final String STEP_<%= s.order %>_COMPENSATION = "<%= s.compensation %>";
+<% } %><% }); %>
+}

@@ -4,6 +4,7 @@ const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toCamelCase, toPackagePath } = require('../utils/naming');
 const { readInternalApiYaml } = require('../utils/arch-yaml-reader');
+const { resolveResilienceForBcHttp, resolveAuthForBcHttp } = require('../utils/resilience-auth-resolver');
 const logger = require('../utils/logger');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates', 'infrastructure', 'adapters');
@@ -416,7 +417,7 @@ function collectAclMapperVoImports(operations, packageName, moduleName) {
 
 // ─── Main generator ───────────────────────────────────────────────────────────
 
-async function generateOutboundHttpAdapters(bcYaml, config, outputDir) {
+async function generateOutboundHttpAdapters(bcYaml, config, outputDir, system = {}) {
   const { packageName } = config;
   const moduleName = bcYaml.bc;
   const packagePath = toPackagePath(packageName);
@@ -480,6 +481,10 @@ async function generateOutboundHttpAdapters(bcYaml, config, outputDir) {
     const adapterDir = path.join(bcDir, 'infrastructure', 'adapters', targetBcPackage);
     const adapterDtosDir = path.join(adapterDir, 'dtos');
 
+    // Phase 5 — resilience + auth resolution (optional; both can be null)
+    const resilience = resolveResilienceForBcHttp(system, bcYaml, targetBc);
+    const auth       = resolveAuthForBcHttp(system, bcYaml, targetBc);
+
     const templateVarsBase = {
       packageName,
       moduleName,
@@ -494,6 +499,8 @@ async function generateOutboundHttpAdapters(bcYaml, config, outputDir) {
       baseUrlProperty,
       operations,
       fkMethods,
+      resilience,
+      auth,
     };
 
     // 1. Port interface (application/ports/)

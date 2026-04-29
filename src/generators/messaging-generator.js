@@ -245,7 +245,7 @@ async function generateRabbitMessageBrokerAdapter(publishedEventCtxs, packageNam
  * Generates {BcPascal}DomainEventHandler.java in application/usecases/.
  * Bridges the internal Spring event bus → MessageBroker port.
  */
-async function generateDomainEventHandler(publishedEventCtxs, packageName, moduleName, usecasesDir) {
+async function generateDomainEventHandler(publishedEventCtxs, packageName, moduleName, usecasesDir, outboxEnabled = false, sagasEnabled = false) {
   const bcPascal = toPascalCase(moduleName);
 
   await renderAndWrite(
@@ -256,6 +256,8 @@ async function generateDomainEventHandler(publishedEventCtxs, packageName, modul
       bc: moduleName,
       bcPascal,
       domainEvents: publishedEventCtxs,
+      outboxEnabled,
+      sagasEnabled,
     }
   );
 }
@@ -271,7 +273,7 @@ async function generateDomainEventHandler(publishedEventCtxs, packageName, modul
  *   queueKey  — key in rabbitmq.yaml queues section (e.g. orders-cart-checked-out)
  *   payload   — list of { name, type } fields
  */
-async function generateRabbitListener(consumedEvent, packageName, moduleName, listenersDir, enumNames = new Set(), voNames = new Set()) {
+async function generateRabbitListener(consumedEvent, packageName, moduleName, listenersDir, enumNames = new Set(), voNames = new Set(), consumerIdempotencyEnabled = false, sagasEnabled = false, sagaSteps = []) {
   const listenerClassName = `${toPascalCase(consumedEvent.name)}RabbitListener`;
   const commandClassName = `${toPascalCase(consumedEvent.command)}Command`;
   const queueKey = consumedEvent.queueKey || `${moduleName}-${toRoutingKeyKebab(consumedEvent.name)}`;
@@ -306,6 +308,9 @@ async function generateRabbitListener(consumedEvent, packageName, moduleName, li
       eventName: consumedEvent.name,
       fields,
       commandFields,
+      consumerIdempotencyEnabled,
+      sagasEnabled,
+      sagaSteps,
     }
   );
 }
@@ -465,7 +470,7 @@ async function generateKafkaMessageBrokerAdapter(publishedEventCtxs, packageName
 /**
  * Generates one {MessageName}KafkaListener.java per consumed event.
  */
-async function generateKafkaListener(consumedEvent, packageName, moduleName, listenersDir, enumNames = new Set(), voNames = new Set()) {
+async function generateKafkaListener(consumedEvent, packageName, moduleName, listenersDir, enumNames = new Set(), voNames = new Set(), consumerIdempotencyEnabled = false, sagasEnabled = false, sagaSteps = []) {
   const listenerClassName = `${toPascalCase(consumedEvent.name)}KafkaListener`;
   const commandClassName  = `${toPascalCase(consumedEvent.command)}Command`;
   const topicKey = consumedEvent.topicKey || `${moduleName}-${toRoutingKeyKebab(consumedEvent.name)}`;
@@ -487,6 +492,9 @@ async function generateKafkaListener(consumedEvent, packageName, moduleName, lis
       useCase:  consumedEvent.useCase  || consumedEvent.command,
       eventName: consumedEvent.name,
       fields,
+      consumerIdempotencyEnabled,
+      sagasEnabled,
+      sagaSteps,
     }
   );
 }
@@ -502,9 +510,14 @@ async function generateKafkaListener(consumedEvent, packageName, moduleName, lis
  * @param {string} outputDir
  * @returns {{ eventCount, integrationEventCount, listenerCount }}
  */
-async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir) {
+async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, reliability = {}, sagas = []) {
   const packageName = config.packageName;
   const moduleName = bcYaml.bc;
+  const outboxEnabled = !!reliability.outbox;
+  const consumerIdempotencyEnabled = !!reliability.consumerIdempotency;
+  const { buildSagaEventIndex } = require('./saga-generator');
+  const sagaEventIndex = buildSagaEventIndex(sagas);
+  const sagasEnabled = sagaEventIndex.size > 0;
 
   const publishedEvents = (bcYaml.domainEvents || {}).published || [];
   const consumedEvents  = (bcYaml.domainEvents || {}).consumed  || [];
@@ -661,7 +674,12 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir) {
 
   if (publishedEventCtxs.length > 0) {
     await generateMessageBrokerPort(publishedEventCtxs, packageName, moduleName, portsDir);
-    await generateDomainEventHandler(publishedEventCtxs, packageName, moduleName, usecasesDir);
+    // Phase 4 — annotate published events with their saga steps (if any).
+    const annotatedCtxs = publishedEventCtxs.map((ctx) => ({
+      ...ctx,
+      sagaSteps: sagaEventIndex.get(ctx.name) || [],
+    }));
+    await generateDomainEventHandler(annotatedCtxs, packageName, moduleName, usecasesDir, outboxEnabled, sagasEnabled);
 
     if (config.broker === 'kafka') {
       await generateKafkaMessageBrokerAdapter(publishedEventCtxs, packageName, moduleName, adaptersDir);
@@ -689,12 +707,14 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir) {
     // Only generate listener if we have a command to dispatch to
     if (!consumed.command) continue;
 
+    const sagaSteps = sagaEventIndex.get(consumed.name) || [];
+
     if (config.broker === 'kafka') {
       const listenersDir = path.join(bcBase, 'infrastructure', 'kafkaListener');
-      await generateKafkaListener(consumed, packageName, moduleName, listenersDir, enumNames, voNames);
+      await generateKafkaListener(consumed, packageName, moduleName, listenersDir, enumNames, voNames, consumerIdempotencyEnabled, sagasEnabled, sagaSteps);
     } else {
       const listenersDir = path.join(bcBase, 'infrastructure', 'rabbitListener');
-      await generateRabbitListener(consumed, packageName, moduleName, listenersDir, enumNames, voNames);
+      await generateRabbitListener(consumed, packageName, moduleName, listenersDir, enumNames, voNames, consumerIdempotencyEnabled, sagasEnabled, sagaSteps);
     }
     listenerCount++;
   }
@@ -752,6 +772,20 @@ function buildRabbitMQTopology(allBcYamls) {
         exchangeMap.set(producerBc, `${producerBc}.events`);
       }
     }
+
+    // Persistent projections (Phase 3): each one declares its own queue bound
+    // to the source BC's exchange. Independent of domainEvents.consumed[].
+    for (const proj of (bcYaml.projections || [])) {
+      if (proj.persistent !== true || !proj.source || proj.source.kind !== 'event') continue;
+      const eventKebab = toKebabCase(proj.source.event);
+      const projKebab  = toKebabCase(proj.name);
+      const queueKey   = `${bcName}-projection-${projKebab}-${eventKebab}`;
+      queueMap.set(queueKey, `${bcName}.${queueKey}`);
+      rkMap.set(queueKey,    eventKebab.replace(/-/g, '.'));
+      if (proj.source.from && !exchangeMap.has(proj.source.from)) {
+        exchangeMap.set(proj.source.from, `${proj.source.from}.events`);
+      }
+    }
   }
 
   return {
@@ -790,6 +824,16 @@ function buildKafkaTopology(allBcYamls) {
       const eventKebab = toKebabCase(event.name);
       const topicKey   = event.topicKey || `${bcName}-${eventKebab}`;
       topicMap.set(topicKey, `${bcName}.${eventKebab}`);
+    }
+
+    // Persistent projections (Phase 3) declare an independent topic key.
+    for (const proj of (bcYaml.projections || [])) {
+      if (proj.persistent !== true || !proj.source || proj.source.kind !== 'event') continue;
+      const eventKebab = toKebabCase(proj.source.event);
+      const projKebab  = toKebabCase(proj.name);
+      const topicKey   = `${bcName}-projection-${projKebab}-${eventKebab}`;
+      const sourceBc   = proj.source.from || bcName;
+      topicMap.set(topicKey, `${sourceBc}.${eventKebab}`);
     }
   }
 

@@ -3,6 +3,10 @@ package <%= packageName %>.<%= moduleName %>.infrastructure.kafkaListener;
 import <%= packageName %>.<%= moduleName %>.application.commands.<%= commandClassName %>;
 import <%= packageName %>.shared.infrastructure.configurations.useCaseConfig.UseCaseMediator;
 import <%= packageName %>.shared.infrastructure.eventEnvelope.EventEnvelope;
+<% if (consumerIdempotencyEnabled) { %>import <%= packageName %>.shared.infrastructure.idempotency.IdempotencyGuard;
+<% } %><% if (sagasEnabled) { %>import <%= packageName %>.shared.infrastructure.correlation.CorrelationContext;
+<% } %><% if (sagasEnabled && sagaSteps && sagaSteps.length > 0) { %>import <%= packageName %>.shared.domain.annotations.SagaStep;
+<% } %>
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -41,14 +45,18 @@ public class <%= listenerClassName %> {
 
     private final UseCaseMediator useCaseMediator;
     private final ObjectMapper objectMapper;
-
-    public <%= listenerClassName %>(UseCaseMediator useCaseMediator, ObjectMapper objectMapper) {
+<% if (consumerIdempotencyEnabled) { %>    private final IdempotencyGuard idempotencyGuard;
+    private static final String HANDLER_ID = "<%= packageName %>.<%= moduleName %>.<%= listenerClassName %>";
+<% } %>
+    public <%= listenerClassName %>(UseCaseMediator useCaseMediator, ObjectMapper objectMapper<% if (consumerIdempotencyEnabled) { %>, IdempotencyGuard idempotencyGuard<% } %>) {
         this.useCaseMediator = useCaseMediator;
         this.objectMapper = objectMapper;
-    }
+<% if (consumerIdempotencyEnabled) { %>        this.idempotencyGuard = idempotencyGuard;
+<% } %>    }
 
     @KafkaListener(topics = "${topics.<%= topicKey %>}", groupId = "${spring.kafka.consumer.group-id}")
-    public void handle(ConsumerRecord<String, String> record, Acknowledgment acknowledgment) {
+<% if (sagasEnabled && sagaSteps && sagaSteps.length > 0) { %><% sagaSteps.forEach(s => { %>    @SagaStep(saga = "<%= s.saga %>", order = <%= s.order %>, event = "<%= eventName %>", role = SagaStep.Role.<%= s.role %>)
+<% }); %><% } %>    public void handle(ConsumerRecord<String, String> record, Acknowledgment acknowledgment) {
         EventEnvelope<Map<String, Object>> event;
         try {
             event = objectMapper.readValue(
@@ -59,6 +67,19 @@ public class <%= listenerClassName %> {
             acknowledgment.acknowledge();
             return;
         }
+<% if (sagasEnabled) { %>
+        // derived_from: system.yaml#/sagas — propagate correlationId across hops
+        String correlationId = event.metadata() != null ? event.metadata().correlationId() : null;
+        CorrelationContext.set(correlationId);
+<% } %><% if (consumerIdempotencyEnabled) { %>
+        // derived_from: system.yaml#/infrastructure/reliability/consumerIdempotency
+        String eventId = event.metadata() != null ? event.metadata().eventId() : null;
+        if (eventId != null && !idempotencyGuard.tryRecord(HANDLER_ID, eventId)) {
+            log.debug("Duplicate eventId={} for handler={} — acknowledging without dispatch", eventId, HANDLER_ID);
+            acknowledgment.acknowledge();
+            return;
+        }
+<% } %>
 
 <% (fields || []).forEach(f => { %>
 <%   const listMatch = f.javaType && f.javaType.match(/^List<(.+)>$/); %>
@@ -80,6 +101,8 @@ public class <%= listenerClassName %> {
         } catch (Exception e) {
             log.error("Error dispatching <%= commandClassName %>: {}", e.getMessage(), e);
             // Do not acknowledge — allow retry according to consumer configuration
-        }
+<% if (sagasEnabled) { %>        } finally {
+            CorrelationContext.clear();
+<% } %>        }
     }
 }

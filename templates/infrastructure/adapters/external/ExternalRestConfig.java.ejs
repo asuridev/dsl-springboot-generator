@@ -17,18 +17,19 @@ import java.util.concurrent.TimeUnit;
 
 <%
 const _connectMs = (resilience && resilience.connectTimeoutMs) || 5000;
-const _readMs    = (resilience && resilience.timeoutMs)        || 15000;
+const _readMs    = (resilience && resilience.timeoutMs)        || 30000;
 %>
+<%- derivedFromComment %>
 /**
- * Feign client configuration for the <%- targetBc %> BC.
+ * Feign configuration for the <%- targetBc %> external system.
  * Not annotated with @Configuration — registered via @FeignClient(configuration=...).
 <%_ if (resilience) { _%>
  *
- * derived_from: system.yaml#/integrations[from=<%- moduleName %>,to=<%- targetBc %>]/resilience
+ * derived_from: system.yaml#/externalSystems[<%- targetBc %>]/resilience
 <%_ } _%>
 <%_ if (auth) { _%>
  *
- * derived_from: system.yaml#/integrations[from=<%- moduleName %>,to=<%- targetBc %>]/auth (type: <%- auth.type %>)
+ * derived_from: system.yaml#/externalSystems[<%- targetBc %>]/auth (type: <%- auth.type %>)
 <%_ } _%>
  */
 public class <%- feignConfigClassName %> {

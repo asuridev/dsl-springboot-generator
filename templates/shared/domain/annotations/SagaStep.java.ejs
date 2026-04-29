@@ -1,0 +1,49 @@
+package <%= packageName %>.shared.domain.annotations;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+/**
+ * Marks a method as a step within a choreographed saga.
+ *
+ * derived_from: system.yaml#/sagas
+ *
+ * The annotation is informational: it is consumed by the SagaIndex bean and
+ * by observability tooling (e.g. tracing, audit) to relate domain events to
+ * the saga they participate in. It does not alter the runtime semantics of
+ * the annotated handler.
+ *
+ * <pre>
+ *   {@code @SagaStep(saga = "CheckoutSaga", order = 2, event = "StockReserved", role = SagaStep.Role.SUCCESS)}
+ *   public void onStockReservedEvent(StockReservedEvent event) { ... }
+ * </pre>
+ */
+@Retention(RetentionPolicy.RUNTIME)
+@Target({ ElementType.METHOD, ElementType.TYPE })
+public @interface SagaStep {
+
+    /** Saga name as declared in {@code system.yaml#/sagas[*].name}. */
+    String saga();
+
+    /** Step order within the saga (1-based). Use 0 for the trigger step. */
+    int order();
+
+    /** Domain event that this step reacts to OR emits. */
+    String event();
+
+    /** Role of the event within the step. */
+    Role role() default Role.SUCCESS;
+
+    enum Role {
+        /** The event that initiates the saga. */
+        TRIGGER,
+        /** The successful outcome of a step. */
+        SUCCESS,
+        /** The failure outcome of a step. */
+        FAILURE,
+        /** A compensation event emitted to undo a previous step. */
+        COMPENSATION
+    }
+}

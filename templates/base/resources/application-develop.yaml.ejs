@@ -5,3 +5,4 @@ spring:
       - "classpath:parameters/develop/cors.yaml"
 <%- hasMessaging ? '      - "classpath:parameters/develop/' + broker + '.yaml"' : '' %>
 <%- hasHttpIntegrations ? '      - "classpath:parameters/develop/urls.yaml"' : '' %>
+<%- resilienceEnabled ? '      - "classpath:parameters/develop/resilience.yaml"' : '' %>

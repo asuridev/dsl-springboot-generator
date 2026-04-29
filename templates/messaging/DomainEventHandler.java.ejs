@@ -1,10 +1,25 @@
 package <%= packageName %>.<%= bc %>.application.usecases;
 
+<% if (outboxEnabled) { %>
+import <%= packageName %>.shared.infrastructure.eventEnvelope.EventEnvelope;
+import <%= packageName %>.shared.infrastructure.outbox.OutboxEventJpa;
+import <%= packageName %>.shared.infrastructure.outbox.OutboxEventJpaRepository;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.event.EventListener;
+import java.time.Instant;
+import java.util.UUID;
+<% } else { %>
 import <%= packageName %>.<%= bc %>.application.ports.MessageBroker;
-import <%= packageName %>.shared.domain.annotations.ApplicationComponent;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
-<% domainEvents.forEach(event => { %>
+<% } %>
+import <%= packageName %>.shared.domain.annotations.ApplicationComponent;
+<% const _bcHasSagaSteps = sagasEnabled && (domainEvents || []).some(e => e.sagaSteps && e.sagaSteps.length > 0); %>
+<% if (_bcHasSagaSteps) { %>import <%= packageName %>.shared.domain.annotations.SagaStep;
+<% } %><% domainEvents.forEach(event => { %>
 import <%= packageName %>.<%= bc %>.application.events.<%= event.integrationEventClassName %>;
 import <%= packageName %>.<%= bc %>.domain.events.<%= event.name %>Event;
 <% }); %>
@@ -12,26 +27,77 @@ import <%= packageName %>.<%= bc %>.domain.events.<%= event.name %>Event;
 /**
  * <%= bcPascal %>DomainEventHandler — Domain Event Bridge
  *
+<% if (outboxEnabled) { %>
+ * derived_from: system.yaml#/infrastructure/reliability/outbox
+ *
+ * Outbox mode is enabled. Each domain event is captured by a regular
+ * {@code @EventListener} (synchronous, runs inside the publishing transaction)
+ * and persisted as a row in {@code outbox_event}. The shared {@code OutboxRelay}
+ * scheduler forwards the row to the broker after the transaction commits.
+ *
+ * This guarantees atomicity between aggregate persistence and event capture:
+ * if the database transaction rolls back, the outbox row is rolled back too.
+<% } else { %>
  * Connects the internal Spring event bus (ApplicationEventPublisher) with
  * the external messaging port ({@link MessageBroker}).
- *
- * Architecture:
- *   {Aggregate}RepositoryImpl.save()
- *     → eventPublisher.publishEvent(domainEvent)        [internal Spring bus]
- *       → @TransactionalEventListener(AFTER_COMMIT)     [this class]
- *         → messageBroker.publish*(integrationEvent)    [port — broker-agnostic]
  *
  * AFTER_COMMIT guarantees that external events are published only when the
  * database transaction committed successfully, preventing ghost events from
  * rolled-back operations.
- *
- * Domain Events  (domain/events/)       — internal signals scoped to this BC.
- * Integration Events (application/events/) — broker-facing projections; changing
- *   broker technology only requires changing the MessageBroker adapter.
+<% } %>
  */
 @ApplicationComponent
 public class <%= bcPascal %>DomainEventHandler {
 
+<% if (outboxEnabled) { %>
+    private final OutboxEventJpaRepository outboxRepository;
+    private final ObjectMapper objectMapper;
+
+    @Value("${exchanges.<%= bc %>:<%= bc %>.events}")
+    private String exchange;
+<% domainEvents.forEach(event => { %>
+    @Value("${routing-keys.<%= event.topicNameKebab %>:<%= bc %>.<%= event.topicNameKebab %>}")
+    private String <%= event.topicNameCamel %>RoutingKey;
+<% }); %>
+
+    public <%= bcPascal %>DomainEventHandler(OutboxEventJpaRepository outboxRepository, ObjectMapper objectMapper) {
+        this.outboxRepository = outboxRepository;
+        this.objectMapper = objectMapper;
+    }
+<% domainEvents.forEach(event => { %>
+    /**
+     * Handles {@link <%= event.name %>Event} synchronously inside the publishing transaction
+     * and persists an outbox row for asynchronous broker delivery.
+     */
+    @EventListener
+<% if (sagasEnabled && event.sagaSteps && event.sagaSteps.length > 0) { %><% event.sagaSteps.forEach(s => { %>    @SagaStep(saga = "<%= s.saga %>", order = <%= s.order %>, event = "<%= event.name %>", role = SagaStep.Role.<%= s.role %>)
+<% }); %><% } %>    public void on<%= event.name %>Event(<%= event.name %>Event event) {
+        <%= event.integrationEventClassName %> integrationEvent = new <%= event.integrationEventClassName %>(
+<% event.fields.forEach((f, idx) => { %>
+                event.<%= f.name %>()<%= idx < event.fields.length - 1 ? ',' : '' %>
+<% }); %>
+        );
+        EventEnvelope<<%= event.integrationEventClassName %>> envelope = EventEnvelope.of(
+            <%= event.topicNameCamel %>RoutingKey,
+            integrationEvent,
+            MDC.get("correlationId")
+        );
+        try {
+            outboxRepository.save(OutboxEventJpa.builder()
+                .id(UUID.randomUUID())
+                .destination(exchange)
+                .routingKey(<%= event.topicNameCamel %>RoutingKey)
+                .eventType("<%= event.integrationEventClassName %>")
+                .payload(objectMapper.writeValueAsString(envelope))
+                .createdAt(Instant.now())
+                .attempts(0)
+                .build());
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize <%= event.integrationEventClassName %>", e);
+        }
+    }
+<% }); %>
+<% } else { %>
     private final MessageBroker messageBroker;
 
     public <%= bcPascal %>DomainEventHandler(MessageBroker messageBroker) {
@@ -42,7 +108,8 @@ public class <%= bcPascal %>DomainEventHandler {
      * Handles {@link <%= event.name %>Event} after the wrapping transaction commits.
      */
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    public void on<%= event.name %>Event(<%= event.name %>Event event) {
+<% if (sagasEnabled && event.sagaSteps && event.sagaSteps.length > 0) { %><% event.sagaSteps.forEach(s => { %>    @SagaStep(saga = "<%= s.saga %>", order = <%= s.order %>, event = "<%= event.name %>", role = SagaStep.Role.<%= s.role %>)
+<% }); %><% } %>    public void on<%= event.name %>Event(<%= event.name %>Event event) {
         messageBroker.publish<%= event.integrationEventClassName %>(
             new <%= event.integrationEventClassName %>(
 <% event.fields.forEach((f, idx) => { %>
@@ -52,4 +119,5 @@ public class <%= bcPascal %>DomainEventHandler {
         );
     }
 <% }); %>
+<% } %>
 }

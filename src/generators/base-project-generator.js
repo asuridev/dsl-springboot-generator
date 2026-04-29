@@ -4,6 +4,8 @@ const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toPackagePath, getApplicationClassName } = require('../utils/naming');
 const { loadParameters } = require('../utils/config-manager');
+const { hasAnyPersistentProjection } = require('./projection-updater-generator');
+const { hasAnyResilience, hasAnyOAuth2Cc } = require('../utils/resilience-auth-resolver');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -48,7 +50,7 @@ function buildHttpIntegrations(system) {
  * @param {object} system                   — parsed system.yaml (from readSystemYaml)
  * @param {string} outputDir                — absolute path to the output root
  */
-async function generateBaseProject(config, system, outputDir) {
+async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   const { packageName, javaVersion, springBootVersion, systemName } = config;
 
   // ── Resolve technology metadata from config/stack-catalog.json + config ─────
@@ -81,6 +83,19 @@ async function generateBaseProject(config, system, outputDir) {
   const httpIntegrations    = buildHttpIntegrations(system);
   const hasHttpIntegrations = httpIntegrations.length > 0;
 
+  // ── Reliability flags (Phase 2) + persistent projections (Phase 3) ──────
+  // derived_from: system.yaml#/infrastructure/reliability + bc.<*>.projections[*].persistent
+  const reliability         = (system.infrastructure && system.infrastructure.reliability) || {};
+  const outboxEnabled       = !!reliability.outbox;
+  const idempotencyEnabled  = !!reliability.consumerIdempotency;
+  const persistentProjectionsPresent = hasAnyPersistentProjection(allBcYamls);
+  const flywayEnabled       = outboxEnabled || idempotencyEnabled || persistentProjectionsPresent;
+
+  // ── Resilience + OAuth2 flags (Phase 5) ──────────────────────────────
+  // derived_from: system.yaml#/integrations[*]/resilience + .../auth
+  const resilienceEnabled    = hasAnyResilience(system, allBcYamls);
+  const oauth2ClientEnabled  = hasAnyOAuth2Cc(system, allBcYamls);
+
   // Derive artifact id from system name (kebab-case)
   const artifactId = systemName;
   // groupId: everything before the last dot in packageName, or packageName itself
@@ -97,7 +112,7 @@ async function generateBaseProject(config, system, outputDir) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'gradle', 'build.gradle.ejs'),
     path.join(outputDir, 'build.gradle'),
-    { groupId, artifactId, javaVersion, springBootVersion, databaseDependency, brokerDependency, brokerTestDependency }
+    { groupId, artifactId, javaVersion, springBootVersion, databaseDependency, brokerDependency, brokerTestDependency, flywayEnabled, databaseId: dbId, resilienceEnabled, oauth2ClientEnabled }
   );
 
   await renderAndWrite(
@@ -126,7 +141,7 @@ async function generateBaseProject(config, system, outputDir) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'application', 'Application.java.ejs'),
     path.join(javaMainDir, `${applicationClassName}.java`),
-    { packageName, applicationClassName, systemName }
+    { packageName, applicationClassName, systemName, outboxEnabled }
   );
 
   // ── application.yaml (base — profile-agnostic) ──────────────────────────
@@ -146,7 +161,7 @@ async function generateBaseProject(config, system, outputDir) {
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'base', 'resources', `application-${env}.yaml.ejs`),
       path.join(resourcesDir, `application-${env}.yaml`),
-      { hasMessaging, hasHttpIntegrations, broker: brokerId }
+      { hasMessaging, hasHttpIntegrations, broker: brokerId, resilienceEnabled }
     );
   }
 
@@ -185,6 +200,15 @@ async function generateBaseProject(config, system, outputDir) {
         path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'urls.yaml.ejs'),
         path.join(paramDir, 'urls.yaml'),
         { httpIntegrations }
+      );
+    }
+
+    // resilience.yaml (Phase 5 — only when any HTTP integration declares resilience)
+    if (resilienceEnabled) {
+      await renderAndWrite(
+        path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'resilience.yaml.ejs'),
+        path.join(paramDir, 'resilience.yaml'),
+        {}
       );
     }
   }
@@ -338,6 +362,17 @@ async function generateBaseProject(config, system, outputDir) {
     path.join(loggerConfigDir, 'HandlerLogs.java'),
     { packageName }
   );
+
+  // ── Shared: OAuth2 client-credentials helper (Phase 5) ────────────────────
+  // derived_from: system.yaml#/integrations[*]/auth (type: oauth2-cc)
+  if (oauth2ClientEnabled) {
+    const authDir = path.join(javaMainDir, 'shared', 'infrastructure', 'auth');
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'shared', 'infrastructure', 'auth', 'OAuth2ClientCredentialsSupport.java.ejs'),
+      path.join(authDir, 'OAuth2ClientCredentialsSupport.java'),
+      { packageName }
+    );
+  }
 
   // ── Shared: EventPublicationSchemaConfig (Spring Modulith varchar→TEXT) ───
 
