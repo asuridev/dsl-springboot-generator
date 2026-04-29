@@ -423,6 +423,27 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
     const rawType = input.type;
     const isOptional = input.required === false;
 
+    // Detect List[MultiPropVO] — e.g. List[Topics] where Topics has >1 property
+    const listInnerMatch = /^List\[(.+)\]$/.exec(rawType);
+    const listInnerVoName = listInnerMatch ? listInnerMatch[1] : null;
+    const listInnerVoDef = listInnerVoName
+      ? (bcYaml && bcYaml.valueObjects || []).find((v) => v.name === listInnerVoName)
+      : null;
+
+    if (listInnerVoDef && (listInnerVoDef.properties || []).length > 1) {
+      // ── List[MultiPropVO] (e.g. List[Topics]) — emit List<{VoName}Request> with @Valid ──
+      imports.add('java.util.List');
+      imports.add('jakarta.validation.Valid');
+      const annotations = [];
+      if (!isOptional) {
+        imports.add(`${JAKARTA}.NotNull`);
+        annotations.push('@NotNull');
+      }
+      annotations.push('@Valid');
+      fields.push({ type: `List<${listInnerVoName}Request>`, name: input.name, annotations });
+      voRequestsNeeded.add(listInnerVoName);
+    } else {
+
     // Look up VO definition for any type that matches a declared valueObject
     const voDefinition = (bcYaml && bcYaml.valueObjects || []).find((v) => v.name === rawType);
 
@@ -478,6 +499,8 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
       // 5. Final order: required → type/dsl merged
       fields.push({ type: javaType, name: input.name, annotations: [...requiredAnnotations, ...mergedAnnotations] });
     }
+
+    } // end List[MultiPropVO] else
   }
 
   return { fields, imports: [...imports].sort(), voRequestsNeeded };
@@ -620,8 +643,18 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
         callArgs.push(`UUID.fromString(SecurityContextHolder.getContext().getAuthentication().getName())`);
         continue;
       }
+      // Check for List[MultiPropVO] — convert List<VoRequest> → List<DomainVo>
+      const listInnerMatchI = /^List\[(.+)\]$/.exec(input.type);
+      const listInnerVoNameI = listInnerMatchI ? listInnerMatchI[1] : null;
+      const listInnerVoDefI = listInnerVoNameI
+        ? (bcYaml?.valueObjects || []).find((v) => v.name === listInnerVoNameI && (v.properties || []).length > 1)
+        : null;
       const inputVoDef = (bcYaml?.valueObjects || []).find((v) => v.name === input.type && (v.properties || []).length > 1);
-      if (inputVoDef) {
+      if (listInnerVoDefI) {
+        extraImports.add(`${packageName}.${moduleName}.domain.valueobject.${listInnerVoNameI}`);
+        const ctorArgs = listInnerVoDefI.properties.map((p) => `r.${p.name}()`).join(', ');
+        callArgs.push(`command.${input.name}().stream().map(r -> new ${listInnerVoNameI}(${ctorArgs})).toList()`);
+      } else if (inputVoDef) {
         extraImports.add(`${packageName}.${moduleName}.domain.valueobject.${input.type}`);
         const propGetters = inputVoDef.properties.map((p) => `command.${input.name}().${p.name}()`).join(', ');
         callArgs.push(`new ${input.type}(${propGetters})`);
@@ -637,8 +670,18 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
   } else {
     // Use domainMethod params as the source of truth for the call args
     for (const p of dmParams) {
+      // Check for List[MultiPropVO] — convert List<VoRequest> → List<DomainVo>
+      const listInnerMatchP = /^List\[(.+)\]$/.exec(p.type);
+      const listInnerVoNameP = listInnerMatchP ? listInnerMatchP[1] : null;
+      const listInnerVoDefP = listInnerVoNameP
+        ? (bcYaml?.valueObjects || []).find((v) => v.name === listInnerVoNameP && (v.properties || []).length > 1)
+        : null;
       const paramVoDef = (bcYaml?.valueObjects || []).find((v) => v.name === p.type && (v.properties || []).length > 1);
-      if (paramVoDef) {
+      if (listInnerVoDefP) {
+        extraImports.add(`${packageName}.${moduleName}.domain.valueobject.${listInnerVoNameP}`);
+        const ctorArgs = listInnerVoDefP.properties.map((prop) => `r.${prop.name}()`).join(', ');
+        callArgs.push(`command.${p.name}().stream().map(r -> new ${listInnerVoNameP}(${ctorArgs})).toList()`);
+      } else if (paramVoDef) {
         extraImports.add(`${packageName}.${moduleName}.domain.valueobject.${p.type}`);
         const propGetters = paramVoDef.properties.map((prop) => `command.${p.name}().${prop.name}()`).join(', ');
         callArgs.push(`new ${p.type}(${propGetters})`);
