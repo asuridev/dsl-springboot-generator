@@ -234,15 +234,25 @@ function buildJpaFields(properties, aggregate, bcYaml) {
     // Skip audit / soft-delete fields — managed by FullAuditableEntity
     if (AUDIT_FIELD_NAMES.has(prop.name)) continue;
 
+    // S5 — fields marked hidden: true get @JsonIgnore so they never leak through DTOs
+    // serialized via Jackson. The column is still persisted; only its serialization is suppressed.
+    const jsonIgnorePrefix = prop.hidden ? '@com.fasterxml.jackson.annotation.JsonIgnore\n    ' : '';
+
     // Expand Money VO to two columns
     if (isMoneyType(prop.type)) {
-      fields.push(...expandMoneyField(prop, bcYaml));
+      const moneyFields = expandMoneyField(prop, bcYaml);
+      if (jsonIgnorePrefix) {
+        for (const f of moneyFields) f.columnAnnotation = jsonIgnorePrefix + f.columnAnnotation;
+      }
+      fields.push(...moneyFields);
       continue;
     }
 
     // List[T] — @ElementCollection
     if (isListType(prop.type)) {
-      fields.push(buildElementCollectionField(prop, aggregate, bcYaml));
+      const ecField = buildElementCollectionField(prop, aggregate, bcYaml);
+      if (jsonIgnorePrefix) ecField.columnAnnotation = jsonIgnorePrefix + ecField.columnAnnotation;
+      fields.push(ecField);
       continue;
     }
 
@@ -258,10 +268,14 @@ function buildJpaFields(properties, aggregate, bcYaml) {
       fields.push({
         name: prop.name,
         javaType,
-        columnAnnotation: buildColumnAnnotation(prop, bcYaml),
+        columnAnnotation: jsonIgnorePrefix + buildColumnAnnotation(prop, bcYaml),
       });
     } else if (voDef && (voDef.properties || []).length > 1) {
-      fields.push(...expandMultiPropertyVoField(prop, voDef, bcYaml));
+      const expanded = expandMultiPropertyVoField(prop, voDef, bcYaml);
+      if (jsonIgnorePrefix) {
+        for (const f of expanded) f.columnAnnotation = jsonIgnorePrefix + f.columnAnnotation;
+      }
+      fields.push(...expanded);
     } else {
       let javaType;
       try {
@@ -272,7 +286,7 @@ function buildJpaFields(properties, aggregate, bcYaml) {
       fields.push({
         name: prop.name,
         javaType,
-        columnAnnotation: buildColumnAnnotation(prop, bcYaml),
+        columnAnnotation: jsonIgnorePrefix + buildColumnAnnotation(prop, bcYaml),
       });
     }
   }
@@ -518,15 +532,31 @@ function buildJpaEntityContext(aggregate, bcYaml, config) {
 
   const indexes = buildIndexes(aggregate.name, aggregate.properties);
 
-  const childEntities = (aggregate.entities || []).map((entity) => ({
-    name: entity.name,
-    jpaName: `${entity.name}Jpa`,
-    fieldName: toCamelCase(pluralizeWord(entity.name)),
-    joinColumn: `${toSnakeCase(aggregate.name)}_id`,
-    immutable: entity.immutable === true,
-  }));
+  const childEntities = (aggregate.entities || []).map((entity) => {
+    // S6 — cardinality + relationship (defaults: oneToMany + composition)
+    const cardinality = entity.cardinality === 'oneToOne' ? 'oneToOne' : 'oneToMany';
+    const relationship = entity.relationship === 'aggregation' ? 'aggregation' : 'composition';
+    const isOneToOne = cardinality === 'oneToOne';
+    return {
+      name: entity.name,
+      jpaName: `${entity.name}Jpa`,
+      fieldName: isOneToOne
+        ? toCamelCase(entity.name)
+        : toCamelCase(pluralizeWord(entity.name)),
+      joinColumn: `${toSnakeCase(aggregate.name)}_id`,
+      immutable: entity.immutable === true,
+      cardinality,
+      relationship,
+      isOneToOne,
+    };
+  });
 
   const imports = buildJpaEntityImports(aggregate, bcYaml, config);
+
+  // S2 — Optimistic locking: emit @Version Long version when the aggregate
+  // declares concurrencyControl: optimistic. Hibernate manages the field;
+  // domain code does not need to read it.
+  const hasVersion = aggregate.concurrencyControl === 'optimistic';
 
   return {
     packageName: config.packageName,
@@ -536,6 +566,7 @@ function buildJpaEntityContext(aggregate, bcYaml, config) {
     description: aggregate.description || '',
     hasAudit,
     hasSoftDelete,
+    hasVersion,
     baseClass,
     indexes,
     fields,

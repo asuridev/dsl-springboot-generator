@@ -4,6 +4,7 @@ const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPackagePath, toCamelCase, pluralizeWord } = require('../utils/naming');
 const { mapType, isListType, getListElementType } = require('../utils/type-mapper');
+const { buildDomainChecks } = require('../utils/validation-mapper');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -135,8 +136,24 @@ function detectStateTransition(ucId, aggregate, bcEnums) {
 
 // ─── Helper: build raise(new XxxEvent(...)) call string ────────────────────────
 // Returns the raise statement string, or null if the event is not found.
-function buildRaiseCall(eventName, publishedEvents, aggregate, methodParams) {
-  if (!eventName || !publishedEvents || publishedEvents.length === 0) return null;
+// S22: accepts a single eventName (string) or a list (string[]). When a list,
+// emits one raise() per event, joined by newline + 8 spaces (consumed at the
+// method body indentation level).
+function buildRaiseCall(eventNameOrList, publishedEvents, aggregate, methodParams) {
+  if (!eventNameOrList) return null;
+  if (!publishedEvents || publishedEvents.length === 0) return null;
+
+  if (Array.isArray(eventNameOrList)) {
+    const calls = eventNameOrList
+      .map((n) => buildRaiseCallSingle(n, publishedEvents, aggregate, methodParams))
+      .filter(Boolean);
+    if (calls.length === 0) return null;
+    return calls.join('\n        ');
+  }
+  return buildRaiseCallSingle(eventNameOrList, publishedEvents, aggregate, methodParams);
+}
+
+function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParams) {
   const event = publishedEvents.find((e) => e.name === eventName);
   if (!event) return null;
 
@@ -159,7 +176,20 @@ function buildRaiseCall(eventName, publishedEvents, aggregate, methodParams) {
 // ─── Helper: compute the body string for a business method ───────────────────
 function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents) {
   const rules = uc.rules || [];
-  const rulesComment = rules.length > 0 ? `\n        // Validate: ${rules.join(', ')}` : '';
+  // Split rule IDs into validation-style vs side-effect-style based on the
+  // aggregate's domainRules catalog (S13). Side effects are scaffolded as a
+  // distinct comment block to make the implementation hint explicit for Phase 3.
+  const ruleById = new Map((aggregate.domainRules || []).map((r) => [r.id, r]));
+  const validateRules = [];
+  const sideEffectRules = [];
+  for (const id of rules) {
+    const r = ruleById.get(id);
+    if (r && r.type === 'sideEffect') sideEffectRules.push(id);
+    else validateRules.push(id);
+  }
+  let rulesComment = '';
+  if (validateRules.length > 0) rulesComment += `\n        // Validate: ${validateRules.join(', ')}`;
+  if (sideEffectRules.length > 0) rulesComment += `\n        // Side effects: ${sideEffectRules.join(', ')}`;
   const scaffoldBody = `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}`;
 
   const { name: methodName, params } = sig;
@@ -170,6 +200,20 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
   }
 
   if (uc.implementation === 'scaffold') {
+    // Even on scaffold UCs, if the method is a no-arg state transition we still emit the
+    // state-machine line. The Enum.transitionTo() guards terminal states (PRD-RULE-004 et al.):
+    // a second invocation raises InvalidStateTransitionException automatically.
+    if (params.length === 0) {
+      const transition = detectStateTransition(uc.id, aggregate, bcEnums);
+      if (transition) {
+        let body = `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}\n`;
+        body += `        this.${transition.statusField} = this.${transition.statusField}.transitionTo(${transition.enumType}.${transition.targetValue});`;
+        const emitsName = sig.emits || transition.emits;
+        const raiseCall = buildRaiseCall(emitsName, publishedEvents, aggregate, params);
+        if (raiseCall) body += `\n        ${raiseCall}`;
+        return body;
+      }
+    }
     const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
     if (raiseCall) {
       return `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}\n        ${raiseCall}`;
@@ -200,7 +244,11 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
       (e) => e.name === entitySuffix || e.name.endsWith(entitySuffix)
     );
     if (entity) {
-      const fieldName = toCamelCase(pluralizeWord(entity.name));
+      // S6 — branch on cardinality for the field name + body shape
+      const isOneToOne = entity.cardinality === 'oneToOne';
+      const fieldName = isOneToOne
+        ? toCamelCase(entity.name)
+        : toCamelCase(pluralizeWord(entity.name));
       // Creation params for the child entity (same exclusion rules)
       const entityCreationParams = (entity.properties || []).filter((ep) => {
         if (ep.name === 'id') return false;
@@ -209,7 +257,9 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
         return true;
       });
       const ctorArgs = entityCreationParams.map((ep) => ep.name).join(', ');
-      let body = `this.${fieldName}.add(new ${entity.name}(${ctorArgs}));`;
+      let body = isOneToOne
+        ? `this.${fieldName} = new ${entity.name}(${ctorArgs});`
+        : `this.${fieldName}.add(new ${entity.name}(${ctorArgs}));`;
       const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
       if (raiseCall) body += `\n        ${raiseCall}`;
       return body;
@@ -224,10 +274,16 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents)
       (e) => e.name === entitySuffix || e.name.endsWith(entitySuffix)
     );
     if (entity) {
-      const fieldName = toCamelCase(pluralizeWord(entity.name));
+      // S6 — branch on cardinality for the field name + body shape
+      const isOneToOne = entity.cardinality === 'oneToOne';
+      const fieldName = isOneToOne
+        ? toCamelCase(entity.name)
+        : toCamelCase(pluralizeWord(entity.name));
       const idParam = params[0].name;
       const varName = entity.name.charAt(0).toLowerCase() + entity.name.slice(1);
-      let body = `this.${fieldName}.removeIf(${varName} -> ${varName}.getId().equals(${idParam}));`;
+      let body = isOneToOne
+        ? `if (this.${fieldName} != null && this.${fieldName}.getId().equals(${idParam})) {\n            this.${fieldName} = null;\n        }`
+        : `this.${fieldName}.removeIf(${varName} -> ${varName}.getId().equals(${idParam}));`;
       const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params);
       if (raiseCall) body += `\n        ${raiseCall}`;
       return body;
@@ -469,18 +525,29 @@ async function generateAggregates(bcYaml, config, outputDir) {
           readOnly: !!p.readOnly,
           defaultValue: p.defaultValue,
           internal: !!p.internal,
+          hidden: !!p.hidden,
           isList: isListType(p.type),
         };
       });
 
     // ── 2. Build child entity metadata ─────────────────────────────────────────
     const childEntities = (aggregate.entities || []).map((entity) => {
-      const fieldName = toCamelCase(pluralizeWord(entity.name));
+      // S6 — cardinality + relationship (defaults: oneToMany + composition)
+      const cardinality = entity.cardinality === 'oneToOne' ? 'oneToOne' : 'oneToMany';
+      const relationship = entity.relationship === 'aggregation' ? 'aggregation' : 'composition';
+      const isOneToOne = cardinality === 'oneToOne';
+      const fieldName = isOneToOne
+        ? toCamelCase(entity.name)
+        : toCamelCase(pluralizeWord(entity.name));
+      const javaType = isOneToOne ? entity.name : `List<${entity.name}>`;
       return {
         name: entity.name,
         fieldName,
-        javaType: `List<${entity.name}>`,
+        javaType,
         immutable: !!entity.immutable,
+        cardinality,
+        relationship,
+        isOneToOne,
       };
     });
 
@@ -562,15 +629,31 @@ async function generateAggregates(bcYaml, config, outputDir) {
           const ctorCallArgs = creationParams.map((p) =>
             factoryParamNames.has(p.name) ? p.name : `null /* TODO: compute ${p.name} */`
           ).join(', ');
-          const raiseCall = buildRaiseCall(dmCreate.emits, aggregatePublishedEvents, aggregate, dmCreate.params || []);
+          const dmCreateEmits = (dmCreate.emitsList && dmCreate.emitsList.length > 0) ? dmCreate.emitsList : null;
+          const raiseCall = buildRaiseCall(dmCreateEmits, aggregatePublishedEvents, aggregate, dmCreate.params || []);
+          // Split rule IDs into validate vs sideEffect so the scaffold comment
+          // distinguishes invariant checks from required side effects (S13).
+          const ruleByIdF = new Map((aggregate.domainRules || []).map((r) => [r.id, r]));
+          const validateRulesF = [];
+          const sideEffectRulesF = [];
+          for (const id of (uc.rules || [])) {
+            const r = ruleByIdF.get(id);
+            if (r && r.type === 'sideEffect') sideEffectRulesF.push(id);
+            else validateRulesF.push(id);
+          }
+          let scaffoldRulesComment = null;
+          if (uc.implementation === 'scaffold' && (uc.rules || []).length > 0) {
+            let c = `// TODO: implement business logic — ver ${bc}-flows.md`;
+            if (validateRulesF.length > 0) c += `\n        // Validate: ${validateRulesF.join(', ')}`;
+            if (sideEffectRulesF.length > 0) c += `\n        // Side effects: ${sideEffectRulesF.join(', ')}`;
+            scaffoldRulesComment = c;
+          }
           staticFactory = {
             params: factoryParams,
             ctorCallArgs,
             raiseCall: raiseCall || null,
             derivedFrom: `${uc.id} ${uc.name}`,
-            scaffoldRulesComment: uc.implementation === 'scaffold' && (uc.rules || []).length > 0
-              ? `// TODO: implement business logic — ver ${bc}-flows.md\n        // Validate: ${(uc.rules || []).join(', ')}`
-              : null,
+            scaffoldRulesComment,
           };
         }
         continue;
@@ -596,7 +679,8 @@ async function generateAggregates(bcYaml, config, outputDir) {
 
       const returnType = resolveReturnType(dm.returns, aggregate.name);
       // computeMethodBody receives a sig-like object with {name, params, emits}
-      const sigForBody = { name: dm.name, params: (dm.params || []).map((p) => ({ name: p.name, optional: false, typeHint: p.type })), emits: dm.emits || null };
+      const dmEmits = (dm.emitsList && dm.emitsList.length > 0) ? dm.emitsList : null;
+      const sigForBody = { name: dm.name, params: (dm.params || []).map((p) => ({ name: p.name, optional: false, typeHint: p.type })), emits: dmEmits };
       const body = computeMethodBody(uc, sigForBody, aggregate, bcEnums, bc, aggregatePublishedEvents);
 
       businessMethods.push({
@@ -611,9 +695,24 @@ async function generateAggregates(bcYaml, config, outputDir) {
     // ── Auto-inject softDelete() when aggregate has softDelete: true but no UC covers it
     if (aggregate.softDelete && !seenMethods.has('softDelete')) {
       const deleteRules = softDeleteUc ? (softDeleteUc.rules || []) : [];
-      const softDeleteBody = deleteRules.length > 0
-        ? `// TODO: implement business logic — ver ${bc}-flows.md\n        // Validate: ${deleteRules.join(', ')}\n        this.deletedAt = Instant.now();`
-        : 'this.deletedAt = Instant.now();';
+      // S13 split: deleteGuard / uniqueness rules → Validate; sideEffect rules → Side effects.
+      const ruleByIdSD = new Map((aggregate.domainRules || []).map((r) => [r.id, r]));
+      const validateRulesSD = [];
+      const sideEffectRulesSD = [];
+      for (const id of deleteRules) {
+        const r = ruleByIdSD.get(id);
+        if (r && r.type === 'sideEffect') sideEffectRulesSD.push(id);
+        else validateRulesSD.push(id);
+      }
+      let softDeleteBody;
+      if (deleteRules.length > 0) {
+        let c = `// TODO: implement business logic — ver ${bc}-flows.md`;
+        if (validateRulesSD.length > 0) c += `\n        // Validate: ${validateRulesSD.join(', ')}`;
+        if (sideEffectRulesSD.length > 0) c += `\n        // Side effects: ${sideEffectRulesSD.join(', ')}`;
+        softDeleteBody = `${c}\n        this.deletedAt = Instant.now();`;
+      } else {
+        softDeleteBody = 'this.deletedAt = Instant.now();';
+      }
       businessMethods.push({
         name: 'softDelete',
         params: [],
@@ -625,6 +724,27 @@ async function generateAggregates(bcYaml, config, outputDir) {
 
     // ── 6. Build imports (after businessMethods so param types are included) ──
     const imports = buildImports(aggregate, bcYaml, config, businessMethods, aggregatePublishedEvents);
+
+    // ── 6.b Validation checks for the creation constructor ─────────────────────
+    // Aggregates apply DSL `validations[]` on creation; the reconstruction ctor
+    // skips them (data is already persisted). Update/addX methods are user-coded
+    // (scaffold); checks are not auto-injected there.
+    const creationChecks = [];
+    const validationImports = new Set();
+    for (const cp of creationParams) {
+      const propDef = (aggregate.properties || []).find((p) => p.name === cp.name);
+      if (!propDef) continue;
+      const { lines, imports: extraImps } = buildDomainChecks(propDef);
+      if (lines.length > 0) {
+        creationChecks.push(...lines);
+        creationChecks.push('');
+      }
+      extraImps.forEach((i) => validationImports.add(i));
+    }
+    validationImports.forEach((imp) => {
+      const stmt = `import ${imp};`;
+      if (!imports.includes(stmt)) imports.push(stmt);
+    });
 
     // ── 7. Render aggregate root ───────────────────────────────────────────────
     const context = {
@@ -641,6 +761,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
       childEntities,
       creationParams,
       autoInits,
+      creationChecks,
       staticFactory,
       businessMethods,
     };
@@ -736,6 +857,25 @@ async function generateAggregates(bcYaml, config, outputDir) {
         fields: entityFields,
         creationParams: entityCreationParams,
         autoInits: entityAutoInits,
+        creationChecks: (() => {
+          const checks = [];
+          const validationImports = new Set();
+          for (const cp of entityCreationParams) {
+            const propDef = (entity.properties || []).find((p) => p.name === cp.name);
+            if (!propDef) continue;
+            const { lines, imports: extraImps } = buildDomainChecks(propDef);
+            if (lines.length > 0) {
+              checks.push(...lines);
+              checks.push('');
+            }
+            extraImps.forEach((i) => validationImports.add(i));
+          }
+          validationImports.forEach((imp) => {
+            const stmt = `import ${imp};`;
+            if (!entityImports.includes(stmt)) entityImports.push(stmt);
+          });
+          return checks;
+        })(),
       };
 
       const entityDestPath = path.join(entityDir, `${entity.name}.java`);

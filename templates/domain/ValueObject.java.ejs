@@ -1,25 +1,38 @@
 package <%- packageName %>.<%= bc %>.domain.valueobject;
 <% imports.forEach(imp => { %>
 <%- imp %><% }); %>
-import java.util.Objects;
 
 /**
  * <%= name %> — Value Object
  * Immutable domain value object (pure Java, no Lombok).
 <% if (description) { %> *
  * <%= description.trim().replace(/\n\s*/g, '\n * ') %>
-<% } %> */
+<% } %> *
+ * derived_from: <%= traceTag %>
+ */
 public final class <%= name %> {
+<% if (hasEmail) { %>
+    private static final Pattern EMAIL_PATTERN = Pattern.compile(
+        "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$"
+    );
+<% } %>
 <% fields.forEach(field => { %>
     private final <%- field.javaType %> <%= field.name %>;
 <% }); %>
     public <%= name %>(<% fields.forEach((field, idx) => { %><%- field.javaType %> <%= field.name %><%= idx < fields.length - 1 ? ', ' : '' %><% }); %>) {
-<% fields.forEach(field => { %>        this.<%= field.name %> = <%= field.name %>;
+<% fields.forEach(field => { field.guards.forEach(g => { %><%- g %>
+<% }); }); %>
+<% fields.forEach(field => { %><%- field.assignment %>
 <% }); %>    }
-
+<% if (isMicrotype) { const f = fields[0]; %>
+    /** Convenience factory. derived_from: <%= traceTag %> */
+    public static <%= name %> of(<%- f.javaType %> <%= f.name %>) {
+        return new <%= name %>(<%= f.name %>);
+    }
+<% } %>
     // ─── Getters ──────────────────────────────────────────────────────────────
 <% fields.forEach(field => { %>
-    public <%- field.javaType %> get<%= field.name.charAt(0).toUpperCase() + field.name.slice(1) %>() {
+    public <%- field.javaType %> get<%= field.pascalName %>() {
         return <%= field.name %>;
     }
 <% }); %>
@@ -30,7 +43,7 @@ public final class <%= name %> {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         <%= name %> that = (<%= name %>) o;
-        return <%- fields.map(f => `Objects.equals(${f.name}, that.${f.name})`).join(' &&\n               ') %>;
+        return <%- fields.map(f => f.equalsExpr).join(' &&\n               ') %>;
     }
 
     @Override
@@ -44,4 +57,11 @@ public final class <%= name %> {
 <% fields.forEach((field, idx) => { %>               "<%= idx > 0 ? ', ' : '' %><%= field.name %>=" + <%= field.name %> +
 <% }); %>               '}';
     }
+<% if (hasDecimal) { %>
+    private static boolean eqDecimal(java.math.BigDecimal a, java.math.BigDecimal b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        return a.compareTo(b) == 0;
+    }
+<% } %>
 }

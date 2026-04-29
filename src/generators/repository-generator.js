@@ -202,6 +202,82 @@ function buildListQuery(jpaEntityName, optionalParams, requiredFilterParams, ali
 }
 
 /**
+ * Resolve a count-method qualifier (e.g. "Active", "NonDeleted") against a target aggregate.
+ * Returns the list of JPQL conditions to AND into the WHERE clause.
+ * Throws if the qualifier cannot be mapped — the generator does NOT invent literals.
+ */
+function resolveCountQualifier(qualifier, targetAggregate, bcYaml, alias, methodName) {
+  // 1. Soft-delete vocabulary
+  if (qualifier === 'NonDeleted' || qualifier === 'NotDeleted') {
+    if (targetAggregate.softDelete === true) {
+      return [`${alias}.deletedAt IS NULL`];
+    }
+    // Try DELETED enum literal as a fallback if the target has a status enum with that value.
+    const statusInfo = findStatusEnum(targetAggregate, bcYaml);
+    if (statusInfo && statusInfo.values.includes('DELETED')) {
+      return [`${alias}.${statusInfo.field} <> '${statusInfo.values.find((v) => v === 'DELETED')}'`];
+    }
+    throw new Error(
+      `[repository-generator] Qualifier 'NonDeleted' on count method '${methodName}' targets aggregate ` +
+      `'${targetAggregate.name}' which is neither softDelete:true nor declares a status enum with a 'DELETED' value. ` +
+      `Either enable softDelete on the aggregate, add a 'DELETED' enum value, or rename the method.`
+    );
+  }
+  if (qualifier === 'Deleted') {
+    if (targetAggregate.softDelete === true) {
+      return [`${alias}.deletedAt IS NOT NULL`];
+    }
+    const statusInfo = findStatusEnum(targetAggregate, bcYaml);
+    if (statusInfo && statusInfo.values.includes('DELETED')) {
+      return [`${alias}.${statusInfo.field} = 'DELETED'`];
+    }
+    throw new Error(
+      `[repository-generator] Qualifier 'Deleted' on count method '${methodName}' targets aggregate ` +
+      `'${targetAggregate.name}' which is neither softDelete:true nor declares a status enum with a 'DELETED' value.`
+    );
+  }
+
+  // 2. Status-enum literal lookup
+  const statusInfo = findStatusEnum(targetAggregate, bcYaml);
+  if (statusInfo) {
+    const upper = qualifier.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase();
+    if (statusInfo.values.includes(upper)) {
+      return [`${alias}.${statusInfo.field} = '${upper}'`];
+    }
+    // Negated form: Non{Literal} → status <> 'LITERAL'
+    if (qualifier.startsWith('Non')) {
+      const inner = qualifier.slice(3);
+      const innerUpper = inner.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase();
+      if (statusInfo.values.includes(innerUpper)) {
+        return [`${alias}.${statusInfo.field} <> '${innerUpper}'`];
+      }
+    }
+  }
+
+  // 3. Unknown qualifier — stop rather than invent.
+  const known = statusInfo ? statusInfo.values.join(', ') : '(none — target has no status enum)';
+  throw new Error(
+    `[repository-generator] Unknown qualifier '${qualifier}' in count method '${methodName}' for aggregate ` +
+    `'${targetAggregate.name}'. Recognised qualifiers: NonDeleted, Deleted, or any literal of the target's ` +
+    `status enum [${known}]. Rename the method or extend the enum.`
+  );
+}
+
+/**
+ * Find the status-enum field on an aggregate. Returns { field, enumName, values } or null.
+ */
+function findStatusEnum(aggregate, bcYaml) {
+  const statusProp = (aggregate.properties || []).find(
+    (p) => p.name === 'status' || (p.type && p.type.endsWith('Status'))
+  );
+  if (!statusProp) return null;
+  const enumDef = (bcYaml.enums || []).find((e) => e.name === statusProp.type);
+  if (!enumDef) return null;
+  const values = (enumDef.values || []).map((v) => (typeof v === 'string' ? v : v.value));
+  return { field: statusProp.name, enumName: enumDef.name, values };
+}
+
+/**
  * Build the JPQL query for a "count across entity" method.
  * Method name pattern: count{Entities}InXxx or count{Entities}ByXxx
  * Params: [{name, type}] — FK param + optional filter
@@ -227,36 +303,55 @@ function buildCountQuery(methodName, params, bcYaml, fallbackJpaEntityName, curr
   const extraConditions = [];
 
   // 2. Suffix match: countActiveProductsBy... → prefix="Active", entity="Products" → Product
-  //    Adds a status condition automatically (e.g. p.status = 'ACTIVE').
+  //    Resolves the qualifier against a strict vocabulary. The generator does NOT invent
+  //    enum literals — unrecognised qualifiers stop generation with a precise error.
   if (!aggregate) {
+    let resolvedTarget = null;
+    let qualifier = null;
     for (const agg of (bcYaml.aggregates || [])) {
       const plural = pluralizeWord(agg.name);
       if (entityPlural.endsWith(plural) && entityPlural.length > plural.length) {
-        const statusValue = entityPlural.slice(0, entityPlural.length - plural.length).toUpperCase();
-        aggregate = agg;
-        const statusProp = (agg.properties || []).find(
-          (p) => p.name === 'status' || (p.type && p.type.endsWith('Status'))
-        );
-        const statusField = statusProp ? statusProp.name : 'status';
-        extraConditions.push(`${statusField} = '${statusValue}'`);
+        resolvedTarget = agg;
+        qualifier = entityPlural.slice(0, entityPlural.length - plural.length);
         break;
       }
     }
-  }
 
-  // If no aggregate matched, entityPlural is a state qualifier (e.g. 'Active', 'Pending').
-  // Add a status condition and fall back to the current aggregate's JPA entity.
-  // Exception: soft-delete aggregates have no status field — @SQLRestriction handles filtering.
-  if (!aggregate && extraConditions.length === 0) {
-    if (!currentAggregate || currentAggregate.softDelete !== true) {
-      extraConditions.push(`status = '${entityPlural.toUpperCase()}'`);
+    if (resolvedTarget && qualifier) {
+      aggregate = resolvedTarget;
+      const a = `${resolvedTarget.name}Jpa`.charAt(0).toLowerCase();
+      extraConditions.push(
+        ...resolveCountQualifier(qualifier, resolvedTarget, bcYaml, a, methodName)
+      );
     }
   }
-  const jpaName = aggregate ? `${aggregate.name}Jpa` : (fallbackJpaEntityName || `${entityPlural.replace(/s$/, '')}Jpa`);
+
+  // If no aggregate matched, the qualifier-only form is valid only when the
+  // current aggregate is the implicit target (e.g. countNonDeletedByCategoryId on
+  // ProductRepository → target=Product, qualifier=NonDeleted).
+  if (!aggregate && currentAggregate) {
+    aggregate = currentAggregate;
+    const a = `${currentAggregate.name}Jpa`.charAt(0).toLowerCase();
+    extraConditions.push(
+      ...resolveCountQualifier(entityPlural, currentAggregate, bcYaml, a, methodName)
+    );
+  }
+
+  // If no aggregate matched, the method name is structurally invalid for a count query.
+  // Per AGENTS.md, the generator must stop rather than invent a literal.
+  if (!aggregate) {
+    throw new Error(
+      `[repository-generator] Cannot resolve target aggregate for count method '${methodName}'. ` +
+      `Method name must follow 'count{Qualifier}{AggregatePlural}By{Field}' where {AggregatePlural} ` +
+      `is the plural of an aggregate defined in the BC YAML.`
+    );
+  }
+  const jpaName = `${aggregate.name}Jpa`;
   const a = jpaName.charAt(0).toLowerCase();
 
+  // extraConditions are already alias-prefixed by resolveCountQualifier; params are not.
   const conditions = [
-    ...extraConditions.map((c) => `${a}.${c}`),
+    ...extraConditions,
     ...params.map((p) => {
       if (/^List\[/.test(p.type)) return `${a}.${p.name.replace(/s$/, '')} IN :${p.name}`;
       return `${a}.${p.name} = :${p.name}`;
@@ -446,7 +541,7 @@ function collectJpaRepoImports(customMethods, aggregate, jpaEntityName, bc, pack
     // Parse param types from paramsStr for imports
     const params = method._params || [];
     for (const p of params) {
-      if (p.javaType === 'UUID') imports.add('java.util.UUID');
+      // java.util.UUID is hardcoded by the template — do not duplicate it via imports.
       if (p.javaType.startsWith('List<')) {
         imports.add('java.util.List');
         const listMatch = p.javaType.match(/^List<(.+)>$/);
@@ -549,8 +644,16 @@ function buildToDomainBody(aggregate, bcYaml) {
   }
 
   for (const entity of aggregate.entities || []) {
-    const fieldName = toCamelCase(pluralizeWord(entity.name));
-    args.push(`jpa.get${capitalize(fieldName)}().stream().map(this::to${entity.name}Domain).toList()`);
+    const isOneToOne = entity.cardinality === 'oneToOne';
+    const fieldName = isOneToOne
+      ? toCamelCase(entity.name)
+      : toCamelCase(pluralizeWord(entity.name));
+    if (isOneToOne) {
+      // S6 — oneToOne: single mapping, null-safe
+      args.push(`jpa.get${capitalize(fieldName)}() != null ? to${entity.name}Domain(jpa.get${capitalize(fieldName)}()) : null`);
+    } else {
+      args.push(`jpa.get${capitalize(fieldName)}().stream().map(this::to${entity.name}Domain).toList()`);
+    }
   }
 
   if (aggregate.auditable) {
@@ -627,8 +730,16 @@ function buildToJpaBody(aggregate, bcYaml) {
   }
 
   for (const entity of aggregate.entities || []) {
-    const fieldName = toCamelCase(pluralizeWord(entity.name));
-    lines.push(`        .${fieldName}(domain.get${capitalize(fieldName)}().stream().map(this::to${entity.name}Jpa).collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new)))`);
+    const isOneToOne = entity.cardinality === 'oneToOne';
+    const fieldName = isOneToOne
+      ? toCamelCase(entity.name)
+      : toCamelCase(pluralizeWord(entity.name));
+    if (isOneToOne) {
+      // S6 — oneToOne: single mapping, null-safe
+      lines.push(`        .${fieldName}(domain.get${capitalize(fieldName)}() != null ? to${entity.name}Jpa(domain.get${capitalize(fieldName)}()) : null)`);
+    } else {
+      lines.push(`        .${fieldName}(domain.get${capitalize(fieldName)}().stream().map(this::to${entity.name}Jpa).collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new)))`);
+    }
   }
 
   lines.push(`        .build();`);
@@ -768,6 +879,11 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
     return `jpaRepository.deleteById(${paramNames});`;
   }
 
+  if (name === 'softDelete') {
+    // softDelete(id) is implemented as a custom @Modifying @Query on the JPA repo.
+    return `jpaRepository.softDelete(${paramNames});`;
+  }
+
   if (methodReturnType === 'void') {
     return `jpaRepository.${name}(${paramNames});`;
   }
@@ -790,6 +906,16 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
     if (pageParam && sizeParam) {
       const otherParams = (params || []).filter((p) => p.name !== 'page' && p.name !== 'size');
       const otherNames = otherParams.map((p) => p.name).join(', ');
+      // S14: when page/size are optional, apply sensible defaults to avoid NPE in PageRequest.of
+      const isOptional = pageParam.required === false || sizeParam.required === false;
+      if (isOptional) {
+        const lines = [];
+        lines.push(`int _page = page != null ? page : 0;`);
+        lines.push(`        int _size = size != null ? size : 20;`);
+        const jpaArgs = otherNames ? `${otherNames}, PageRequest.of(_page, _size)` : 'PageRequest.of(_page, _size)';
+        lines.push(`        return jpaRepository.${name}(${jpaArgs}).map(this::toDomain);`);
+        return lines.join('\n        ');
+      }
       const jpaArgs = otherNames ? `${otherNames}, PageRequest.of(page, size)` : 'PageRequest.of(page, size)';
       return `return jpaRepository.${name}(${jpaArgs}).map(this::toDomain);`;
     }
@@ -926,6 +1052,9 @@ function buildJpaRepoInterfaceContext(aggregateName, normalizedMethods, aggregat
   for (const m of normalizedMethods) {
     const classification = classifyMethod({ ...m, aggregateName, derivedFrom: m.derivedFrom });
     if (classification === 'skip') continue;
+    // Renamed delete→softDelete is materialized by the auto-inject block below;
+    // skip here to avoid emitting a method without @Query.
+    if (aggregate.softDelete === true && m.name === 'softDelete' && (m.params || []).length === 1) continue;
 
     const javaParams = (m.params || []).map((p) => ({
       name: p.name,
@@ -1055,6 +1184,18 @@ async function generateRepositories(bcYaml, config, outputDir) {
       const normalized = normalizeMethod(m);
       return { ...normalized, derivedFrom: m.derivedFrom };
     });
+
+    // Soft-delete rename: when the aggregate uses softDelete, the YAML 'delete(id)'
+    // method must materialize as 'softDelete(id)' on the domain port and impl.
+    // The Spring Data JpaRepository interface still inherits hard deleteById, but it is
+    // never invoked from the domain layer because the port no longer exposes 'delete'.
+    if (aggregate.softDelete === true) {
+      for (const m of normalizedMethods) {
+        if (m.name === 'delete' && (m.params || []).length === 1) {
+          m.name = 'softDelete';
+        }
+      }
+    }
 
     // hasDomainEvents: read models never publish events and must not inject eventPublisher
     const allPublishedEvents = (bcYaml.domainEvents || {}).published || [];

@@ -3,6 +3,16 @@ package <%= packageName %>.<%= moduleName %>.application.dtos;
 <% imports.forEach(imp => { %>import <%- imp %>;
 <% }); %>
 <% } %>
+<% if (description) { %>
+/**
+ * <%- description.replace(/\n/g, '\n * ') %>
+ */
+<% } %>
+// derived_from: <%= derivedFrom %>
+<% if (usedBy && usedBy.length > 0) { %>// used_by: <%= usedBy.map(u => 'useCase:' + u).join(', ') %>
+<% } %>
+<% (classAnnotations || []).forEach(a => { %><%- a %>
+<% }); %>
 public record <%= projectionName %>(
 <%- fields.map((f, i) => {
   const ann = (f.annotations && f.annotations.length > 0) ? f.annotations.join(' ') + ' ' : '';

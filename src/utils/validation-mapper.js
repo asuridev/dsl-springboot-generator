@@ -185,4 +185,155 @@ function mergeAnnotations(typeAnnotations, dslAnnotations) {
   return combined;
 }
 
-module.exports = { mapDslValidations, mergeAnnotations };
+module.exports = { mapDslValidations, mergeAnnotations, buildDomainChecks };
+
+/**
+ * Build imperative Java guard statements for a single property's validations,
+ * for use inside a domain aggregate / entity constructor or mutator method.
+ *
+ * Returns an object with:
+ *   - lines: string[] — Java statements (no trailing newline) to be inserted
+ *     before the assignment of the property; each line is already indented with
+ *     the caller's prefix when joined with `\n`.
+ *   - imports: string[] — additional imports needed by the generated checks
+ *     (e.g. java.util.regex.Pattern when a regex check is emitted).
+ *
+ * The guards complement (they do NOT replace) the `required: true` null check.
+ * The caller is expected to emit the @Objects.requireNonNull / null guard separately.
+ *
+ * @param {{ name: string, type: string, required?: boolean, validations?: Array }} prop
+ * @returns {{ lines: string[], imports: string[] }}
+ */
+function buildDomainChecks(prop) {
+  const lines = [];
+  const imports = new Set();
+  const validations = prop.validations || [];
+  if (validations.length === 0) return { lines, imports: [] };
+
+  const name = prop.name;
+  const type = prop.type || 'String';
+  const isString = type === 'String' || type === 'Text' || type === 'Email' || /^String\(\d+\)$/.test(type);
+  const isNumeric = type === 'Integer' || type === 'Long' || type === 'Decimal';
+  const isCollection = /^List\[/.test(type);
+
+  for (const constraint of validations) {
+    const key = Object.keys(constraint)[0];
+    const value = constraint[key];
+
+    switch (key) {
+      case 'minLength':
+        if (isString) {
+          lines.push(`if (${name} != null && ${name}.length() < ${value}) {`);
+          lines.push(`    throw new IllegalArgumentException("${name} must be at least ${value} characters long");`);
+          lines.push('}');
+        }
+        break;
+
+      case 'maxLength':
+        if (isString) {
+          lines.push(`if (${name} != null && ${name}.length() > ${value}) {`);
+          lines.push(`    throw new IllegalArgumentException("${name} must be at most ${value} characters long");`);
+          lines.push('}');
+        }
+        break;
+
+      case 'notEmpty':
+        if (value === true && isString) {
+          lines.push(`if (${name} != null && ${name}.isEmpty()) {`);
+          lines.push(`    throw new IllegalArgumentException("${name} must not be empty");`);
+          lines.push('}');
+        } else if (value === true && isCollection) {
+          lines.push(`if (${name} != null && ${name}.isEmpty()) {`);
+          lines.push(`    throw new IllegalArgumentException("${name} must not be empty");`);
+          lines.push('}');
+        }
+        break;
+
+      case 'pattern':
+        if (isString) {
+          lines.push(`if (${name} != null && !${name}.matches("${value}")) {`);
+          lines.push(`    throw new IllegalArgumentException("${name} does not match required pattern");`);
+          lines.push('}');
+        }
+        break;
+
+      case 'min':
+        if (type === 'Decimal') {
+          imports.add('java.math.BigDecimal');
+          lines.push(`if (${name} != null && ${name}.compareTo(new BigDecimal("${value}")) < 0) {`);
+          lines.push(`    throw new IllegalArgumentException("${name} must be at least ${value}");`);
+          lines.push('}');
+        } else if (isNumeric) {
+          lines.push(`if (${name} != null && ${name} < ${value}) {`);
+          lines.push(`    throw new IllegalArgumentException("${name} must be at least ${value}");`);
+          lines.push('}');
+        }
+        break;
+
+      case 'max':
+        if (type === 'Decimal') {
+          imports.add('java.math.BigDecimal');
+          lines.push(`if (${name} != null && ${name}.compareTo(new BigDecimal("${value}")) > 0) {`);
+          lines.push(`    throw new IllegalArgumentException("${name} must be at most ${value}");`);
+          lines.push('}');
+        } else if (isNumeric) {
+          lines.push(`if (${name} != null && ${name} > ${value}) {`);
+          lines.push(`    throw new IllegalArgumentException("${name} must be at most ${value}");`);
+          lines.push('}');
+        }
+        break;
+
+      case 'positive':
+        if (value === true) {
+          if (type === 'Decimal') {
+            imports.add('java.math.BigDecimal');
+            lines.push(`if (${name} != null && ${name}.signum() <= 0) {`);
+            lines.push(`    throw new IllegalArgumentException("${name} must be positive");`);
+            lines.push('}');
+          } else if (isNumeric) {
+            lines.push(`if (${name} != null && ${name} <= 0) {`);
+            lines.push(`    throw new IllegalArgumentException("${name} must be positive");`);
+            lines.push('}');
+          }
+        }
+        break;
+
+      case 'positiveOrZero':
+        if (value === true) {
+          if (type === 'Decimal') {
+            imports.add('java.math.BigDecimal');
+            lines.push(`if (${name} != null && ${name}.signum() < 0) {`);
+            lines.push(`    throw new IllegalArgumentException("${name} must be zero or positive");`);
+            lines.push('}');
+          } else if (isNumeric) {
+            lines.push(`if (${name} != null && ${name} < 0) {`);
+            lines.push(`    throw new IllegalArgumentException("${name} must be zero or positive");`);
+            lines.push('}');
+          }
+        }
+        break;
+
+      case 'minSize':
+        if (isCollection) {
+          lines.push(`if (${name} != null && ${name}.size() < ${value}) {`);
+          lines.push(`    throw new IllegalArgumentException("${name} must contain at least ${value} elements");`);
+          lines.push('}');
+        }
+        break;
+
+      case 'maxSize':
+        if (isCollection) {
+          lines.push(`if (${name} != null && ${name}.size() > ${value}) {`);
+          lines.push(`    throw new IllegalArgumentException("${name} must contain at most ${value} elements");`);
+          lines.push('}');
+        }
+        break;
+
+      default:
+        // unsupported in domain checks (annotations-only constraints like @Past/@Future)
+        break;
+    }
+  }
+
+  return { lines, imports: [...imports] };
+}

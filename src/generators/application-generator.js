@@ -5,6 +5,7 @@ const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toCamelCase, toPackagePath } = require('../utils/naming');
 const { mapType } = require('../utils/type-mapper');
 const { mapDslValidations, mergeAnnotations } = require('../utils/validation-mapper');
+const { mapRule } = require('../utils/domain-rule-mapper');
 const { getOutboundHttpBcNames } = require('./outbound-http-generator');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
@@ -233,6 +234,77 @@ function isSingleStringVo(voType, bcYaml) {
   return t === 'String' || t === 'Text' || t === 'Email' || t === 'Url' || /^String\(\d+\)$/.test(t);
 }
 
+// ─── Projection helpers ──────────────────────────────────────────────────────
+
+/**
+ * Extracts the inner type name from a `returns` value that may be a bare name,
+ * `List[X]` or `Page[X]`. Returns null for non-string inputs.
+ */
+function extractInnerReturnTypeName(returns) {
+  if (!returns || typeof returns !== 'string') return null;
+  const m = /^(?:Page|List)\[(.+)\]$/.exec(returns);
+  return m ? m[1] : returns;
+}
+
+function findProjection(name, bcYaml) {
+  if (!name) return null;
+  return (bcYaml?.projections || []).find((p) => p.name === name) || null;
+}
+
+/**
+ * Map of getterName → property declaration for derivability checks against
+ * an aggregate root. Includes audit fields when applicable.
+ */
+function aggregateGetterMap(agg) {
+  const map = new Map();
+  for (const prop of (agg.properties || [])) {
+    if (prop.hidden || prop.internal) continue;
+    map.set(prop.name, prop);
+  }
+  if (agg.auditable) {
+    map.set('createdAt', { name: 'createdAt', type: 'DateTime' });
+    map.set('updatedAt', { name: 'updatedAt', type: 'DateTime' });
+  }
+  return map;
+}
+
+function isProjectionDerivable(projection, agg) {
+  const m = aggregateGetterMap(agg);
+  for (const p of (projection.properties || [])) {
+    if (!m.has(p.name)) return false;
+  }
+  return true;
+}
+
+/**
+ * Returns projections referenced by `returns` of any query UC for the given
+ * aggregate, with cardinality info (single / list / paged).
+ *
+ * If a projection declares `source: aggregate:<Name>`, it is only included for
+ * the aggregate whose name matches; this gives designers an explicit override
+ * over the heuristic "any UC of this aggregate returns the projection".
+ */
+function projectionsUsedByAggregate(agg, bcYaml) {
+  const result = new Map();
+  for (const uc of (bcYaml.useCases || [])) {
+    if (uc.aggregate !== agg.name) continue;
+    if (uc.type !== 'query' || !uc.returns || typeof uc.returns !== 'string') continue;
+    const inner = extractInnerReturnTypeName(uc.returns);
+    const projection = findProjection(inner, bcYaml);
+    if (!projection) continue;
+    if (projection.source && /^aggregate:/.test(projection.source)) {
+      const explicit = projection.source.split(':')[1];
+      if (explicit !== agg.name) continue;
+    }
+    const isPaged = /^Page\[/.test(uc.returns);
+    const isList = !isPaged && /^List\[/.test(uc.returns);
+    const existing = result.get(inner) || { projection, single: false, list: false };
+    if (isPaged || isList) existing.list = true; else existing.single = true;
+    result.set(inner, existing);
+  }
+  return [...result.values()];
+}
+
 function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Set(), bcYaml = null) {
   // List[T] — recursive inner type resolution
   const listDtoMatch = /^List\[(.+)\]$/.exec(type);
@@ -248,6 +320,22 @@ function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Se
   if (type === 'DateTime') {
     imports.add('java.time.Instant');
     return 'Instant';
+  }
+  if (type === 'Date') {
+    imports.add('java.time.LocalDate');
+    return 'LocalDate';
+  }
+  if (type === 'Duration') {
+    imports.add('java.time.Duration');
+    return 'Duration';
+  }
+  if (type === 'BigInt' || type === 'BigInteger') {
+    imports.add('java.math.BigInteger');
+    return 'BigInteger';
+  }
+  if (type === 'Json' || type === 'JSON') {
+    imports.add('com.fasterxml.jackson.databind.JsonNode');
+    return 'JsonNode';
   }
   if (type === 'Text' || type === 'Email' || type === 'Url') return 'String';
   if (type === 'Boolean') return 'Boolean';
@@ -277,9 +365,22 @@ function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Se
     imports.add(`${packageName}.${moduleName}.domain.valueobject.${type}`);
     return type;
   }
-  // Bare enum
-  imports.add(`${packageName}.${moduleName}.domain.enums.${type}`);
-  return type;
+  // Projection — resolved to application/dtos/<Name> (no Dto suffix)
+  const projectionNames = new Set(((bcYaml && bcYaml.projections) || []).map((p) => p.name));
+  if (projectionNames.has(type)) {
+    imports.add(`${packageName}.${moduleName}.application.dtos.${type}`);
+    return type;
+  }
+  // Enum — only if declared
+  const enumNames = new Set(((bcYaml && bcYaml.enums) || []).map((e) => e.name));
+  if (enumNames.has(type)) {
+    imports.add(`${packageName}.${moduleName}.domain.enums.${type}`);
+    return type;
+  }
+  throw new Error(
+    `[application-generator] javaTypeForDto: cannot resolve type "${type}". ` +
+    `Declare it under enums[], valueObjects[] or projections[], or use a canonical type.`
+  );
 }
 
 // Commands receive UUIDs as String and convert with UUID.fromString in handler
@@ -696,6 +797,38 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
     }
   }
 
+  // ── Domain rules: emit checks declared in the UC.rules whitelist ─────────
+  // The mapper is conservative — rules without executable hints become TODO
+  // comments (no inference). Returns extra repos that must be added to the
+  // handler's constructor by the caller (via the returned `extraRepos`).
+  const aggregateDef = (bcYaml?.aggregates || []).find((a) => a.name === agg.name);
+  const aggregateRules = (aggregateDef?.domainRules || []);
+  const ucRuleIds = new Set(uc.rules || []);
+  const extraRepos = [];
+  const seenRepoNames = new Set();
+  for (const rule of aggregateRules) {
+    if (!ucRuleIds.has(rule.id)) continue;
+    const ruleCtx = {
+      uc,
+      agg,
+      aggVarName,
+      errorMap,
+      packageName,
+      moduleName,
+      bcYaml,
+      isCreate,
+    };
+    const result = mapRule(rule, ruleCtx);
+    if (!result || !result.lines || result.lines.length === 0) continue;
+    for (const line of result.lines) lines.push(line);
+    for (const imp of result.extraImports || []) extraImports.add(imp);
+    for (const r of result.extraRepos || []) {
+      if (seenRepoNames.has(r.repoFieldName)) continue;
+      seenRepoNames.add(r.repoFieldName);
+      extraRepos.push(r);
+    }
+  }
+
   // Domain method invocation
   if (isCreate) {
     const hasStaticFactory = dm && dm.returns === agg.name;
@@ -713,12 +846,12 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
   // Save
   lines.push(`        ${repoFieldName}.save(${aggVarName});`);
 
-  return { body: lines.join('\n'), extraImports: [...extraImports].sort() };
+  return { body: lines.join('\n'), extraImports: [...extraImports].sort(), extraRepos };
 }
 
 // ─── Query handler body ───────────────────────────────────────────────────────
 
-function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, moduleName) {
+function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, moduleName, projection = null) {
   const lines = [];
   const extraImports = new Set();
 
@@ -731,6 +864,10 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
 
   extraImports.add('java.util.UUID');
   extraImports.add(`${packageName}.${moduleName}.domain.aggregate.${agg.name}`);
+
+  // When the return is a projection, we map domain → projection via mapper.to<Projection>()
+  // instead of mapper.toResponseDto(). The mapper is generated alongside (G2).
+  const mapperSingleMethod = projection ? `to${projection.name}` : 'toResponseDto';
 
   // ── Path A: loadAggregate: true → findById ──────────────────────────────────
   const loadAggInput = (uc.input || []).find((i) => i.loadAggregate === true);
@@ -752,7 +889,7 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
         `        ${agg.name} entity = ${repoFieldName}.findById(UUID.fromString(query.${loadAggInput.name}())).orElseThrow();`
       );
     }
-    lines.push(`        return ${mapperFieldName}.toResponseDto(entity);`);
+    lines.push(`        return ${mapperFieldName}.${mapperSingleMethod}(entity);`);
     return { body: lines.join('\n'), extraImports: [...extraImports].sort() };
   }
 
@@ -810,7 +947,7 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
       `        List<${agg.name}> entities = ${repoFieldName}.${repoMethodName}(${callArgs});`
     );
     lines.push(
-      `        return entities.stream().map(${mapperFieldName}::toResponseDto).toList();`
+      `        return entities.stream().map(${mapperFieldName}::${mapperSingleMethod}).toList();`
     );
   } else if (isPaged) {
     extraImports.add('org.springframework.data.domain.Page');
@@ -822,7 +959,7 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
       `        Page<${agg.name}> page = ${repoFieldName}.${repoMethodName}(${callArgs});`
     );
     lines.push(
-      `        return PagedResponse.of(page.getContent().stream().map(${mapperFieldName}::toResponseDto).toList(), query.page(), query.size(), page.getTotalElements());`
+      `        return PagedResponse.of(page.getContent().stream().map(${mapperFieldName}::${mapperSingleMethod}).toList(), query.page(), query.size(), page.getTotalElements());`
     );
   } else {
     // Single entity via non-loadAggregate path (findBy{Field})
@@ -839,7 +976,7 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
         `        ${agg.name} entity = ${repoFieldName}.${repoMethodName}(${callArgs}).orElseThrow();`
       );
     }
-    lines.push(`        return ${mapperFieldName}.toResponseDto(entity);`);
+    lines.push(`        return ${mapperFieldName}.${mapperSingleMethod}(entity);`);
   }
 
   return { body: lines.join('\n'), extraImports: [...extraImports].sort() };
@@ -1044,10 +1181,59 @@ async function generateResponseDto(agg, moduleName, packageName, bcDir, voNames 
 
 async function generateApplicationMapper(agg, moduleName, packageName, bcDir, voNames = new Set(), bcYaml = null) {
   const { fields, imports } = buildMapperFields(agg, packageName, moduleName, voNames, bcYaml);
+  const importsSet = new Set(imports);
+
+  // Projection mapper methods (G2): one per projection referenced by a query UC
+  // for this aggregate. Derivable projections produce a real body; the rest
+  // produce a TODO scaffold to be completed in Phase 3.
+  const projectionMethods = [];
+  for (const usage of projectionsUsedByAggregate(agg, bcYaml)) {
+    const { projection, list: needsList } = usage;
+    const derivable = isProjectionDerivable(projection, agg);
+    importsSet.add(`${packageName}.${moduleName}.application.dtos.${projection.name}`);
+    if (needsList) importsSet.add('java.util.List');
+
+    let pmFields = [];
+    if (derivable) {
+      const aggMap = aggregateGetterMap(agg);
+      for (const prop of projection.properties || []) {
+        // Collect type imports via the side-effect call (matches existing pattern in buildMapperFields)
+        javaTypeForDto(prop.type, packageName, moduleName, importsSet, voNames, bcYaml);
+        const aggProp = aggMap.get(prop.name);
+        const baseGetter = getterName(prop.name);
+        // List[T] with single-prop VO inner type — same handling as response mapper
+        const listInnerMatch = /^List\[(.+)\]$/.exec(aggProp.type || '');
+        let getter;
+        if (listInnerMatch) {
+          const innerType = listInnerMatch[1];
+          const innerVo = (bcYaml?.valueObjects || []).find((v) => v.name === innerType && (v.properties || []).length === 1);
+          getter = innerVo ? `${baseGetter}().stream().map(${innerType}::getValue).toList` : baseGetter;
+        } else {
+          const isSingleStrVo = voNames.has(aggProp.type) && isSingleStringVo(aggProp.type, bcYaml);
+          getter = isSingleStrVo ? `${baseGetter}().getValue` : baseGetter;
+        }
+        pmFields.push({ name: prop.name, getter });
+      }
+    }
+    projectionMethods.push({
+      projectionName: projection.name,
+      derivable,
+      list: needsList,
+      fields: pmFields,
+    });
+  }
+
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'ApplicationMapper.java.ejs'),
     path.join(bcDir, 'application', 'mappers', `${agg.name}ApplicationMapper.java`),
-    { packageName, moduleName, aggregateName: agg.name, imports, fields }
+    {
+      packageName,
+      moduleName,
+      aggregateName: agg.name,
+      imports: [...importsSet].sort(),
+      fields,
+      projectionMethods,
+    }
   );
 }
 
@@ -1108,6 +1294,13 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
     const result = buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcYaml);
     body = result.body;
     extraImports = result.extraImports;
+    // Merge domain-rule-mapper's extra repos into fkRepos, dedupe by repoFieldName.
+    const seen = new Set(fkRepos.map((r) => r.repoFieldName));
+    for (const r of (result.extraRepos || [])) {
+      if (seen.has(r.repoFieldName)) continue;
+      seen.add(r.repoFieldName);
+      fkRepos.push(r);
+    }
   }
 
   await renderAndWrite(
@@ -1171,18 +1364,55 @@ function resolveInternalSchemaRef(ref) {
   return parts[parts.length - 1];
 }
 
-function openApiPropToJavaType(propSchema, imports) {
+function openApiPropToJavaType(propSchema, imports, ctx = null) {
   if (!propSchema) return 'String';
   if (propSchema.$ref) {
     const name = resolveInternalSchemaRef(propSchema.$ref);
+    if (ctx) {
+      // Reuse domain types when the OpenAPI schema name matches a BC catalog entry
+      if (ctx.voNames && ctx.voNames.has(name)) {
+        imports.add(`${ctx.packageName}.${ctx.moduleName}.domain.valueobject.${name}`);
+        return name;
+      }
+      if (ctx.enumNames && ctx.enumNames.has(name)) {
+        imports.add(`${ctx.packageName}.${ctx.moduleName}.domain.enums.${name}`);
+        return name;
+      }
+      if (ctx.projectionNames && ctx.projectionNames.has(name)) {
+        imports.add(`${ctx.packageName}.${ctx.moduleName}.application.dtos.${name}`);
+        return name;
+      }
+    }
     return `${name}Dto`;
   }
   if (propSchema.type === 'array' && propSchema.items) {
     imports.add('java.util.List');
-    const itemType = openApiPropToJavaType(propSchema.items, imports);
+    const itemType = openApiPropToJavaType(propSchema.items, imports, ctx);
     return `List<${itemType}>`;
   }
-  if (propSchema.type === 'integer') return 'int';
+  if (propSchema.type === 'string') {
+    if (propSchema.format === 'uuid') {
+      imports.add('java.util.UUID');
+      return 'UUID';
+    }
+    if (propSchema.format === 'date-time') {
+      imports.add('java.time.Instant');
+      return 'Instant';
+    }
+    if (propSchema.format === 'date') {
+      imports.add('java.time.LocalDate');
+      return 'LocalDate';
+    }
+    if (propSchema.format === 'decimal') {
+      imports.add('java.math.BigDecimal');
+      return 'BigDecimal';
+    }
+    return 'String';
+  }
+  if (propSchema.type === 'integer') {
+    if (propSchema.format === 'int64') return 'long';
+    return 'int';
+  }
   if (propSchema.type === 'number') {
     imports.add('java.math.BigDecimal');
     return 'BigDecimal';
@@ -1191,14 +1421,14 @@ function openApiPropToJavaType(propSchema, imports) {
   return 'String';
 }
 
-function buildInternalSchemaFields(schemaName, components, forCommand = false) {
+function buildInternalSchemaFields(schemaName, components, forCommand = false, ctx = null) {
   const schema = (components?.schemas || {})[schemaName];
   if (!schema) return { fields: [], imports: [] };
   const imports = new Set();
   const fields = [];
   const requiredSet = new Set(schema.required || []);
   for (const [propName, propSchema] of Object.entries(schema.properties || {})) {
-    const javaType = openApiPropToJavaType(propSchema, imports);
+    const javaType = openApiPropToJavaType(propSchema, imports, ctx);
     const annotations = [];
     if (forCommand) {
       const isObj = propSchema.$ref || propSchema.type === 'array' || propSchema.type === 'object';
@@ -1236,10 +1466,10 @@ function visitInternalPropSchema(propSchema, components, visited) {
   }
 }
 
-async function generateInternalApiDtos(schemasToGenerate, packageName, moduleName, components, bcDir) {
+async function generateInternalApiDtos(schemasToGenerate, packageName, moduleName, components, bcDir, ctx = null) {
   const dtosDir = path.join(bcDir, 'application', 'dtos');
   for (const schemaName of schemasToGenerate) {
-    const { fields, imports } = buildInternalSchemaFields(schemaName, components);
+    const { fields, imports } = buildInternalSchemaFields(schemaName, components, false, ctx);
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'application', 'InternalApiDto.java.ejs'),
       path.join(dtosDir, `${schemaName}Dto.java`),
@@ -1315,7 +1545,7 @@ async function generatePublicApiResponseDtos(schemasToGenerate, components, pack
   }
 }
 
-async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, errorMap, repoMethods, customReturnType = null) {
+async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, errorMap, repoMethods, customReturnType = null, bcYaml = null) {
   const ucClassName = toPascalCase(uc.name);
   const aggVarName = toCamelCase(agg.name);
   const repoName = `${agg.name}Repository`;
@@ -1324,12 +1554,15 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
   const mapperFieldName = `${aggVarName}ApplicationMapper`;
   const returnType = customReturnType || buildQueryReturnType(uc, agg, repoMethods);
 
-  // Use scaffold for sub-entity queries (cannot auto-generate correct body)
-  // Also scaffold when return type is a custom DTO (not the aggregate's own ResponseDto)
+  // Detect projection-based custom return: <Projection>, List<Projection>, PagedResponse<Projection>
   const returnTypeForCheck = customReturnType || buildQueryReturnType(uc, agg, repoMethods);
   const innerDtoForCheck = (/(?:PagedResponse|List)<(.+?)>/.exec(returnTypeForCheck) || [null, returnTypeForCheck])[1];
-  const isCustomDto = innerDtoForCheck !== `${agg.name}ResponseDto`;
-  const effectiveImpl = (isSubEntityQuery(uc, agg) || isCustomDto) ? 'scaffold' : (uc.implementation || 'scaffold');
+  const isAggResponseDto = innerDtoForCheck === `${agg.name}ResponseDto`;
+  const projection = !isAggResponseDto && bcYaml ? findProjection(innerDtoForCheck, bcYaml) : null;
+  const isDerivableProjection = projection ? isProjectionDerivable(projection, agg) : false;
+  // Scaffold if: sub-entity query, OR custom DTO that is NOT a derivable projection.
+  const isCustomNonProjection = !isAggResponseDto && !isDerivableProjection;
+  const effectiveImpl = (isSubEntityQuery(uc, agg) || isCustomNonProjection) ? 'scaffold' : (uc.implementation || 'scaffold');
 
   let body = '';
   let extraImports = [];
@@ -1354,7 +1587,7 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
       extraImports.push('java.util.List');
     }
     if (effectiveImpl === 'full') {
-      const result = buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, moduleName);
+      const result = buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, moduleName, projection);
       body = result.body;
       extraImports = [...extraImports, ...result.extraImports];
       extraImports = [...new Set(extraImports)].sort();
@@ -1396,20 +1629,73 @@ async function generateProjections(bcYaml, config, outputDir) {
   const packagePath = toPackagePath(packageName);
   const bcDir = path.join(outputDir, 'src', 'main', 'java', packagePath, moduleName);
   const voNames = new Set((bcYaml.valueObjects || []).map((vo) => vo.name));
+  const openApiAnnotations = config.openApiAnnotations === true;
+
+  // Build usage map: projectionName → [useCaseIds]
+  const usageMap = new Map();
+  for (const uc of (bcYaml.useCases || [])) {
+    if (typeof uc.returns !== 'string') continue;
+    const inner = (/^(?:Page|List)\[(.+)\]$/.exec(uc.returns) || [null, uc.returns])[1];
+    if (!inner) continue;
+    if (!usageMap.has(inner)) usageMap.set(inner, []);
+    usageMap.get(inner).push(uc.id || uc.name);
+  }
 
   for (const proj of projections) {
     const imports = new Set();
     const fields = [];
+    let anyOptional = false;
 
     for (const prop of proj.properties || []) {
       const javaType = javaTypeForDto(prop.type, packageName, moduleName, imports, voNames, bcYaml);
-      fields.push({ type: javaType, name: prop.name, annotations: [] });
+      const annotations = [];
+
+      if (prop.serializedName && prop.serializedName !== prop.name) {
+        imports.add('com.fasterxml.jackson.annotation.JsonProperty');
+        annotations.push(`@JsonProperty("${prop.serializedName}")`);
+      }
+      if (openApiAnnotations && (prop.description || prop.example !== undefined)) {
+        imports.add('io.swagger.v3.oas.annotations.media.Schema');
+        const parts = [];
+        if (prop.description) parts.push(`description = "${String(prop.description).replace(/"/g, '\\"')}"`);
+        if (prop.example !== undefined) parts.push(`example = "${String(prop.example).replace(/"/g, '\\"')}"`);
+        annotations.push(`@Schema(${parts.join(', ')})`);
+      }
+      if (prop.required === false) anyOptional = true;
+
+      fields.push({
+        type: javaType,
+        name: prop.name,
+        annotations,
+        derivedFrom: prop.derivedFrom || prop.derived_from || null,
+        description: prop.description || null,
+      });
     }
+
+    // Class-level @JsonInclude(NON_NULL) when any field is optional.
+    const classAnnotations = [];
+    if (anyOptional) {
+      imports.add('com.fasterxml.jackson.annotation.JsonInclude');
+      classAnnotations.push('@JsonInclude(JsonInclude.Include.NON_NULL)');
+    }
+
+    const usedBy = usageMap.get(proj.name) || [];
+    const description = proj.description ? String(proj.description).trim() : null;
 
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'application', 'Projection.java.ejs'),
       path.join(bcDir, 'application', 'dtos', `${proj.name}.java`),
-      { packageName, moduleName, projectionName: proj.name, fields, imports: [...imports].sort() }
+      {
+        packageName,
+        moduleName,
+        projectionName: proj.name,
+        fields,
+        imports: [...imports].sort(),
+        description,
+        derivedFrom: `projection:${proj.name}`,
+        usedBy,
+        classAnnotations,
+      }
     );
   }
 }
@@ -1501,13 +1787,23 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
         // Also exclude projection schemas — they are generated as dedicated records by generateProjections().
         const aggDtoNames = new Set((bcYaml.aggregates || []).map((a) => `${a.name}ResponseDto`));
         const bcProjectionNames = new Set((bcYaml.projections || []).map((p) => p.name));
+        const bcEnumNames = new Set((bcYaml.enums || []).map((e) => e.name));
+        const openApiCtx = {
+          packageName,
+          moduleName,
+          voNames,
+          enumNames: bcEnumNames,
+          projectionNames: bcProjectionNames,
+        };
         const dtoSchemas = [...schemasToGenerate].filter((s) => {
           if (/error/i.test(s)) return false;
           if (aggDtoNames.has(`${s}Dto`)) return false;
           if (bcProjectionNames.has(s)) return false;
+          if (voNames.has(s)) return false;
+          if (bcEnumNames.has(s)) return false;
           return true;
         });
-        await generateInternalApiDtos(dtoSchemas, packageName, moduleName, components, bcDir);
+        await generateInternalApiDtos(dtoSchemas, packageName, moduleName, components, bcDir, openApiCtx);
 
         // Build Query record fields from request body schema (or fall back to YAML method signature
         // for GET-style internal ops that have path params but no request body).
@@ -1515,7 +1811,7 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
         const queryImports = new Set();
         let queryFields = [];
         if (requestSchemaName) {
-          const { fields, imports } = buildInternalSchemaFields(requestSchemaName, components, true);
+          const { fields, imports } = buildInternalSchemaFields(requestSchemaName, components, true, openApiCtx);
           queryFields = fields;
           for (const imp of imports) queryImports.add(imp);
         } else {
@@ -1538,12 +1834,19 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
           if (isListResponse) queryImports.add('java.util.List');
         }
 
-        // Add imports for any DTO types used in query fields (different package: queries vs dtos)
+        // Add imports for any DTO types used in query fields (different package: queries vs dtos).
+        // Skip primitive/canonical types and types already resolved to VO/enum/projection
+        // (their imports were already added by openApiPropToJavaType via the ctx).
+        const skipTypes = new Set(['String', 'UUID', 'int', 'long', 'boolean', 'BigDecimal', 'Instant', 'LocalDate']);
         for (const field of queryFields) {
           const innerFieldMatch = /^(?:List<)?([A-Za-z0-9_]+)>?$/.exec(field.type);
-          if (innerFieldMatch && !['String', 'UUID', 'int', 'boolean', 'BigDecimal', 'Instant'].includes(innerFieldMatch[1])) {
-            queryImports.add(`${packageName}.${moduleName}.application.dtos.${innerFieldMatch[1]}`);
-          }
+          if (!innerFieldMatch) continue;
+          const inner = innerFieldMatch[1];
+          if (skipTypes.has(inner)) continue;
+          if (voNames.has(inner)) continue;
+          if (bcEnumNames.has(inner)) continue;
+          if (bcProjectionNames.has(inner)) continue;
+          queryImports.add(`${packageName}.${moduleName}.application.dtos.${inner}`);
         }
 
         // Generate Query record
@@ -1569,7 +1872,8 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
           bcDir,
           errorMap,
           repoMethods,
-          responseReturnType
+          responseReturnType,
+          bcYaml
         );
       } else if (uc.type === 'command') {
         const voRequestsNeeded = await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml);
@@ -1598,18 +1902,20 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
             // references ProductImageResponse via array items $ref).
             const enumNameSet = new Set((bcYaml.enums || []).map((e) => e.name));
             const voNameSet = new Set((bcYaml.valueObjects || []).map((v) => v.name));
+            const projectionNameSet = new Set((bcYaml.projections || []).map((p) => p.name));
             const allSchemas = collectInternalSchemas(innerTypeName, publicComponents, new Set());
             const schemasToGenerate = [...allSchemas].filter((s) => {
               if (/error/i.test(s)) return false;
               if (enumNameSet.has(s)) return false;
               if (voNameSet.has(s)) return false;
+              if (projectionNameSet.has(s)) return false;
               return true;
             });
             await generatePublicApiResponseDtos(schemasToGenerate, publicComponents, packageName, moduleName, bcDir, bcYaml);
           }
         }
         await generateQuery(uc, agg, moduleName, packageName, bcDir, repoMethods);
-        await generateQueryHandler(uc, agg, moduleName, packageName, bcDir, errorMap, repoMethods);
+        await generateQueryHandler(uc, agg, moduleName, packageName, bcDir, errorMap, repoMethods, null, bcYaml);
       }
     }
   }

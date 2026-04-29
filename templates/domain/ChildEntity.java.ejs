@@ -21,11 +21,12 @@ public class <%= name %> {
         this.id = id;
 <% fields.forEach(field => { %>        this.<%= field.name %> = <%= field.name %>;
 <% }); %>    }
-<% if (!immutable && creationParams.length > 0) { %>
+<% if (creationParams.length > 0 || autoInits.length > 0) { %>
 
-    // ─── Creation constructor (new <%= name %>) ───────────────────────────────
+    // ─── Creation constructor (new <%= name %>) ──────────────────────────────────
     public <%= name %>(<% creationParams.forEach((p, idx) => { %><%- p.javaType %> <%= p.name %><%= idx < creationParams.length - 1 ? ', ' : '' %><% }); %>) {
-        this.id = UUID.randomUUID();
+<% (creationChecks || []).forEach(line => { %>        <%- line %>
+<% }); %>        this.id = UUID.randomUUID();
 <% creationParams.forEach(p => { %>        this.<%= p.name %> = <%= p.name %>;
 <% }); %>
 <% autoInits.forEach(ai => { %>        this.<%= ai.name %> = <%- ai.value %>;
@@ -41,4 +42,24 @@ public class <%= name %> {
     public <%- field.javaType %> get<%= field.name.charAt(0).toUpperCase() + field.name.slice(1) %>() {
         return <%= field.name %>;
     }
-<% }); %>}
+<% }); %>
+    // ─── Identity equality (S20) ──────────────────────────────────────────────
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        <%= name %> that = (<%= name %>) o;
+        return java.util.Objects.equals(this.id, that.id);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(this.id);
+    }
+
+    @Override
+    public String toString() {
+        return "<%= name %>{id=" + this.id + "}";
+    }
+}

@@ -32,13 +32,28 @@ if (indexes.length > 0) { %>,
     @Column(name = "id", nullable = false, updatable = false)
     private UUID id;
 
-<% fields.forEach(field => { %>    <%- field.columnAnnotation %>
+<% if (hasVersion) { %>    @Version
+    @Column(name = "version", nullable = false)
+    private Long version;
+
+<% } %><% fields.forEach(field => { %>    <%- field.columnAnnotation %>
     private <%- field.javaType %> <%- field.name %><% if (field.isCollection) { %> = new ArrayList<>()<% } %>;
 
 <% }); %>
-<% childEntities.forEach(entity => { %>    @<%- entity.immutable ? 'OneToMany(cascade = { CascadeType.PERSIST }, orphanRemoval = false' : 'OneToMany(cascade = CascadeType.ALL, orphanRemoval = true' %>, fetch = FetchType.LAZY)
-    @JoinColumn(name = "<%- entity.joinColumn %>", nullable = false)
-    @Builder.Default
+<% childEntities.forEach(entity => {
+  let cascadeSpec;
+  if (entity.immutable) {
+    cascadeSpec = 'cascade = { CascadeType.PERSIST }, orphanRemoval = false';
+  } else if (entity.relationship === 'aggregation') {
+    cascadeSpec = 'cascade = { CascadeType.PERSIST, CascadeType.MERGE }, orphanRemoval = false';
+  } else {
+    cascadeSpec = 'cascade = CascadeType.ALL, orphanRemoval = true';
+  }
+  const relAnnotation = entity.isOneToOne ? 'OneToOne' : 'OneToMany';
+%>    @<%- relAnnotation %>(<%- cascadeSpec %>, fetch = FetchType.LAZY)
+    @JoinColumn(name = "<%- entity.joinColumn %>", nullable = <%- entity.isOneToOne ? 'true' : 'false' %>)
+<% if (!entity.isOneToOne) { %>    @Builder.Default
     private List<<%- entity.jpaName %>> <%- entity.fieldName %> = new ArrayList<>();
-
+<% } else { %>    private <%- entity.jpaName %> <%- entity.fieldName %>;
+<% } %>
 <% }); %>}

@@ -25,4 +25,26 @@ public class <%= aggregateName %>ApplicationMapper {
     public List<<%= aggregateName %>ResponseDto> toResponseDtoList(List<<%= aggregateName %>> list) {
         return list.stream().map(this::toResponseDto).toList();
     }
+<% (projectionMethods || []).forEach(pm => { %>
+
+    public <%= pm.projectionName %> to<%= pm.projectionName %>(<%= aggregateName %> domain) {
+<% if (pm.derivable) { %>
+        return new <%= pm.projectionName %>(
+<%- pm.fields.map((f, i) => {
+  const comma = i < pm.fields.length - 1 ? ',' : '';
+  return '            domain.' + f.getter + '()' + comma;
+}).join('\n') %>
+        );
+<% } else { %>
+        // TODO: implement projection mapping for <%= pm.projectionName %>
+        throw new UnsupportedOperationException("Not implemented yet");
+<% } %>
+    }
+<% if (pm.list) { %>
+
+    public List<<%= pm.projectionName %>> to<%= pm.projectionName %>List(List<<%= aggregateName %>> list) {
+        return list.stream().map(this::to<%= pm.projectionName %>).toList();
+    }
+<% } %>
+<% }); %>
 }
