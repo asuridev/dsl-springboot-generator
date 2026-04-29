@@ -33,7 +33,7 @@ if (indexes.length > 0) { %>,
     private UUID id;
 
 <% fields.forEach(field => { %>    <%- field.columnAnnotation %>
-    private <%- field.javaType %> <%- field.name %>;
+    private <%- field.javaType %> <%- field.name %><% if (field.isCollection) { %> = new ArrayList<>()<% } %>;
 
 <% }); %>
 <% childEntities.forEach(entity => { %>    @<%- entity.immutable ? 'OneToMany(cascade = { CascadeType.PERSIST }, orphanRemoval = false' : 'OneToMany(cascade = CascadeType.ALL, orphanRemoval = true' %>, fetch = FetchType.LAZY)

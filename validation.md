@@ -1,7 +1,11 @@
 # Validation Rules — Referencia para el Generador
 
-Este documento define el vocabulario completo de `validations` permitido en
-`aggregates[].properties[]` y `aggregates[].entities[].properties[]` del `{bc-name}.yaml`.
+Este documento define el vocabulario completo de `validations` permitido en:
+- `aggregates[].properties[]`
+- `aggregates[].entities[].properties[]`
+- `valueObjects[].properties[]`
+
+del `{bc-name}.yaml`.
 
 Las constraints aquí declaradas son **agnósticas a la tecnología**. El generador
 las traduce a las annotations correspondientes en cada plataforma destino.
@@ -9,6 +13,10 @@ las traduce a las annotations correspondientes en cada plataforma destino.
 ---
 
 ## Cómo funciona la herencia de validaciones
+
+Las `validations` se heredan automáticamente en dos niveles:
+
+### Nivel 1 — Propiedades de agregados y entidades
 
 Las `validations` definidas en `properties[]` de un agregado **se heredan automáticamente**
 en todos los commands que incluyan ese campo en su `input[]`. El generador resuelve
@@ -23,6 +31,25 @@ aggregates[Product].properties[name].validations
 
 Si el campo es `required: false` en un `input[]` específico (update parcial), las
 constraints siguen aplicando **si el valor está presente** en el request.
+
+### Nivel 2 — Propiedades de Value Objects
+
+Las `validations` definidas en `valueObjects[].properties[]` **se propagan automáticamente**
+a toda propiedad de un agregado o entidad cuyo `type` sea ese VO. El generador aplica
+las constraints del VO al generar los commands que incluyen ese campo.
+
+```
+valueObjects[Money].properties[amount].validations: [positive: true]
+    → aggregates[Product].properties[price] (type: Money)
+        → CreateProductCommand.priceAmount    ← hereda positive: true
+        → UpdateProductPriceCommand.priceAmount ← hereda positive: true
+
+valueObjects[Money].properties[currency].validations: [pattern: "^[A-Z]{3}$"]
+    → CreateProductCommand.priceCurrency  ← hereda el pattern
+```
+
+Esto garantiza que las restricciones de un VO se apliquen de forma consistente
+en cualquier agregado que lo utilice, sin duplicar la declaración.
 
 ---
 
@@ -258,14 +285,36 @@ public record CreateProductCommand(
 5. **Los constraints de `Decimal` con `min`/`max` usan string** para evitar pérdida de
    precisión en parsers YAML: `min: "0.01"`, no `min: 0.01`.
 
-6. **`validations` solo en `properties[]`** — no en `input[]` de use cases ni en
-   `domainMethods[].params[]`. La fuente de verdad es el agregado; el generador propaga.
+6. **`validations` solo en `properties[]`** — tanto en `aggregates[].properties[]`,
+   `aggregates[].entities[].properties[]` como en `valueObjects[].properties[]`.
+   No declarar en `input[]` de use cases ni en `domainMethods[].params[]`.
+   La fuente de verdad son el agregado y los VOs; el generador propaga.
 
 ---
 
 ## Ejemplo completo aplicado
 
 ```yaml
+valueObjects:
+  - name: Money
+    description: >
+      Represents an exact monetary amount with its currency.
+    properties:
+      - name: amount
+        type: Decimal
+        precision: 19
+        scale: 4
+        required: true
+        description: Exact monetary amount.
+        validations:
+          - positive: true          # un monto monetario nunca es negativo ni cero
+      - name: currency
+        type: String(3)
+        required: true
+        description: ISO 4217 currency code.
+        validations:
+          - pattern: "^[A-Z]{3}$"  # exactamente 3 letras mayúsculas
+
 aggregates:
   - name: Product
     properties:
@@ -282,6 +331,10 @@ aggregates:
         validations:
           - minLength: 3
           - pattern: "^[A-Z0-9\\-]+$"
+
+      - name: price
+        type: Money          # hereda positive + pattern desde valueObjects[Money]
+        required: true
 
       - name: description
         type: Text

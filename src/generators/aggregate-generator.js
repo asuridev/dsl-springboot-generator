@@ -3,7 +3,7 @@
 const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPackagePath, toCamelCase, pluralizeWord } = require('../utils/naming');
-const { mapType } = require('../utils/type-mapper');
+const { mapType, isListType, getListElementType } = require('../utils/type-mapper');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -288,6 +288,27 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
 
   // Check all properties for additional types
   for (const prop of aggregate.properties || []) {
+    // List[T] — add List/ArrayList + imports for the element type
+    if (isListType(prop.type)) {
+      imports.add('import java.util.List;');
+      imports.add('import java.util.ArrayList;');
+      const innerType = getListElementType(prop.type);
+      if (innerType) {
+        const innerEnumWrapperMatch = /^Enum<(.+)>$/.exec(innerType);
+        const resolvedInner = innerEnumWrapperMatch ? innerEnumWrapperMatch[1] : innerType;
+        if (isValueObjectType(resolvedInner, bcYaml)) {
+          imports.add(`import ${pkg}.${bc}.domain.valueobject.${resolvedInner};`);
+        } else if (innerEnumWrapperMatch != null || isEnumType(resolvedInner, bcYaml)) {
+          imports.add(`import ${pkg}.${bc}.domain.enums.${resolvedInner};`);
+        } else {
+          try {
+            const mapped = mapType(innerType);
+            if (mapped.importHint) imports.add(`import ${mapped.importHint};`);
+          } catch (_) { /* skip */ }
+        }
+      }
+      continue;
+    }
     const enumWrapperMatch = /^Enum<(.+)>$/.exec(prop.type);
     const resolvedType = enumWrapperMatch ? enumWrapperMatch[1] : prop.type;
     const isVO = isValueObjectType(resolvedType, bcYaml);
@@ -448,6 +469,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
           readOnly: !!p.readOnly,
           defaultValue: p.defaultValue,
           internal: !!p.internal,
+          isList: isListType(p.type),
         };
       });
 
@@ -484,7 +506,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
             javaType = p.type;
           }
         }
-        return { name: p.name, javaType };
+        return { name: p.name, javaType, isList: isListType(p.type) };
       });
 
     // ── 4. Auto-initialized fields (readOnly with defaultValue) ───────────────

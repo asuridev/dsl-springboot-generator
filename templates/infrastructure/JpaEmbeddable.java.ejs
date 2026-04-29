@@ -1,0 +1,20 @@
+package <%- packageName %>.<%- bc %>.infrastructure.persistence.entities;
+
+import jakarta.persistence.*;
+import lombok.*;
+<% if (imports && imports.length > 0) { %><% imports.forEach(imp => { %>import <%- imp %>;
+<% }); %><% } %>
+/**
+ * <%- name %> — @Embeddable for <%- voName %> value object (used in @ElementCollection).
+ */
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+@Embeddable
+public class <%- name %> {
+<% fields.forEach(field => { %>
+    <%- field.columnAnnotation %>
+    private <%- field.javaType %> <%- field.name %>;
+<% }); %>}

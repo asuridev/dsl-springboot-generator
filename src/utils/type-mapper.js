@@ -244,4 +244,21 @@ function mapToOpenApiFormat(type) {
   }
 }
 
-module.exports = { mapType, mapToPostgres, mapToOpenApiFormat, PROHIBITED_TYPES };
+/**
+ * Returns true when type is a List[T] canonical form.
+ * e.g. "List[String(100)]" → true
+ */
+function isListType(type) {
+  return LIST_T_RE.test(type);
+}
+
+/**
+ * Returns the element type T from List[T], or null if not a list type.
+ * e.g. "List[String(100)]" → "String(100)"
+ */
+function getListElementType(type) {
+  const m = LIST_T_RE.exec(type);
+  return m ? m[1] : null;
+}
+
+module.exports = { mapType, mapToPostgres, mapToOpenApiFormat, PROHIBITED_TYPES, isListType, getListElementType };

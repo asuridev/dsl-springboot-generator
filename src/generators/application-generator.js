@@ -234,6 +234,13 @@ function isSingleStringVo(voType, bcYaml) {
 }
 
 function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Set(), bcYaml = null) {
+  // List[T] — recursive inner type resolution
+  const listDtoMatch = /^List\[(.+)\]$/.exec(type);
+  if (listDtoMatch) {
+    imports.add('java.util.List');
+    const innerJavaType = javaTypeForDto(listDtoMatch[1], packageName, moduleName, imports, voNames, bcYaml);
+    return `List<${innerJavaType}>`;
+  }
   if (type === 'Uuid') {
     imports.add('java.util.UUID');
     return 'UUID';
@@ -316,10 +323,21 @@ function buildMapperFields(agg, packageName, moduleName, voNames = new Set(), bc
     if (prop.hidden || prop.internal) continue;
     javaTypeForDto(prop.type, packageName, moduleName, imports, voNames, bcYaml); // side-effect: collect imports
     const baseGetter = getterName(prop.name);
-    const isSingleStrVo = voNames.has(prop.type) && isSingleStringVo(prop.type, bcYaml);
-    const getter = isSingleStrVo
-      ? `${baseGetter}().getValue`
-      : baseGetter;
+    // List[T] with single-prop VO inner type → stream().map(Vo::getValue).toList()
+    const listInnerMatch = /^List\[(.+)\]$/.exec(prop.type);
+    let getter;
+    if (listInnerMatch) {
+      const innerType = listInnerMatch[1];
+      const innerVo = (bcYaml?.valueObjects || []).find((v) => v.name === innerType && (v.properties || []).length === 1);
+      getter = innerVo
+        ? `${baseGetter}().stream().map(${innerType}::getValue).toList`
+        : baseGetter;
+    } else {
+      const isSingleStrVo = voNames.has(prop.type) && isSingleStringVo(prop.type, bcYaml);
+      getter = isSingleStrVo
+        ? `${baseGetter}().getValue`
+        : baseGetter;
+    }
     fields.push({ name: prop.name, getter });
   }
 
@@ -390,11 +408,12 @@ function buildRequiredAnnotation(javaType, imports) {
 function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(), bcYaml = null) {
   const imports = new Set();
   const fields = [];
+  const voRequestsNeeded = new Set();
   const propMap = buildAggPropertyMap(agg);
 
   // Event-triggered commands carry no external inputs in the command record
   if (uc.trigger && uc.trigger.kind === 'event') {
-    return { fields, imports: [...imports].sort() };
+    return { fields, imports: [...imports].sort(), voRequestsNeeded };
   }
 
   for (const input of (uc.input || [])) {
@@ -404,24 +423,41 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
     const rawType = input.type;
     const isOptional = input.required === false;
 
-    if (rawType === 'Money') {
-      // Expand Money → {name}Amount (BigDecimal) + {name}Currency (String)
-      imports.add('java.math.BigDecimal');
+    // Look up VO definition for any type that matches a declared valueObject
+    const voDefinition = (bcYaml && bcYaml.valueObjects || []).find((v) => v.name === rawType);
+
+    if (voDefinition && (voDefinition.properties || []).length > 1) {
+      // ── Multi-property VO (e.g. Money) — emit one nested {VoName}Request field with @Valid ──
+      const requestType = `${rawType}Request`;
+      imports.add('jakarta.validation.Valid');
+      const annotations = [];
       if (!isOptional) {
         imports.add(`${JAKARTA}.NotNull`);
-        imports.add(`${JAKARTA}.NotBlank`);
+        annotations.push('@NotNull');
       }
-      fields.push({
-        type: 'BigDecimal',
-        name: `${input.name}Amount`,
-        annotations: isOptional ? [] : ['@NotNull'],
-      });
-      fields.push({
-        type: 'String',
-        name: `${input.name}Currency`,
-        annotations: isOptional ? [] : ['@NotBlank'],
-      });
+      annotations.push('@Valid');
+      fields.push({ type: requestType, name: input.name, annotations });
+      voRequestsNeeded.add(rawType);
+    } else if (voDefinition && (voDefinition.properties || []).length === 1) {
+      // ── Single-property VO (e.g. PhoneNumber { value: String(20) }) — collapse to primitive ──
+      const voProp = voDefinition.properties[0];
+      const mapped = mapType(voProp.type, voProp);
+      if (mapped.importHint) imports.add(mapped.importHint);
+
+      const typeAnnotations = getTypeValidationAnnotations(voProp.type, imports);
+      const { annotations: dslAnnotations, imports: dslImports } =
+        mapDslValidations(voProp.validations || [], voProp.type);
+      for (const imp of dslImports) imports.add(imp);
+      const mergedAnnotations = mergeAnnotations(typeAnnotations, dslAnnotations);
+
+      const fieldRequired = !isOptional && voProp.required !== false;
+      const requiredAnnotations = fieldRequired
+        ? buildRequiredAnnotation(mapped.javaType, imports)
+        : [];
+
+      fields.push({ type: mapped.javaType, name: input.name, annotations: [...requiredAnnotations, ...mergedAnnotations] });
     } else {
+      // ── Primitive, enum, Uuid, or unknown type ──
       const javaType = javaTypeForCommand(rawType, packageName, moduleName, imports, voNames, bcYaml);
       const propDef = propMap.get(input.name);
 
@@ -444,7 +480,7 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
     }
   }
 
-  return { fields, imports: [...imports].sort() };
+  return { fields, imports: [...imports].sort(), voRequestsNeeded };
 }
 
 // ─── Paged query detection ────────────────────────────────────────────────────
@@ -584,9 +620,11 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
         callArgs.push(`UUID.fromString(SecurityContextHolder.getContext().getAuthentication().getName())`);
         continue;
       }
-      if (input.type === 'Money') {
-        extraImports.add(`${packageName}.${moduleName}.domain.valueobject.Money`);
-        callArgs.push(`new Money(command.${input.name}Amount(), command.${input.name}Currency())`);
+      const inputVoDef = (bcYaml?.valueObjects || []).find((v) => v.name === input.type && (v.properties || []).length > 1);
+      if (inputVoDef) {
+        extraImports.add(`${packageName}.${moduleName}.domain.valueobject.${input.type}`);
+        const propGetters = inputVoDef.properties.map((p) => `command.${input.name}().${p.name}()`).join(', ');
+        callArgs.push(`new ${input.type}(${propGetters})`);
       } else if (input.type === 'Uuid') {
         callArgs.push(`UUID.fromString(command.${input.name}())`);
       } else if (input.type === 'Url') {
@@ -599,9 +637,11 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
   } else {
     // Use domainMethod params as the source of truth for the call args
     for (const p of dmParams) {
-      if (p.type === 'Money') {
-        extraImports.add(`${packageName}.${moduleName}.domain.valueobject.Money`);
-        callArgs.push(`new Money(command.${p.name}Amount(), command.${p.name}Currency())`);
+      const paramVoDef = (bcYaml?.valueObjects || []).find((v) => v.name === p.type && (v.properties || []).length > 1);
+      if (paramVoDef) {
+        extraImports.add(`${packageName}.${moduleName}.domain.valueobject.${p.type}`);
+        const propGetters = paramVoDef.properties.map((prop) => `command.${p.name}().${prop.name}()`).join(', ');
+        callArgs.push(`new ${p.type}(${propGetters})`);
       } else if (p.type === 'Uuid') {
         callArgs.push(`UUID.fromString(command.${p.name}())`);
       } else if (p.type === 'Url') {
@@ -872,6 +912,54 @@ function buildFkDependencies(uc, packageName, moduleName, mainAggregateName, bcY
   return { fkRepos, fkPorts };
 }
 
+// ─── VO Request record helpers ────────────────────────────────────────────────
+
+/**
+ * Builds field descriptors for a {VoName}Request record.
+ * Each property of the VO gets the full annotation pipeline:
+ *   mapType → typeValidationAnnotations → mapDslValidations → mergeAnnotations → buildRequiredAnnotation
+ */
+function buildVoRequestFields(voDefinition) {
+  const imports = new Set();
+  const fields = [];
+
+  for (const voProp of voDefinition.properties || []) {
+    const mapped = mapType(voProp.type, voProp);
+    if (mapped.importHint) imports.add(mapped.importHint);
+
+    const typeAnnotations = getTypeValidationAnnotations(voProp.type, imports);
+    const { annotations: dslAnnotations, imports: dslImports } =
+      mapDslValidations(voProp.validations || [], voProp.type);
+    for (const imp of dslImports) imports.add(imp);
+    const mergedAnnotations = mergeAnnotations(typeAnnotations, dslAnnotations);
+
+    const fieldRequired = voProp.required !== false;
+    const requiredAnnotations = fieldRequired
+      ? buildRequiredAnnotation(mapped.javaType, imports)
+      : [];
+
+    fields.push({ type: mapped.javaType, name: voProp.name, annotations: [...requiredAnnotations, ...mergedAnnotations] });
+  }
+
+  return { fields, imports: [...imports].sort() };
+}
+
+/**
+ * Generates a {VoName}Request record in {bcDir}/application/commands/.
+ * Called once per unique multi-property VO used as a command input.
+ */
+async function generateVoRequestRecord(voName, bcYaml, packageName, moduleName, bcDir) {
+  const voDefinition = (bcYaml.valueObjects || []).find((v) => v.name === voName);
+  if (!voDefinition) return;
+
+  const { fields, imports } = buildVoRequestFields(voDefinition);
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'application', 'VoRequest.java.ejs'),
+    path.join(bcDir, 'application', 'commands', `${voName}Request.java`),
+    { packageName, moduleName, voName, imports, fields }
+  );
+}
+
 // ─── Individual generators ────────────────────────────────────────────────────
 
 async function generateDomainErrors(errors, errorMap, moduleName, packageName, bcDir) {
@@ -922,12 +1010,13 @@ async function generateApplicationMapper(agg, moduleName, packageName, bcDir, vo
 
 async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames = new Set(), bcYaml = null) {
   const ucClassName = toPascalCase(uc.name);
-  const { fields, imports } = buildCommandFields(uc, agg, packageName, moduleName, voNames, bcYaml);
+  const { fields, imports, voRequestsNeeded } = buildCommandFields(uc, agg, packageName, moduleName, voNames, bcYaml);
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'UcCommand.java.ejs'),
     path.join(bcDir, 'application', 'commands', `${ucClassName}Command.java`),
     { packageName, moduleName, useCaseName: ucClassName, imports, fields }
   );
+  return voRequestsNeeded;
 }
 
 async function generateServicePort(port, packageName, moduleName, bcDir) {
@@ -1318,6 +1407,7 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
 
   // 3. Group use cases by aggregate
   const aggNames = [...new Set(allUseCases.map((uc) => uc.aggregate))];
+  const generatedVoRequests = new Set(); // tracks {VoName}Request records already written for this BC
 
   for (const aggName of aggNames) {
     const agg = (bcYaml.aggregates || []).find((a) => a.name === aggName);
@@ -1439,8 +1529,14 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
           responseReturnType
         );
       } else if (uc.type === 'command') {
-        await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml);
+        const voRequestsNeeded = await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml);
         await generateCommandHandler(uc, agg, moduleName, packageName, bcDir, errorMap, bcYaml, repoMethods);
+        for (const voName of voRequestsNeeded) {
+          if (!generatedVoRequests.has(voName)) {
+            generatedVoRequests.add(voName);
+            await generateVoRequestRecord(voName, bcYaml, packageName, moduleName, bcDir);
+          }
+        }
       } else if (uc.type === 'query') {
         // If uc.returns references a non-aggregate response DTO (e.g. ProductSummaryResponse),
         // generate that DTO from the public OpenAPI spec before generating the query record.

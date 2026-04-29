@@ -3,7 +3,7 @@
 const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toSnakeCase, toCamelCase, toPascalCase, pluralizeWord, toPackagePath } = require('../utils/naming');
-const { mapType } = require('../utils/type-mapper');
+const { mapType, isListType, getListElementType } = require('../utils/type-mapper');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -532,6 +532,17 @@ function buildToDomainBody(aggregate, bcYaml) {
           args.push(`jpa.get${capitalize(prop.name)}()`);
         }
       }
+    } else if (isListType(prop.type)) {
+      const innerType = getListElementType(prop.type);
+      const innerVoDef = innerType ? (bcYaml.valueObjects || []).find((vo) => vo.name === innerType) : null;
+      if (innerVoDef && (innerVoDef.properties || []).length > 1) {
+        // List[MultiPropVO]: map each @Embeddable back to domain VO
+        const voArgs = (innerVoDef.properties || []).map((vp) => `e.get${capitalize(vp.name)}()`).join(', ');
+        args.push(`jpa.get${capitalize(prop.name)}().stream().map(e -> new ${innerType}(${voArgs})).toList()`);
+      } else {
+        // List[Scalar] or List[SinglePropVO]: JPA type matches domain type — pass through
+        args.push(`jpa.get${capitalize(prop.name)}()`);
+      }
     } else {
       args.push(`jpa.get${capitalize(prop.name)}()`);
     }
@@ -598,6 +609,17 @@ function buildToJpaBody(aggregate, bcYaml) {
         } else {
           lines.push(`        .${prop.name}(domain.get${capitalize(prop.name)}())`);
         }
+      }
+    } else if (isListType(prop.type)) {
+      const innerType = getListElementType(prop.type);
+      const innerVoDef = innerType ? (bcYaml.valueObjects || []).find((vo) => vo.name === innerType) : null;
+      if (innerVoDef && (innerVoDef.properties || []).length > 1) {
+        // List[MultiPropVO]: map each domain VO to @Embeddable
+        const builderCalls = (innerVoDef.properties || []).map((vp) => `.${vp.name}(t.get${capitalize(vp.name)}())`).join('');
+        lines.push(`        .${prop.name}(domain.get${capitalize(prop.name)}().stream().map(t -> ${innerType}Embeddable.builder()${builderCalls}.build()).collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new)))`);
+      } else {
+        // List[Scalar] or List[SinglePropVO]: pass through directly
+        lines.push(`        .${prop.name}(domain.get${capitalize(prop.name)}())`);
       }
     } else {
       lines.push(`        .${prop.name}(domain.get${capitalize(prop.name)}())`);
@@ -855,6 +877,18 @@ function collectImplImports(aggregateName, aggregate, methods, bc, packageName, 
   for (const prop of allProps) {
     if (isVoType(prop.type, bcYaml)) {
       imports.add(`${packageName}.${bc}.domain.valueobject.${prop.type}`);
+    }
+  }
+
+  // List[MultiPropVO] — @Embeddable classes referenced in toDomain/toJpa
+  for (const prop of allProps) {
+    if (!isListType(prop.type)) continue;
+    const innerType = getListElementType(prop.type);
+    if (!innerType) continue;
+    const innerVoDef = (bcYaml.valueObjects || []).find((vo) => vo.name === innerType && (vo.properties || []).length > 1);
+    if (innerVoDef) {
+      imports.add(`${packageName}.${bc}.domain.valueobject.${innerType}`);
+      imports.add(`${packageName}.${bc}.infrastructure.persistence.entities.${innerType}Embeddable`);
     }
   }
 

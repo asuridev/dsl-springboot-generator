@@ -3,7 +3,7 @@
 const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toSnakeCase, toCamelCase, pluralizeWord, toPackagePath } = require('../utils/naming');
-const { mapType } = require('../utils/type-mapper');
+const { mapType, isListType, getListElementType } = require('../utils/type-mapper');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -138,6 +138,88 @@ function expandMoneyField(prop, bcYaml) {
 }
 
 /**
+ * Build an @ElementCollection field descriptor for a List[T] property.
+ * T may be a scalar or a single-property VO (collapsed to its primitive type).
+ * Multi-property VOs are not supported and throw a descriptive error.
+ */
+function buildElementCollectionField(prop, aggregate, bcYaml) {
+  const innerType = getListElementType(prop.type);
+  if (!innerType) throw new Error(`buildElementCollectionField called on non-list type: ${prop.type}`);
+
+  // Resolve element Java type
+  let elementJavaType;
+  const colAttrs = [];
+
+  const voDef = getVoDef(innerType, bcYaml);
+  if (voDef) {
+    const voProps = voDef.properties || [];
+    if (voProps.length > 1) {
+      // Multi-property VO → @Embeddable class; @Column defs live inside the embeddable
+      const aggSnake = toSnakeCase(aggregate.name);
+      const fieldSnake = toSnakeCase(prop.name);
+      const multiColAnnotation = [
+        '@ElementCollection',
+        `@CollectionTable(name = "${aggSnake}_${fieldSnake}", joinColumns = @JoinColumn(name = "${aggSnake}_id"))`,
+        '@Builder.Default',
+      ].join('\n    ');
+      return {
+        name: prop.name,
+        javaType: `List<${innerType}Embeddable>`,
+        columnAnnotation: multiColAnnotation,
+        isCollection: true,
+        embeddableName: `${innerType}Embeddable`,
+      };
+    }
+    // Single-property VO: collapse to its primitive type
+    const voProp = voProps[0];
+    try {
+      elementJavaType = mapType(voProp.type, voProp).javaType;
+    } catch (_) {
+      elementJavaType = 'String';
+    }
+    if (voProp.type === 'Email') {
+      colAttrs.push('length = 254');
+    } else if (/^String\(\d+\)$/.test(voProp.type)) {
+      colAttrs.push(`length = ${parseInt(voProp.type.match(/\d+/)[0], 10)}`);
+    }
+  } else {
+    // Scalar or enum type
+    try {
+      elementJavaType = mapType(innerType).javaType;
+    } catch (_) {
+      elementJavaType = 'String';
+    }
+    if (innerType === 'Email') {
+      colAttrs.push('length = 254');
+    } else if (/^String\(\d+\)$/.test(innerType)) {
+      colAttrs.push(`length = ${parseInt(innerType.match(/\d+/)[0], 10)}`);
+    }
+  }
+
+  if (prop.required === true) colAttrs.push('nullable = false');
+
+  const aggSnake = toSnakeCase(aggregate.name);
+  const fieldSnake = toSnakeCase(prop.name);
+  const colAttrStr = colAttrs.length > 0
+    ? `@Column(name = "${fieldSnake}", ${colAttrs.join(', ')})`
+    : `@Column(name = "${fieldSnake}")`;
+
+  const columnAnnotation = [
+    '@ElementCollection',
+    `@CollectionTable(name = "${aggSnake}_${fieldSnake}", joinColumns = @JoinColumn(name = "${aggSnake}_id"))`,
+    colAttrStr,
+    '@Builder.Default',
+  ].join('\n    ');
+
+  return {
+    name: prop.name,
+    javaType: `List<${elementJavaType}>`,
+    columnAnnotation,
+    isCollection: true,
+  };
+}
+
+/**
  * Build the fields array for a JPA entity from aggregate properties.
  * Excludes: id (handled as @Id), audit fields (in FullAuditableEntity).
  * Expands Money into two fields.
@@ -155,6 +237,12 @@ function buildJpaFields(properties, aggregate, bcYaml) {
     // Expand Money VO to two columns
     if (isMoneyType(prop.type)) {
       fields.push(...expandMoneyField(prop, bcYaml));
+      continue;
+    }
+
+    // List[T] — @ElementCollection
+    if (isListType(prop.type)) {
+      fields.push(buildElementCollectionField(prop, aggregate, bcYaml));
       continue;
     }
 
@@ -218,6 +306,26 @@ function buildJpaEntityImports(aggregate, bcYaml, config) {
 
     if (isMoneyType(prop.type)) {
       imports.add('java.math.BigDecimal');
+      continue;
+    }
+
+    // List[T] — collection properties
+    if (isListType(prop.type)) {
+      imports.add('java.util.List');
+      imports.add('java.util.ArrayList');
+      const innerType = getListElementType(prop.type);
+      if (innerType) {
+        const innerVoDef = getVoDef(innerType, bcYaml);
+        if (innerVoDef && (innerVoDef.properties || []).length > 1) {
+          // Multi-prop VO → import the generated @Embeddable class
+          imports.add(`${config.packageName}.${bc}.infrastructure.persistence.entities.${innerType}Embeddable`);
+        } else if (!innerVoDef) {
+          try {
+            const { importHint } = mapType(innerType);
+            if (importHint) imports.add(importHint);
+          } catch (_) { /* skip */ }
+        }
+      }
       continue;
     }
 
@@ -461,19 +569,62 @@ function buildJpaChildEntityContext(entity, aggregate, bcYaml, config) {
  *   {bc}/infrastructure/persistence/entities/{AggregateName}Jpa.java
  *   {bc}/infrastructure/persistence/entities/{EntityName}Jpa.java
  */
+/**
+ * Build the context object for a @Embeddable class generated from a multi-property VO
+ * that appears in a List[T] property.
+ */
+function buildEmbeddableContext(voName, voDef, bcYaml, config) {
+  const bc = bcYaml.bc;
+  const fields = [];
+  const imports = new Set();
+
+  for (const prop of (voDef.properties || [])) {
+    let javaType;
+    try {
+      const mapped = mapType(prop.type, prop);
+      javaType = mapped.javaType;
+      if (mapped.importHint) imports.add(mapped.importHint);
+    } catch (_) {
+      javaType = 'String';
+    }
+
+    const colAttrs = [`name = "${toSnakeCase(prop.name)}"`];
+    if (prop.type === 'Email') {
+      colAttrs.push('length = 254');
+    } else if (/^String\(\d+\)$/.test(prop.type)) {
+      colAttrs.push(`length = ${parseInt(prop.type.match(/\d+/)[0], 10)}`);
+    }
+    if (prop.required === true) colAttrs.push('nullable = false');
+
+    fields.push({
+      name: prop.name,
+      javaType,
+      columnAnnotation: `@Column(${colAttrs.join(', ')})`,
+    });
+  }
+
+  return {
+    packageName: config.packageName,
+    bc,
+    name: `${voName}Embeddable`,
+    voName,
+    fields,
+    imports: [...imports].sort(),
+  };
+}
+
 async function generateJpaEntities(bcYaml, config, outputDir) {
   const bc = bcYaml.bc;
   const packagePath = toPackagePath(config.packageName);
+  const entitiesDir = path.join(outputDir, 'src', 'main', 'java', packagePath, bc, 'infrastructure', 'persistence', 'entities');
+
+  // Collect @Embeddable classes needed across all aggregates (deduplicated by VO name)
+  const embeddablesNeeded = new Map(); // voName → voDef
 
   for (const aggregate of bcYaml.aggregates || []) {
     // 1. Aggregate JPA entity
     const entityContext = buildJpaEntityContext(aggregate, bcYaml, config);
-    const entityDest = path.join(
-      outputDir, 'src', 'main', 'java',
-      packagePath, bc,
-      'infrastructure', 'persistence', 'entities',
-      `${aggregate.name}Jpa.java`
-    );
+    const entityDest = path.join(entitiesDir, `${aggregate.name}Jpa.java`);
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'infrastructure', 'JpaEntity.java.ejs'),
       entityDest,
@@ -483,18 +634,35 @@ async function generateJpaEntities(bcYaml, config, outputDir) {
     // 2. Child entity JPA entities
     for (const entity of aggregate.entities || []) {
       const childContext = buildJpaChildEntityContext(entity, aggregate, bcYaml, config);
-      const childDest = path.join(
-        outputDir, 'src', 'main', 'java',
-        packagePath, bc,
-        'infrastructure', 'persistence', 'entities',
-        `${entity.name}Jpa.java`
-      );
+      const childDest = path.join(entitiesDir, `${entity.name}Jpa.java`);
       await renderAndWrite(
         path.join(TEMPLATES_DIR, 'infrastructure', 'JpaChildEntity.java.ejs'),
         childDest,
         childContext
       );
     }
+
+    // 3. Collect multi-prop VO embeddables needed by List[T] properties
+    for (const prop of aggregate.properties || []) {
+      if (!isListType(prop.type)) continue;
+      const innerType = getListElementType(prop.type);
+      if (!innerType || embeddablesNeeded.has(innerType)) continue;
+      const voDef = getVoDef(innerType, bcYaml);
+      if (voDef && (voDef.properties || []).length > 1) {
+        embeddablesNeeded.set(innerType, voDef);
+      }
+    }
+  }
+
+  // 4. Generate one @Embeddable class per collected multi-prop VO
+  for (const [voName, voDef] of embeddablesNeeded) {
+    const embeddableContext = buildEmbeddableContext(voName, voDef, bcYaml, config);
+    const embeddableDest = path.join(entitiesDir, `${voName}Embeddable.java`);
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'infrastructure', 'JpaEmbeddable.java.ejs'),
+      embeddableDest,
+      embeddableContext
+    );
   }
 }
 

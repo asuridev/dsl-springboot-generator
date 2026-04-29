@@ -105,13 +105,7 @@ function getCommandFields(uc, agg) {
   for (const input of (uc.input || [])) {
     // Fields sourced from authContext are injected in the handler
     if (input.source === 'authContext') continue;
-    const rawType = input.type;
-    if (rawType === 'Money') {
-      fields.push(`${input.name}Amount`);
-      fields.push(`${input.name}Currency`);
-    } else {
-      fields.push(input.name);
-    }
+    fields.push(input.name);
   }
 
   return fields;
