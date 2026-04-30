@@ -1044,6 +1044,311 @@ function validate(doc, opts = {}) {
       }
     }
   }
+
+  // ── 5. repositories validation (R16, R18, R19) ─────────────────────────────
+  validateRepositories(doc);
+}
+
+// ─── repositories[] validation ───────────────────────────────────────────────
+
+/**
+ * Whitelist + structural validation of the repositories[] section. This block
+ * historically had no validation, so typos in `aggregate`, `derivedFrom` and
+ * method names propagated silently to the generator and produced empty or
+ * uncompilable output. Per AGENTS.md the generator must stop on missing data;
+ * this validator enforces that contract.
+ */
+function validateRepositories(doc) {
+  const repositories = doc.repositories;
+  if (repositories == null) return;
+  if (!Array.isArray(repositories)) {
+    fail(`"repositories" must be a list of repository entries, one per aggregate.`);
+  }
+
+  const ALLOWED_REPO_KEYS = new Set(['aggregate', 'queryMethods', 'methods', 'bulkOperations', 'autoDerive']);
+  const ALLOWED_METHOD_KEYS = new Set([
+    'name', 'params', 'returns', 'derivedFrom', 'signature',
+    // queryMethods may additionally declare ordering hints:
+    'defaultSort', 'sortable',
+  ]);
+  const ALLOWED_PARAM_KEYS = new Set([
+    'name', 'type', 'required', 'filterOn', 'operator',
+  ]);
+  const ALLOWED_OPERATORS = new Set([
+    'EQ', 'LIKE_CONTAINS', 'LIKE_STARTS', 'LIKE_ENDS', 'GTE', 'LTE', 'IN',
+  ]);
+  const RETURN_PATTERNS = [
+    /^void$/,
+    /^Boolean$/,
+    /^Int$/,
+    /^Long$/,
+    /^[A-Z][A-Za-z0-9]*\?$/,           // T?
+    /^Page\[[A-Z][A-Za-z0-9]*\]$/,     // Page[T]
+    /^Slice\[[A-Z][A-Za-z0-9]*\]$/,    // Slice[T]  (R15)
+    /^Stream\[[A-Z][A-Za-z0-9]*\]$/,   // Stream[T] (R15)
+    /^List\[[A-Z][A-Za-z0-9]*\]$/,     // List[T]
+    /^[A-Z][A-Za-z0-9]*$/,             // T
+  ];
+
+  const aggregateNames = new Set((doc.aggregates || []).map((a) => a.name));
+  const aggregateByName = new Map((doc.aggregates || []).map((a) => [a.name, a]));
+
+  // Domain rules can be declared at the document root *or* nested inside each
+  // aggregate (the bc-yaml schema supports both). Collect from both scopes and
+  // remember which aggregate each rule belongs to for deleteGuard lookup.
+  const ruleIds = new Set();
+  const ruleById = new Map();
+  const deleteGuardByAggregate = new Map();
+  const indexRule = (rule, ownerAggregate) => {
+    if (!rule || !rule.id) return;
+    ruleIds.add(rule.id);
+    ruleById.set(rule.id, rule);
+    if (rule.type === 'deleteGuard') {
+      const target = ownerAggregate || rule.appliesTo || rule.aggregate;
+      if (target) {
+        const list = deleteGuardByAggregate.get(target) || [];
+        list.push(rule);
+        deleteGuardByAggregate.set(target, list);
+      }
+    }
+  };
+  for (const rule of (doc.domainRules || [])) indexRule(rule, null);
+  for (const agg of (doc.aggregates || [])) {
+    for (const rule of (agg.domainRules || [])) indexRule(rule, agg.name);
+  }
+
+  for (const repo of repositories) {
+    if (!repo || typeof repo !== 'object' || Array.isArray(repo)) {
+      fail(`repositories[] contains a non-mapping entry; each entry must be an object with "aggregate".`);
+    }
+    for (const key of Object.keys(repo)) {
+      if (!ALLOWED_REPO_KEYS.has(key)) {
+        fail(`Repository entry for "${repo.aggregate || '<unnamed>'}" declares unsupported key "${key}". Allowed: ${[...ALLOWED_REPO_KEYS].join(', ')}.`);
+      }
+    }
+    if (!repo.aggregate) {
+      fail(`A repositories[] entry is missing required field "aggregate".`);
+    }
+    if (!aggregateNames.has(repo.aggregate)) {
+      fail(`Repository declares aggregate "${repo.aggregate}" but no aggregate with that name exists in aggregates[]. Did you mean one of: ${[...aggregateNames].join(', ')}?`);
+    }
+    const aggregate = aggregateByName.get(repo.aggregate);
+
+    const allMethods = [
+      ...(repo.queryMethods || []).map((m) => ({ ...m, _section: 'queryMethods' })),
+      ...(repo.methods || []).map((m) => ({ ...m, _section: 'methods' })),
+    ];
+
+    // Method name uniqueness within the aggregate.
+    const seenNames = new Set();
+    for (const m of allMethods) {
+      const mname = m.name || (m.signature ? (m.signature.match(/^(\w+)/) || [])[1] : null);
+      if (!mname) {
+        fail(`Repository for "${repo.aggregate}" has a method without "name" (or parsable "signature").`);
+      }
+      if (seenNames.has(mname)) {
+        fail(`Repository for "${repo.aggregate}" declares duplicate method "${mname}".`);
+      }
+      seenNames.add(mname);
+    }
+
+    // R19: read models must not expose write methods.
+    if (aggregate && aggregate.readModel === true) {
+      for (const m of allMethods) {
+        if (m._section !== 'methods') continue;
+        if (m.name === 'save' || m.name === 'delete' || m.name === 'softDelete') {
+          fail(`Repository for read-model aggregate "${repo.aggregate}" declares write method "${m.name}". Read models are populated via projection events; remove "${m.name}".`);
+        }
+      }
+    }
+
+    // Per-method validation.
+    for (const m of allMethods) {
+      const ctx = `repositories["${repo.aggregate}"].${m._section}["${m.name || m.signature}"]`;
+
+      for (const key of Object.keys(m)) {
+        if (key === '_section') continue;
+        if (!ALLOWED_METHOD_KEYS.has(key)) {
+          fail(`${ctx} declares unsupported key "${key}". Allowed: ${[...ALLOWED_METHOD_KEYS].join(', ')}.`);
+        }
+      }
+
+      // returns whitelist (skip when only `signature:` is provided — parsed elsewhere).
+      if (m.returns != null) {
+        const matched = RETURN_PATTERNS.some((re) => re.test(String(m.returns).trim()));
+        if (!matched) {
+          fail(`${ctx} has unsupported "returns": "${m.returns}". Allowed forms: T, T?, List[T], Page[T], Int, Boolean, void.`);
+        }
+      }
+
+      // defaultSort / sortable validation. Only meaningful in queryMethods and
+      // (currently) only honoured by the generator for List[T] returns; we still
+      // accept it on Page[T] but document that Pageable.sort wins at runtime.
+      if (m.defaultSort != null) {
+        if (m._section !== 'queryMethods') {
+          fail(`${ctx} declares "defaultSort" outside of queryMethods. Move the method under "queryMethods".`);
+        }
+        if (typeof m.defaultSort !== 'object' || Array.isArray(m.defaultSort)) {
+          fail(`${ctx} "defaultSort" must be an object with "field" and optional "direction".`);
+        }
+        if (!m.defaultSort.field || typeof m.defaultSort.field !== 'string') {
+          fail(`${ctx} "defaultSort" requires a non-empty "field".`);
+        }
+        if (m.defaultSort.direction != null && !['ASC', 'DESC'].includes(String(m.defaultSort.direction).toUpperCase())) {
+          fail(`${ctx} "defaultSort.direction" must be ASC or DESC; got "${m.defaultSort.direction}".`);
+        }
+        if (aggregate) {
+          const aggFieldNames = new Set([
+            ...((aggregate.attributes || []).map((a) => a.name)),
+            ...((aggregate.fields || []).map((a) => a.name)),
+            'createdAt', 'updatedAt', 'deletedAt', 'id',
+          ]);
+          if (!aggFieldNames.has(m.defaultSort.field)) {
+            fail(`${ctx} "defaultSort.field" = "${m.defaultSort.field}" is not a known attribute of aggregate "${repo.aggregate}".`);
+          }
+        }
+      }
+      if (m.sortable != null) {
+        if (m._section !== 'queryMethods') {
+          fail(`${ctx} declares "sortable" outside of queryMethods.`);
+        }
+        if (!Array.isArray(m.sortable) || m.sortable.length === 0) {
+          fail(`${ctx} "sortable" must be a non-empty list of aggregate attribute names.`);
+        }
+        if (aggregate) {
+          const aggFieldNames = new Set([
+            ...((aggregate.attributes || []).map((a) => a.name)),
+            ...((aggregate.fields || []).map((a) => a.name)),
+            'createdAt', 'updatedAt', 'deletedAt', 'id',
+          ]);
+          for (const f of m.sortable) {
+            if (!aggFieldNames.has(f)) {
+              fail(`${ctx} "sortable" lists unknown field "${f}" on aggregate "${repo.aggregate}".`);
+            }
+          }
+        }
+      }
+
+      // params whitelist + operator/filterOn coupling.
+      if (m.params != null) {
+        if (!Array.isArray(m.params)) {
+          fail(`${ctx} "params" must be a list.`);
+        }
+        for (const p of m.params) {
+          if (!p || typeof p !== 'object' || Array.isArray(p)) continue;
+          // Inline form { name: Type } with no `name`/`type` keys is tolerated by the generator.
+          const hasShape = 'name' in p || 'type' in p;
+          if (hasShape) {
+            for (const key of Object.keys(p)) {
+              if (!ALLOWED_PARAM_KEYS.has(key)) {
+                fail(`${ctx} param "${p.name || '<unnamed>'}" declares unsupported key "${key}". Allowed: ${[...ALLOWED_PARAM_KEYS].join(', ')}.`);
+              }
+            }
+            if (p.operator != null && !ALLOWED_OPERATORS.has(p.operator)) {
+              fail(`${ctx} param "${p.name}" has unsupported operator "${p.operator}". Allowed: ${[...ALLOWED_OPERATORS].join(', ')}.`);
+            }
+            if (p.filterOn != null) {
+              if (!Array.isArray(p.filterOn) || p.filterOn.length === 0) {
+                fail(`${ctx} param "${p.name}" has invalid "filterOn"; expected a non-empty list of aggregate property names.`);
+              }
+              if (p.operator == null) {
+                fail(`${ctx} param "${p.name}" declares "filterOn" but is missing required "operator". Operators allowed with filterOn: LIKE_CONTAINS, LIKE_STARTS, LIKE_ENDS.`);
+              }
+            }
+          }
+        }
+      }
+
+      // Naming-vs-returns sanity.
+      if (m.name && m.returns) {
+        const ret = String(m.returns).trim();
+        if (/^findBy[A-Z]/.test(m.name) && !/\?$/.test(ret) && !/^List\[/.test(ret) && !/^Page\[/.test(ret)) {
+          fail(`${ctx} naming convention "findBy*" requires returns of T?, List[T] or Page[T]; got "${ret}".`);
+        }
+        if (/^countBy[A-Z]/.test(m.name) && ret !== 'Int') {
+          fail(`${ctx} naming convention "countBy*" requires returns: Int; got "${ret}".`);
+        }
+        if (/^existsBy[A-Z]/.test(m.name) && ret !== 'Boolean') {
+          fail(`${ctx} naming convention "existsBy*" requires returns: Boolean; got "${ret}".`);
+        }
+      }
+
+      // Page[T] returns require a Pageable (PageRequest) param or a page+size pair.
+      if (m.returns && /^Page\[/.test(String(m.returns).trim()) && Array.isArray(m.params)) {
+        const hasPageable = m.params.some((p) => p && (p.type === 'PageRequest' || p.name === 'pageable'));
+        const hasPagePair = m.params.some((p) => p && p.name === 'page' && p.type === 'Integer')
+          && m.params.some((p) => p && p.name === 'size' && p.type === 'Integer');
+        if (!hasPageable && !hasPagePair) {
+          fail(`${ctx} returns Page[T] but declares neither a "PageRequest" param nor the "page:Integer + size:Integer" pair.`);
+        }
+      }
+
+      // derivedFrom cross-checks (RULE id).
+      if (m.derivedFrom != null) {
+        const df = String(m.derivedFrom);
+        if (df === 'implicit') {
+          // ok
+        } else if (df.startsWith('openapi:')) {
+          if (df === 'openapi:' || df.length < 'openapi:'.length + 1) {
+            fail(`${ctx} has empty "derivedFrom: openapi:" — provide an operationId.`);
+          }
+          // Cross-check against the OpenAPI document is performed later in the
+          // build pipeline, after the OpenAPI YAML is loaded.
+        } else {
+          // Treat any other string as a domainRule id reference.
+          if (!ruleIds.has(df)) {
+            fail(`${ctx} has "derivedFrom: ${df}" but no domainRule with that id is defined. Allowed forms: "implicit", "openapi:<operationId>", or a domainRules[].id.`);
+          }
+        }
+      }
+    }
+
+    // R18: delete(id) without softDelete on the aggregate must be backed by a
+    // domainRule of type "deleteGuard"; otherwise the generator emits a hard
+    // delete that silently bypasses any business invariant.
+    const deleteMethod = (repo.methods || []).find(
+      (m) => m && m.name === 'delete' && Array.isArray(m.params) && m.params.length === 1
+    );
+    if (deleteMethod && aggregate && aggregate.softDelete !== true) {
+      const df = deleteMethod.derivedFrom;
+      const guardsForAggregate = deleteGuardByAggregate.get(repo.aggregate) || [];
+      const referencesGuard = df && ruleById.has(df) && ruleById.get(df).type === 'deleteGuard';
+      if (!referencesGuard && guardsForAggregate.length === 0) {
+        fail(
+          `Repository for "${repo.aggregate}" declares "delete(id)" but the aggregate is not "softDelete: true" ` +
+          `and no domainRule of type "deleteGuard" exists for it. Either add "softDelete: true" to the aggregate ` +
+          `(soft-delete becomes the default), declare a domainRule of type "deleteGuard" and reference it via ` +
+          `"derivedFrom: <RULE_ID>", or remove the "delete" method.`
+        );
+      }
+    }
+  }
+
+  // R24: query use cases that do not load the aggregate (Path B — they delegate
+  // straight to the repository) must have at least one queryMethod declared on
+  // the matching repository entry. Without this, the use-case handler would
+  // either invoke a non-existent repository method or silently degrade to a
+  // findById that ignores the requested filters.
+  const repoByAggregate = new Map();
+  for (const repo of repositories) {
+    if (repo && repo.aggregate) repoByAggregate.set(repo.aggregate, repo);
+  }
+  for (const uc of (doc.useCases || [])) {
+    if (uc.type !== 'query') continue;
+    if (uc.loadAggregate === true) continue;
+    const aggName = uc.aggregate;
+    if (!aggName) continue;
+    if (!aggregateNames.has(aggName)) continue; // covered elsewhere
+    const repo = repoByAggregate.get(aggName);
+    const qmCount = repo && Array.isArray(repo.queryMethods) ? repo.queryMethods.length : 0;
+    if (qmCount === 0) {
+      fail(
+        `Use case "${uc.id}" is a query against aggregate "${aggName}" but its repository declares no "queryMethods". ` +
+        `Either set "loadAggregate: true" on the use case (Path A — find-then-map), or add the matching queryMethod ` +
+        `to repositories[].queryMethods so the handler can call it directly.`
+      );
+    }
+  }
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────

@@ -6,18 +6,22 @@ import org.springframework.stereotype.Component;
 
 /**
  * <%- aggregateName %>RepositoryImpl — Infrastructure adapter implementing <%- aggregateName %>Repository.
- * Bridges the domain repository port with Spring Data JPA.
- * Contains inline mappers: toDomain (JPA → domain) and toJpa (domain → JPA).
+ * Bridges the domain repository port with Spring Data JPA. Conversions between
+ * the domain model and the JPA model live in <%- aggregateName %>JpaMapper so that
+ * this adapter can stay focused on persistence orchestration and transactions.
  */
 @Component
+@Transactional(readOnly = true)
 public class <%- aggregateName %>RepositoryImpl implements <%- aggregateName %>Repository {
 
     private final <%- aggregateName %>JpaRepository jpaRepository;
+    private final <%- aggregateName %>JpaMapper mapper;
 <% if (hasDomainEvents) { %>
-    private final org.springframework.context.ApplicationEventPublisher eventPublisher;
+    private final ApplicationEventPublisher eventPublisher;
 <% } %>
-    public <%- aggregateName %>RepositoryImpl(<%- aggregateName %>JpaRepository jpaRepository<% if (hasDomainEvents) { %>, org.springframework.context.ApplicationEventPublisher eventPublisher<% } %>) {
+    public <%- aggregateName %>RepositoryImpl(<%- aggregateName %>JpaRepository jpaRepository, <%- aggregateName %>JpaMapper mapper<% if (hasDomainEvents) { %>, ApplicationEventPublisher eventPublisher<% } %>) {
         this.jpaRepository = jpaRepository;
+        this.mapper = mapper;
 <% if (hasDomainEvents) { %>
         this.eventPublisher = eventPublisher;
 <% } %>
@@ -26,29 +30,8 @@ public class <%- aggregateName %>RepositoryImpl implements <%- aggregateName %>R
     // ─── Repository methods ───────────────────────────────────────────────────
 <% methods.forEach(method => { %>
     @Override
-    public <%- method.returnType %> <%- method.name %>(<%- method.params.map(p => p.javaType + ' ' + p.name).join(', ') %>) {
+<% if (method.isWrite) { %>    @Transactional
+<% } %>    public <%- method.returnType %> <%- method.name %>(<%- method.params.map(p => p.javaType + ' ' + p.name).join(', ') %>) {
         <%- method.body %>
-    }
-<% }); %>
-
-    // ─── Mapper: JPA → Domain ────────────────────────────────────────────────
-
-    private <%- aggregateName %> toDomain(<%- jpaEntityName %> jpa) {
-        <%- toDomainBody %>
-    }
-<% childEntityMappers.forEach(cem => { %>
-    private <%- cem.entityName %> to<%- cem.entityName %>Domain(<%- cem.entityName %>Jpa jpa) {
-        <%- cem.toDomainBody %>
-    }
-<% }); %>
-
-    // ─── Mapper: Domain → JPA ────────────────────────────────────────────────
-
-    private <%- jpaEntityName %> toJpa(<%- aggregateName %> domain) {
-        <%- toJpaBody %>
-    }
-<% childEntityMappers.forEach(cem => { %>
-    private <%- cem.entityName %>Jpa to<%- cem.entityName %>Jpa(<%- cem.entityName %> domain) {
-        <%- cem.toJpaBody %>
     }
 <% }); %>}

@@ -71,12 +71,22 @@ function yamlTypeToJava(type) {
 function yamlReturnToJava(returns) {
   if (!returns || returns === 'void') return 'void';
   if (returns === 'Int') return 'int';
+  // R15: Boolean / Long / canonical primitives mapped explicitly so existsBy*
+  // / countBy* methods emit boolean / long instead of leaking the YAML token.
+  if (returns === 'Boolean') return 'boolean';
+  if (returns === 'Long') return 'long';
   const optionalMatch = returns.match(/^(.+)\?$/);
   if (optionalMatch) return `Optional<${optionalMatch[1]}>`;
   const pageMatch = returns.match(/^Page\[(.+)\]$/);
   if (pageMatch) return `Page<${pageMatch[1]}>`;
   const listMatch = returns.match(/^List\[(.+)\]$/);
   if (listMatch) return `List<${listMatch[1]}>`;
+  // R15: opt-in canonical types — Slice for cursor-style pagination without
+  // a total count, Stream for incremental processing of large result sets.
+  const sliceMatch = returns.match(/^Slice\[(.+)\]$/);
+  if (sliceMatch) return `Slice<${sliceMatch[1]}>`;
+  const streamMatch = returns.match(/^Stream\[(.+)\]$/);
+  if (streamMatch) return `Stream<${streamMatch[1]}>`;
   return returns;
 }
 
@@ -182,19 +192,108 @@ function normalizeMethod(yamlMethod) {
 }
 
 /**
+ * Resolve the effective operator for a query param. The YAML can declare
+ * `operator` explicitly; otherwise we infer the most idiomatic default:
+ *   - filterOn with no operator → LIKE_CONTAINS (back-compat with existing search-style params)
+ *   - List[T] type              → IN
+ *   - anything else             → EQ
+ * The dispatcher used by both list and List[T] queries reads this to decide
+ * the JPQL fragment to emit. Returning a stable string lets validation in
+ * `bc-yaml-reader.validateRepositories` keep the operator whitelist in sync.
+ */
+function resolveEffectiveOperator(param) {
+  if (param.operator) return param.operator;
+  if (param.filterOn && Array.isArray(param.filterOn) && param.filterOn.length > 0) {
+    return 'LIKE_CONTAINS';
+  }
+  if (param.type && /^List\[/.test(param.type)) return 'IN';
+  return 'EQ';
+}
+
+/**
+ * Build a single JPQL predicate for a query param. Returned predicate already
+ * accounts for the LOWER(...) wrapping (LIKE operators) and IN-list semantics
+ * (`p.name IN :p.name` vs `p.field IN :p.name`). Caller decides whether to
+ * wrap the predicate with `(:name IS NULL OR ...)` for optional params.
+ *
+ * Centralising this dispatcher keeps `buildListQuery` and the List[T] branch
+ * of `buildJpqlQuery` consistent: a `LIKE_CONTAINS` filter behaves the same
+ * way regardless of whether the return type is `Page[T]` or `List[T]`.
+ */
+function buildParamPredicate(param, alias) {
+  const op = resolveEffectiveOperator(param);
+  const a = alias;
+  const pn = param.name;
+  const fields = (param.filterOn && param.filterOn.length > 0)
+    ? param.filterOn
+    : [pn];
+
+  switch (op) {
+    case 'EQ':
+      return fields.map((f) => `${a}.${f} = :${pn}`).join(' OR ');
+    case 'GTE':
+      return fields.map((f) => `${a}.${f} >= :${pn}`).join(' OR ');
+    case 'LTE':
+      return fields.map((f) => `${a}.${f} <= :${pn}`).join(' OR ');
+    case 'LIKE_CONTAINS':
+      return fields
+        .map((f) => `LOWER(${a}.${f}) LIKE LOWER(CONCAT('%', :${pn}, '%'))`)
+        .join(' OR ');
+    case 'LIKE_STARTS':
+      return fields
+        .map((f) => `LOWER(${a}.${f}) LIKE LOWER(CONCAT(:${pn}, '%'))`)
+        .join(' OR ');
+    case 'LIKE_ENDS':
+      return fields
+        .map((f) => `LOWER(${a}.${f}) LIKE LOWER(CONCAT('%', :${pn}))`)
+        .join(' OR ');
+    case 'IN': {
+      // For IN we expect a single field, derived either from filterOn or by
+      // de-pluralising the param name (e.g. `categoryIds` → `categoryId`).
+      const target = (param.filterOn && param.filterOn[0])
+        || (pn.endsWith('s') ? pn.slice(0, -1) : pn);
+      return `${a}.${target} IN :${pn}`;
+    }
+    default:
+      throw new Error(
+        `[repository-generator] Unsupported operator "${op}" on param "${pn}". ` +
+        `Allowed: EQ, GTE, LTE, LIKE_CONTAINS, LIKE_STARTS, LIKE_ENDS, IN.`
+      );
+  }
+}
+
+/**
+ * Build the trailing ORDER BY clause for a method, sourced from the YAML
+ * declaration `defaultSort: { field, direction }`. Only applied to List[T]
+ * returns: for Page[T] the caller's `Pageable.sort` drives ordering and a
+ * static ORDER BY would be silently overridden by Spring Data.
+ *
+ * Direction defaults to ASC when omitted; field validation (existence in the
+ * aggregate) lives in `bc-yaml-reader.validateRepositories`, so by the time we
+ * reach here the field is guaranteed to be a valid column on the JPA entity.
+ */
+function buildOrderByClause(method, alias) {
+  const ds = method && method.defaultSort;
+  if (!ds || !ds.field) return '';
+  const dir = (ds.direction || 'ASC').toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+  return ` ORDER BY ${alias}.${ds.field} ${dir}`;
+}
+
+/**
  * Build the JPQL query for a "list" method (optional-filter + pagination).
  * entityAlias — single-letter alias; jpaEntityName — "ProductJpa"; optional params
  */
 function buildListQuery(jpaEntityName, optionalParams, requiredFilterParams, alias) {
   const a = alias || jpaEntityName.charAt(0).toLowerCase();
-  const reqConditions = (requiredFilterParams || []).map((p) => `${a}.${p.name} = :${p.name}`);
-  const optConditions = optionalParams.map((p) => {
-    if (p.filterOn && Array.isArray(p.filterOn) && p.filterOn.length > 0) {
-      // LIKE_CONTAINS: search param mapped to one or more entity fields
-      const likeConditions = p.filterOn.map((f) => `${a}.${f} LIKE CONCAT('%', :${p.name}, '%')`);
-      return `(:${p.name} IS NULL OR (${likeConditions.join(' OR ')}))`;
-    }
-    return `(:${p.name} IS NULL OR ${a}.${p.name} = :${p.name})`;
+  const reqConditions = (requiredFilterParams || []).map((p) => {
+    const pred = buildParamPredicate(p, a);
+    // If the predicate is a disjunction (filterOn with multiple fields), wrap it.
+    return pred.includes(' OR ') ? `(${pred})` : pred;
+  });
+  const optConditions = (optionalParams || []).map((p) => {
+    const pred = buildParamPredicate(p, a);
+    const wrapped = pred.includes(' OR ') ? `(${pred})` : pred;
+    return `(:${p.name} IS NULL OR ${wrapped})`;
   });
   const allConditions = [...reqConditions, ...optConditions];
   const where = allConditions.length > 0 ? ` WHERE ${allConditions.join(' AND ')}` : '';
@@ -388,16 +487,50 @@ function classifyMethod(method) {
   if (method.name === 'findById' || method.name === 'save') return 'skip';
   // 'delete(id)' is inherited from JpaRepository as deleteById — do not redeclare
   if (method.name === 'delete' && (method.params || []).length === 1) return 'skip';
+  // R11: bulk operations are inherited verbatim from JpaRepository.
+  if (method.name === 'saveAll' || method.name === 'findAllById') return 'skip';
+  if (method.name === 'count' && (!method.params || method.params.length === 0)) return 'skip';
 
-  // Spring Data derived: findByXxx with a single non-Pageable param
+  // Spring Data derived: findByXxx[AndYyy...] — Spring Data resolves the query from
+  // the method name when the number of non-pageable params equals the number of
+  // And/Or-separated segments after "findBy". Page returns are also derivable as
+  // long as the last param is Pageable.
   if (/^findBy[A-Z]/.test(method.name)) {
     const nonPageable = (method.params || []).filter((p) => p.type !== 'PageRequest' && p.name !== 'pageable');
-    if (nonPageable.length === 1 && !method.returns?.startsWith('Page[')) return 'derived';
+    const tokens = method.name.replace(/^findBy/, '').split(/And|Or/).filter(Boolean);
+    const isPageReturn = method.returns && method.returns.startsWith('Page[');
+    // Page return needs an explicit PageRequest/pageable param the YAML must declare;
+    // when present, Spring Data still derives the query.
+    if (isPageReturn) {
+      const hasPageable = (method.params || []).some((p) => p.type === 'PageRequest' || p.name === 'pageable');
+      if (hasPageable && nonPageable.length === tokens.length) return 'derived';
+      return 'custom';
+    }
+    if (nonPageable.length === tokens.length && tokens.length >= 1) return 'derived';
   }
 
   // Spring Data derived: countByXxx — Spring Data derives count queries from method name
   if (/^countBy[A-Z]/.test(method.name)) {
     return 'derived';
+  }
+
+  // R7: Spring Data derived: existsByXxx — boolean existence check.
+  if (/^existsBy[A-Z]/.test(method.name)) {
+    return 'derived';
+  }
+
+  // R10: deleteByXxx — needs a custom @Modifying @Query, NOT Spring Data
+  // derivation, because the generator must emit the @Modifying / @Transactional
+  // annotations explicitly on the JPA interface.
+  if (/^deleteBy[A-Z]/.test(method.name) && method.name !== 'deleteById') {
+    return 'custom';
+  }
+
+  // R13: findByIdForUpdate — convention for pessimistic locking. The JPA
+  // method is still derivable by Spring Data (findById*), but the generator
+  // emits an explicit @Query so that @Lock can be attached unambiguously.
+  if (method.name === 'findByIdForUpdate') {
+    return 'custom';
   }
 
   return 'custom';
@@ -408,6 +541,23 @@ function classifyMethod(method) {
  */
 function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
   const { name, params, returns } = method;
+
+  // R13: pessimistic-lock variant of findById. Spring Data exposes the @Lock
+  // annotation only on @Query-annotated methods, so we emit the JPQL by hand.
+  if (name === 'findByIdForUpdate') {
+    const a = jpaEntityName.charAt(0).toLowerCase();
+    return `SELECT ${a} FROM ${jpaEntityName} ${a} WHERE ${a}.id = :id`;
+  }
+
+  // R10: deleteBy{Field} — emit a JPQL DELETE so the @Modifying annotation
+  // can be attached. The single param targets the field encoded in the name.
+  if (/^deleteBy[A-Z]/.test(name) && name !== 'deleteById') {
+    const fieldRaw = name.replace(/^deleteBy/, '');
+    const field = fieldRaw.charAt(0).toLowerCase() + fieldRaw.slice(1);
+    const a = jpaEntityName.charAt(0).toLowerCase();
+    const paramName = (params && params[0] && params[0].name) || field;
+    return `DELETE FROM ${jpaEntityName} ${a} WHERE ${a}.${field} = :${paramName}`;
+  }
 
   if (returns && returns.startsWith('Page[')) {
     // list or search
@@ -429,14 +579,26 @@ function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
 
   if (returns && returns.startsWith('List[')) {
     const a = jpaEntityName.charAt(0).toLowerCase();
-    const conditions = (params || [])
-      .filter((p) => p.type !== 'PageRequest' && p.name !== 'pageable')
-      .map((p) => {
-        if (/^List\[/.test(p.type)) return `${a}.${p.name.replace(/s$/, '')} IN :${p.name}`;
-        return `${a}.${p.name} = :${p.name}`;
-      });
-    const where = conditions.length > 0 ? ` WHERE ${conditions.join(' AND ')}` : '';
-    return `SELECT ${a} FROM ${jpaEntityName} ${a}${where}`;
+    const filterParams = (params || [])
+      .filter((p) => p.type !== 'PageRequest' && p.name !== 'pageable');
+    // Reuse the same operator dispatcher used by Page[T] queries so a YAML
+    // declaring `operator: GTE` produces consistent SQL regardless of whether
+    // the return type is List or Page.
+    const required = filterParams.filter((p) => p.required !== false);
+    const optional = filterParams.filter((p) => p.required === false);
+    const reqConds = required.map((p) => {
+      const pred = buildParamPredicate(p, a);
+      return pred.includes(' OR ') ? `(${pred})` : pred;
+    });
+    const optConds = optional.map((p) => {
+      const pred = buildParamPredicate(p, a);
+      const wrapped = pred.includes(' OR ') ? `(${pred})` : pred;
+      return `(:${p.name} IS NULL OR ${wrapped})`;
+    });
+    const allConds = [...reqConds, ...optConds];
+    const where = allConds.length > 0 ? ` WHERE ${allConds.join(' AND ')}` : '';
+    const orderBy = buildOrderByClause(method, a);
+    return `SELECT ${a} FROM ${jpaEntityName} ${a}${where}${orderBy}`;
   }
 
   return null;
@@ -563,6 +725,13 @@ function collectJpaRepoImports(customMethods, aggregate, jpaEntityName, bc, pack
   if (customMethods.some((m) => m.modifying)) {
     imports.add('org.springframework.data.jpa.repository.Modifying');
     imports.add('org.springframework.transaction.annotation.Transactional');
+  }
+
+  // R13: pessimistic lock annotations require Spring Data's @Lock + JPA's
+  // LockModeType enum.
+  if (customMethods.some((m) => m.lockMode)) {
+    imports.add('org.springframework.data.jpa.repository.Lock');
+    imports.add('jakarta.persistence.LockModeType');
   }
 
   return [...imports].sort();
@@ -863,16 +1032,16 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
 
   if (name === 'save' && hasDomainEvents) {
     if (methodReturnType === 'void') {
-      return `jpaRepository.save(toJpa(${entityParam}));\n        ${entityParam}.pullDomainEvents().forEach(eventPublisher::publishEvent);`;
+      return `jpaRepository.save(mapper.toJpa(${entityParam}));\n        ${entityParam}.pullDomainEvents().forEach(eventPublisher::publishEvent);`;
     }
-    return `${methodReturnType} saved = toDomain(jpaRepository.save(toJpa(${entityParam})));\n        ${entityParam}.pullDomainEvents().forEach(eventPublisher::publishEvent);\n        return saved;`;
+    return `${methodReturnType} saved = mapper.toDomain(jpaRepository.save(mapper.toJpa(${entityParam})));\n        ${entityParam}.pullDomainEvents().forEach(eventPublisher::publishEvent);\n        return saved;`;
   }
 
   if (name === 'save') {
     if (methodReturnType === 'void') {
-      return `jpaRepository.save(toJpa(${entityParam}));`;
+      return `jpaRepository.save(mapper.toJpa(${entityParam}));`;
     }
-    return `return toDomain(jpaRepository.save(toJpa(${entityParam})));`;
+    return `return mapper.toDomain(jpaRepository.save(mapper.toJpa(${entityParam})));`;
   }
 
   if (name === 'delete') {
@@ -882,6 +1051,20 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
   if (name === 'softDelete') {
     // softDelete(id) is implemented as a custom @Modifying @Query on the JPA repo.
     return `jpaRepository.softDelete(${paramNames});`;
+  }
+
+  // R11: bulk operations. JpaRepository inherits these — we only emit the
+  // domain port + impl wiring with explicit toJpa/toDomain mapping.
+  if (name === 'saveAll') {
+    const p = params[0]?.name || 'entities';
+    return `return jpaRepository.saveAll(${p}.stream().map(mapper::toJpa).toList())\n                .stream().map(mapper::toDomain).toList();`;
+  }
+  if (name === 'findAllById') {
+    const p = params[0]?.name || 'ids';
+    return `return jpaRepository.findAllById(${p}).stream().map(mapper::toDomain).toList();`;
+  }
+  if (name === 'count' && (!params || params.length === 0)) {
+    return `return jpaRepository.count();`;
   }
 
   if (methodReturnType === 'void') {
@@ -894,9 +1077,9 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
 
   if (methodReturnType.startsWith('Optional<')) {
     if (name === 'findById') {
-      return `return jpaRepository.findById(${params[0]?.name || 'id'}).map(this::toDomain);`;
+      return `return jpaRepository.findById(${params[0]?.name || 'id'}).map(mapper::toDomain);`;
     }
-    return `return jpaRepository.${name}(${paramNames}).map(this::toDomain);`;
+    return `return jpaRepository.${name}(${paramNames}).map(mapper::toDomain);`;
   }
 
   if (methodReturnType.startsWith('Page<')) {
@@ -913,17 +1096,17 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
         lines.push(`int _page = page != null ? page : 0;`);
         lines.push(`        int _size = size != null ? size : 20;`);
         const jpaArgs = otherNames ? `${otherNames}, PageRequest.of(_page, _size)` : 'PageRequest.of(_page, _size)';
-        lines.push(`        return jpaRepository.${name}(${jpaArgs}).map(this::toDomain);`);
+        lines.push(`        return jpaRepository.${name}(${jpaArgs}).map(mapper::toDomain);`);
         return lines.join('\n        ');
       }
       const jpaArgs = otherNames ? `${otherNames}, PageRequest.of(page, size)` : 'PageRequest.of(page, size)';
-      return `return jpaRepository.${name}(${jpaArgs}).map(this::toDomain);`;
+      return `return jpaRepository.${name}(${jpaArgs}).map(mapper::toDomain);`;
     }
-    return `return jpaRepository.${name}(${paramNames}).map(this::toDomain);`;
+    return `return jpaRepository.${name}(${paramNames}).map(mapper::toDomain);`;
   }
 
   if (methodReturnType.startsWith('List<')) {
-    return `return jpaRepository.${name}(${paramNames}).stream().map(this::toDomain).toList();`;
+    return `return jpaRepository.${name}(${paramNames}).stream().map(mapper::toDomain).toList();`;
   }
 
   return `return jpaRepository.${name}(${paramNames});`;
@@ -1021,10 +1204,16 @@ function collectImplImports(aggregateName, aggregate, methods, bc, packageName, 
   // JpaRepository interface
   imports.add(`${packageName}.${bc}.infrastructure.persistence.repositories.${aggregateName}JpaRepository`);
 
+  // R21: extracted JPA mapper (sibling package).
+  imports.add(`${packageName}.${bc}.infrastructure.persistence.mappers.${aggregateName}JpaMapper`);
+
   // ApplicationEventPublisher (domain events)
   if (hasDomainEvents) {
     imports.add('org.springframework.context.ApplicationEventPublisher');
   }
+
+  // R20: @Transactional on RepositoryImpl class + write methods.
+  imports.add('org.springframework.transaction.annotation.Transactional');
 
   return [...imports].sort();
 }
@@ -1035,6 +1224,7 @@ function buildRepoInterfaceContext(aggregateName, normalizedMethods, bc, package
   const methods = normalizedMethods.map((m) => ({
     name: m.name,
     returnType: yamlReturnToJava(m.returns),
+    derivedFrom: m.derivedFrom,
     params: (m.params || []).map((p) => ({
       name: p.name,
       javaType: yamlTypeToJava(p.type),
@@ -1092,23 +1282,37 @@ function buildJpaRepoInterfaceContext(aggregateName, normalizedMethods, aggregat
 
     const query = needsQuery ? buildJpqlQuery(m, jpaEntityName, aggregate, bcYaml) : null;
 
+    // R10: deleteBy{Field} requires @Modifying. R13: findByIdForUpdate needs
+    // @Lock(LockModeType.PESSIMISTIC_WRITE). Both flags travel through the
+    // template context so the EJS can decide which annotations to render.
+    const isModifying = /^deleteBy[A-Z]/.test(m.name) && m.name !== 'deleteById';
+    const lockMode = m.name === 'findByIdForUpdate' ? 'PESSIMISTIC_WRITE' : null;
+
     customMethods.push({
       name: m.name,
       returnType: jpaReturnType,
       paramsStr,
       query,
+      derivedFrom: m.derivedFrom,
+      modifying: isModifying,
+      lockMode,
       _params: javaParams,
     });
   }
 
   // Auto-inject softDelete for soft-delete aggregates.
   // derivedFrom: implicit causes classifyMethod to skip it, but Spring Data does NOT provide softDelete.
+  // R3: refresh updatedAt when the aggregate is auditable (audit listeners are bypassed by @Modifying)
+  // and add `AND a.deletedAt IS NULL` to make the query idempotent.
   if (aggregate.softDelete === true && !customMethods.some((m) => m.name === 'softDelete')) {
+    const setClause = aggregate.auditable === true
+      ? 'a.deletedAt = CURRENT_TIMESTAMP, a.updatedAt = CURRENT_TIMESTAMP'
+      : 'a.deletedAt = CURRENT_TIMESTAMP';
     customMethods.push({
       name: 'softDelete',
       returnType: 'void',
       paramsStr: '@Param("id") UUID id',
-      query: `UPDATE ${jpaEntityName} a SET a.deletedAt = CURRENT_TIMESTAMP WHERE a.id = :id`,
+      query: `UPDATE ${jpaEntityName} a SET ${setClause} WHERE a.id = :id AND a.deletedAt IS NULL`,
       modifying: true,
       _params: [{ name: 'id', javaType: 'UUID' }],
     });
@@ -1128,7 +1332,12 @@ function buildRepoImplContext(aggregateName, normalizedMethods, aggregate, bc, p
       javaType: yamlTypeToJava(p.type),
     }));
     const body = buildImplMethodBody(m, returnType, hasDomainEvents);
-    return { name: m.name, returnType, params, body };
+    // R20: methods that mutate state must run inside a read-write transaction.
+    // The class-level annotation defaults everything to readOnly=true; these
+    // methods opt back in to a writable transaction.
+    const isWrite = m.name === 'save' || m.name === 'delete' || m.name === 'softDelete'
+      || /^delete[A-Z]/.test(m.name) || /^save[A-Z]/.test(m.name);
+    return { name: m.name, returnType, params, body, isWrite };
   });
 
   const toDomainBody = buildToDomainBody(aggregate, bcYaml);
@@ -1197,6 +1406,68 @@ async function generateRepositories(bcYaml, config, outputDir) {
       }
     }
 
+    // R11: bulkOperations: true exposes saveAll / findAllById / count on the
+    // domain port. These come straight from JpaRepository so we skip them on
+    // the JPA interface (classifyMethod returns 'skip') but still need them on
+    // the domain repository + impl. Skip duplicates if the YAML declared them
+    // explicitly.
+    if (repoEntry.bulkOperations === true) {
+      const existing = new Set(normalizedMethods.map((m) => m.name));
+      if (!existing.has('saveAll')) {
+        normalizedMethods.push({
+          name: 'saveAll',
+          params: [{ name: 'entities', type: `List[${aggregateName}]`, required: true }],
+          returns: `List[${aggregateName}]`,
+          derivedFrom: 'bulk-operations',
+        });
+      }
+      if (!existing.has('findAllById')) {
+        normalizedMethods.push({
+          name: 'findAllById',
+          params: [{ name: 'ids', type: 'List[Uuid]', required: true }],
+          returns: `List[${aggregateName}]`,
+          derivedFrom: 'bulk-operations',
+        });
+      }
+      if (!existing.has('count')) {
+        normalizedMethods.push({
+          name: 'count',
+          params: [],
+          returns: 'Long',
+          derivedFrom: 'bulk-operations',
+        });
+      }
+    }
+
+    // R25/R26: auto-derive repository methods from `uniqueness` domain rules.
+    // For each rule of type `uniqueness` declared on this aggregate that names
+    // a `field`, the repository must expose either `existsBy{Field}` or
+    // `findBy{Field}` so the rule is enforceable. When neither is declared and
+    // auto-derivation is allowed, inject a `findBy{Field}: Aggregate?` method
+    // and tag it with the rule id as derivedFrom. Opt-out: autoDerive: false.
+    if (repoEntry.autoDerive !== false) {
+      const aggRules = (aggregate.domainRules || []).filter(
+        (r) => r && r.type === 'uniqueness' && typeof r.field === 'string' && r.field.trim() !== ''
+      );
+      for (const rule of aggRules) {
+        const field = rule.field;
+        const cap = field.charAt(0).toUpperCase() + field.slice(1);
+        const findName = `findBy${cap}`;
+        const existsName = `existsBy${cap}`;
+        const declared = normalizedMethods.some((m) => m.name === findName || m.name === existsName);
+        if (declared) continue;
+        // Locate the field's declared YAML type on the aggregate properties.
+        const prop = (aggregate.properties || []).find((p) => p.name === field);
+        const paramType = prop && prop.type ? prop.type : 'String';
+        normalizedMethods.push({
+          name: findName,
+          params: [{ name: field, type: paramType, required: true }],
+          returns: `${aggregateName}?`,
+          derivedFrom: rule.id,
+        });
+      }
+    }
+
     // hasDomainEvents: read models never publish events and must not inject eventPublisher
     const allPublishedEvents = (bcYaml.domainEvents || {}).published || [];
     const hasDomainEvents = !(aggregate.readModel === true) &&
@@ -1242,6 +1513,39 @@ async function generateRepositories(bcYaml, config, outputDir) {
       path.join(TEMPLATES_DIR, 'infrastructure', 'RepositoryImpl.java.ejs'),
       implPath,
       implContext
+    );
+
+    // 4. Extracted JPA mapper (R21). Sourced from the same context as the
+    // RepositoryImpl: the mapper bodies are unchanged, only their host class
+    // moves out of the adapter.
+    const mapperContext = {
+      packageName: implContext.packageName,
+      bc: implContext.bc,
+      aggregateName: implContext.aggregateName,
+      jpaEntityName: implContext.jpaEntityName,
+      toDomainBody: implContext.toDomainBody,
+      toJpaBody: implContext.toJpaBody,
+      childEntityMappers: implContext.childEntityMappers,
+      imports: implContext.imports.filter((imp) =>
+        // The mapper does not orchestrate transactions, persistence calls or
+        // event publishing; drop the imports that only the adapter needs.
+        imp !== 'org.springframework.transaction.annotation.Transactional'
+        && imp !== 'org.springframework.context.ApplicationEventPublisher'
+        && !imp.endsWith(`.${aggregateName}JpaRepository`)
+        && !imp.endsWith(`.${aggregateName}JpaMapper`)
+        && !imp.endsWith(`.${aggregateName}Repository`)
+      ),
+    };
+    const mapperPath = path.join(
+      outputDir, 'src', 'main', 'java',
+      packagePath, bc,
+      'infrastructure', 'persistence', 'mappers',
+      `${aggregateName}JpaMapper.java`
+    );
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'infrastructure', 'JpaMapper.java.ejs'),
+      mapperPath,
+      mapperContext
     );
   }
 }
