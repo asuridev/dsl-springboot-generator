@@ -69,6 +69,8 @@ function validate(doc, opts = {}) {
     // [G6] multi-aggregate same-BC saga
     'aggregates', 'steps',
     'input', 'returns', 'rules', 'notFoundError',
+    // [Phase 3, Gap E8] declarative multi-lookup; supersedes notFoundError
+    'lookups',
     'fkValidations', 'implementation', 'emits',
     // [G7] declarative pagination/sorting
     'pagination',
@@ -104,6 +106,10 @@ function validate(doc, opts = {}) {
   ]);
   const ALLOWED_UC_FK_KEYS = new Set([
     'aggregate', 'param', 'error', 'notFoundError', 'bc', 'conditional',
+  ]);
+  // [Phase 3, Gap E8] lookups[] keys.
+  const ALLOWED_UC_LOOKUP_KEYS = new Set([
+    'param', 'aggregate', 'errorCode', 'nestedIn', 'description',
   ]);
   const ALLOWED_UC_TYPES = new Set(['command', 'query']);
   const ALLOWED_UC_TRIGGER_KINDS = new Set(['http', 'event']);
@@ -519,6 +525,48 @@ function validate(doc, opts = {}) {
         }
       }
     }
+    // [Phase 3, Gap E8] lookups[] — declarative multi-lookup. Supersedes the
+    // single-entry `notFoundError`. Each entry binds an input param to an
+    // aggregate (or a nested entity collection via `nestedIn`) and the error
+    // to throw when the row is missing. The generator currently emits the
+    // primary lookup (param matching loadAggregate input) as a real
+    // findById.orElseThrow; additional lookups become enriched TODOs that
+    // nominate the error class for Phase 3 humans.
+    if (uc.lookups != null) {
+      if (!Array.isArray(uc.lookups)) {
+        fail(`Use case "${uc.id}" "lookups" must be a list.`);
+      }
+      if (uc.notFoundError != null) {
+        fail(`Use case "${uc.id}" declares both "lookups" and "notFoundError". Use "lookups" exclusively (notFoundError is preserved as a deprecated alias for backward compatibility).`);
+      }
+      const seenLookupParams = new Set();
+      for (const lk of uc.lookups) {
+        if (!lk || typeof lk !== 'object' || Array.isArray(lk)) {
+          fail(`Use case "${uc.id}" lookups[] contains a non-mapping entry.`);
+        }
+        for (const k of Object.keys(lk)) {
+          if (!ALLOWED_UC_LOOKUP_KEYS.has(k)) {
+            fail(`Use case "${uc.id}" lookup declares unsupported attribute "${k}". Allowed: ${[...ALLOWED_UC_LOOKUP_KEYS].join(', ')}.`);
+          }
+        }
+        if (!lk.param || typeof lk.param !== 'string') {
+          fail(`Use case "${uc.id}" lookups[] entry is missing required string "param".`);
+        }
+        if (!lk.errorCode || typeof lk.errorCode !== 'string') {
+          fail(`Use case "${uc.id}" lookup on "${lk.param}" is missing required string "errorCode".`);
+        }
+        if (!lk.aggregate && !lk.nestedIn) {
+          fail(`Use case "${uc.id}" lookup on "${lk.param}" must declare either "aggregate" or "nestedIn".`);
+        }
+        if (lk.nestedIn && typeof lk.nestedIn === 'string' && !/^[A-Z][A-Za-z0-9_]*\.[a-z][A-Za-z0-9_]*$/.test(lk.nestedIn)) {
+          fail(`Use case "${uc.id}" lookup on "${lk.param}": "nestedIn" must be of the form "<Aggregate>.<collectionField>" (got "${lk.nestedIn}").`);
+        }
+        if (seenLookupParams.has(lk.param)) {
+          fail(`Use case "${uc.id}" lookups[] declares duplicate param "${lk.param}".`);
+        }
+        seenLookupParams.add(lk.param);
+      }
+    }
     // [G20] cross-field validations (declarative guards)
     if (uc.validations != null) {
       if (!Array.isArray(uc.validations)) {
@@ -581,8 +629,21 @@ function validate(doc, opts = {}) {
   // error class would silently default to BusinessException → 422).
   const ALLOWED_ERROR_KEYS = new Set([
     'code', 'httpStatus', 'description', 'message', 'title',
+    // Phase 1 — naming override, cause-chaining, and orphan-suppression
+    'errorType', 'chainable', 'usedFor',
+    // Phase 2 — parametrized message template + typed args
+    'messageTemplate', 'args',
+    // Phase 4 — taxonomy (business|infrastructure) + infra mapping hint
+    'kind', 'triggeredBy',
   ]);
-  const ALLOWED_HTTP_STATUSES = new Set([400, 401, 403, 404, 409, 422]);
+  const ALLOWED_ERROR_USED_FOR = new Set(['auto', 'manual']);
+  const ALLOWED_ERROR_KIND = new Set(['business', 'infrastructure']);
+  // Phase 2 — expanded set; new statuses (402, 408, 412, 415, 423, 429, 503, 504)
+  // are routed by application-generator.js to DomainException subclasses caught
+  // by the generic ResponseEntity handler in HandlerExceptions (dynamic status).
+  const ALLOWED_HTTP_STATUSES = new Set([
+    400, 401, 402, 403, 404, 408, 409, 412, 415, 422, 423, 429, 503, 504,
+  ]);
   for (const err of errors) {
     if (!err || typeof err !== 'object' || Array.isArray(err)) {
       fail(`errors[] contains a non-mapping entry; each error must be an object with at least "code".`);
@@ -595,6 +656,56 @@ function validate(doc, opts = {}) {
     if (!err.code) fail(`An errors[] entry is missing required field "code".`);
     if (err.httpStatus != null && !ALLOWED_HTTP_STATUSES.has(err.httpStatus)) {
       fail(`Error "${err.code}" has unsupported httpStatus "${err.httpStatus}". Allowed: ${[...ALLOWED_HTTP_STATUSES].join(', ')}.`);
+    }
+    if (err.errorType != null) {
+      if (typeof err.errorType !== 'string' || !/^[A-Z][A-Za-z0-9_]*$/.test(err.errorType)) {
+        fail(`Error "${err.code}" has invalid "errorType" "${err.errorType}". Must be a PascalCase Java identifier.`);
+      }
+    }
+    if (err.chainable != null && typeof err.chainable !== 'boolean') {
+      fail(`Error "${err.code}" has invalid "chainable" "${err.chainable}". Must be a boolean.`);
+    }
+    if (err.usedFor != null && !ALLOWED_ERROR_USED_FOR.has(err.usedFor)) {
+      fail(`Error "${err.code}" has invalid "usedFor" "${err.usedFor}". Allowed: ${[...ALLOWED_ERROR_USED_FOR].join(', ')}.`);
+    }
+    if (err.messageTemplate != null && typeof err.messageTemplate !== 'string') {
+      fail(`Error "${err.code}" has invalid "messageTemplate" — must be a string.`);
+    }
+    if (err.args != null) {
+      if (!Array.isArray(err.args)) {
+        fail(`Error "${err.code}" has invalid "args" — must be a list of {name, type} objects.`);
+      }
+      const argNames = new Set();
+      for (const a of err.args) {
+        if (!a || typeof a !== 'object' || !a.name || !a.type) {
+          fail(`Error "${err.code}" has an "args" entry missing required "name" and/or "type".`);
+        }
+        if (!/^[a-z][A-Za-z0-9_]*$/.test(a.name)) {
+          fail(`Error "${err.code}" has invalid arg name "${a.name}". Must be a camelCase Java identifier.`);
+        }
+        if (argNames.has(a.name)) {
+          fail(`Error "${err.code}" declares duplicate arg "${a.name}".`);
+        }
+        argNames.add(a.name);
+        if (typeof a.type !== 'string' || !/^[A-Za-z_][A-Za-z0-9_.<>,\s]*$/.test(a.type)) {
+          fail(`Error "${err.code}" has invalid arg type "${a.type}" for "${a.name}".`);
+        }
+      }
+      if (err.args.length > 0 && !err.messageTemplate) {
+        fail(`Error "${err.code}" declares "args" but no "messageTemplate". Provide a messageTemplate that references the args (e.g. "{${err.args[0].name}}").`);
+      }
+    }
+    // [Phase 4 — Gap E5] Error taxonomy + infrastructure mapping
+    if (err.kind != null && !ALLOWED_ERROR_KIND.has(err.kind)) {
+      fail(`Error "${err.code}" has invalid "kind" "${err.kind}". Allowed: ${[...ALLOWED_ERROR_KIND].join(', ')}.`);
+    }
+    if (err.triggeredBy != null) {
+      if (typeof err.triggeredBy !== 'string' || !/^([A-Za-z_][A-Za-z0-9_]*\.)*[A-Z][A-Za-z0-9_]*$/.test(err.triggeredBy)) {
+        fail(`Error "${err.code}" has invalid "triggeredBy" "${err.triggeredBy}". Must be a Java class name, optionally fully-qualified (e.g. "DataAccessException" or "org.springframework.dao.DataAccessException").`);
+      }
+      if (err.kind !== 'infrastructure') {
+        fail(`Error "${err.code}" declares "triggeredBy" but "kind" is not "infrastructure". Set kind: infrastructure or remove triggeredBy.`);
+      }
     }
   }
 
@@ -615,6 +726,9 @@ function validate(doc, opts = {}) {
     'id', 'type', 'errorCode', 'description',
     'appliesTo', 'targetAggregate', 'targetRepositoryMethod',
     'field', 'expectedStatus',
+    // [Phase 3, Gap E6] uniqueness only — DB-level constraint name used to
+    // translate DataIntegrityViolationException into the declared errorCode.
+    'constraintName',
   ]);
   // Rule types that REQUIRE errorCode
   const RULE_TYPES_REQUIRING_ERROR = new Set([
@@ -651,6 +765,29 @@ function validate(doc, opts = {}) {
           if (!rule.targetAggregate || !rule.field || !rule.expectedStatus) {
             fail(`domainRule "${rule.id}" (crossAggregateConstraint): "targetAggregate", "field" and "expectedStatus" must be declared together.`);
           }
+        }
+      }
+      // Phase 3: when type=uniqueness, the optional `field` hint must reference
+      // a real property of the aggregate root. With it, the generator can emit
+      // an executable `findBy<Field>().isPresent() → throw` guard in the
+      // command handler. Without it, the rule still validates and an enriched
+      // TODO is emitted (no inference).
+      if (rule.type === 'uniqueness' && rule.field) {
+        const propNames = (agg.properties || []).map((p) => p.name);
+        if (!propNames.includes(rule.field)) {
+          fail(`domainRule "${rule.id}" (uniqueness): "field" "${rule.field}" does not match any property of aggregate "${agg.name}". Allowed: ${propNames.join(', ')}.`);
+        }
+      }
+      // [Phase 3, Gap E6] constraintName is only meaningful for uniqueness.
+      if (rule.constraintName != null) {
+        if (rule.type !== 'uniqueness') {
+          fail(`domainRule "${rule.id}": "constraintName" is only allowed for type "uniqueness" (got "${rule.type}").`);
+        }
+        if (typeof rule.constraintName !== 'string' || !/^[a-z][a-z0-9_]*$/.test(rule.constraintName)) {
+          fail(`domainRule "${rule.id}": "constraintName" must be a snake_case identifier (e.g. "uk_category_name"); got "${rule.constraintName}".`);
+        }
+        if (!rule.field) {
+          fail(`domainRule "${rule.id}": "constraintName" requires "field" to be declared so the JPA unique constraint targets the correct column.`);
         }
       }
       if (allRuleIds.has(rule.id)) fail(`Duplicate domainRule id: "${rule.id}"`);
@@ -789,6 +926,13 @@ function validate(doc, opts = {}) {
     for (const code of notFoundErrors) {
       if (!allErrorCodes.has(code)) {
         fail(`Use case "${uc.id}" notFoundError "${code}" not found in errors[].`);
+      }
+    }
+
+    // [Phase 3, Gap E8] lookups[].errorCode must exist in errors[]
+    for (const lk of uc.lookups || []) {
+      if (lk.errorCode && !allErrorCodes.has(lk.errorCode)) {
+        fail(`Use case "${uc.id}" lookup on "${lk.param}" errorCode "${lk.errorCode}" not found in errors[].`);
       }
     }
 
@@ -1047,6 +1191,43 @@ function validate(doc, opts = {}) {
 
   // ── 5. repositories validation (R16, R18, R19) ─────────────────────────────
   validateRepositories(doc);
+
+  // ── 6. errors[] orphan WARN (Phase 1 / E15) ────────────────────────────────
+  // An error declared in errors[] but never referenced by domainRule.errorCode,
+  // notFoundError, fkValidations[].error|notFoundError, or validations[].errorCode
+  // is dead code: the generated *Error.java is never thrown by any handler.
+  // Suppress the warning by declaring `usedFor: manual` on the error entry.
+  const referencedErrorCodes = new Set();
+  for (const agg of doc.aggregates || []) {
+    for (const rule of agg.domainRules || []) {
+      if (rule.errorCode) referencedErrorCodes.add(rule.errorCode);
+    }
+  }
+  for (const uc of useCases) {
+    const nfe = Array.isArray(uc.notFoundError)
+      ? uc.notFoundError
+      : (uc.notFoundError ? [uc.notFoundError] : []);
+    for (const c of nfe) referencedErrorCodes.add(c);
+    for (const lk of uc.lookups || []) {
+      if (lk.errorCode) referencedErrorCodes.add(lk.errorCode);
+    }
+    for (const fk of uc.fkValidations || []) {
+      const c = fk.error || fk.notFoundError;
+      if (c) referencedErrorCodes.add(c);
+    }
+    for (const v of uc.validations || []) {
+      if (v.errorCode) referencedErrorCodes.add(v.errorCode);
+    }
+  }
+  for (const err of errors) {
+    if (err.usedFor === 'manual') continue;
+    if (!referencedErrorCodes.has(err.code)) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `\u001b[33m\u26a0\u001b[0m [bc-yaml-reader] Error "${err.code}" is declared in errors[] but never referenced by any domainRule, notFoundError, fkValidations or validations. Either reference it, remove it, or declare "usedFor: manual" to silence this warning.`
+      );
+    }
+  }
 }
 
 // ─── repositories[] validation ───────────────────────────────────────────────

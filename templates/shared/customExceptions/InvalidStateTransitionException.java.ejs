@@ -6,5 +6,9 @@ public class InvalidStateTransitionException extends DomainException {
         super("Invalid state transition from '" + from + "' to '" + to + "'");
     }
 
-    public InvalidStateTransitionException() {}
+    public InvalidStateTransitionException(String from, String to, Throwable cause) {
+        super("Invalid state transition from '" + from + "' to '" + to + "'", cause);
+    }
+
+    protected InvalidStateTransitionException() {}
 }

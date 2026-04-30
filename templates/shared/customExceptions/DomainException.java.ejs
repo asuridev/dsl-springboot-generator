@@ -1,16 +1,85 @@
 package <%= packageName %>.shared.domain.customExceptions;
 
+import java.util.Collections;
+import java.util.List;
+
 /**
  * Base class for all domain exceptions.
  * Subclasses represent intentional business rule violations that should not be retried.
  * Infrastructure exceptions (DB timeouts, connection errors, etc.) extend RuntimeException directly
  * and will be caught separately to allow the retry interceptor to act.
+ *
+ * Carries optional structured metadata (code, httpStatus, args, details) consumed by
+ * HandlerExceptions to populate ErrorResponse with stable error codes for clients.
  */
 public abstract class DomainException extends RuntimeException {
 
-    protected DomainException() {}
+    private final String code;
+    private final Integer httpStatus;
+    private final Object[] args;
+    private final List<String> details;
+
+    protected DomainException() {
+        this.code = null;
+        this.httpStatus = null;
+        this.args = null;
+        this.details = null;
+    }
 
     protected DomainException(String message) {
         super(message);
+        this.code = null;
+        this.httpStatus = null;
+        this.args = null;
+        this.details = null;
+    }
+
+    protected DomainException(String message, Throwable cause) {
+        super(message, cause);
+        this.code = null;
+        this.httpStatus = null;
+        this.args = null;
+        this.details = null;
+    }
+
+    protected DomainException(String message, String code, Object[] args) {
+        super(message);
+        this.code = code;
+        this.httpStatus = null;
+        this.args = args;
+        this.details = null;
+    }
+
+    protected DomainException(String message, String code, Integer httpStatus, Object[] args) {
+        super(message);
+        this.code = code;
+        this.httpStatus = httpStatus;
+        this.args = args;
+        this.details = null;
+    }
+
+    protected DomainException(String message, String code, Integer httpStatus, Object[] args, List<String> details) {
+        super(message);
+        this.code = code;
+        this.httpStatus = httpStatus;
+        this.args = args;
+        this.details = details == null ? null : Collections.unmodifiableList(details);
+    }
+
+    public String getCode() {
+        return code;
+    }
+
+    public Integer getHttpStatus() {
+        return httpStatus;
+    }
+
+    public Object[] getArgs() {
+        return args;
+    }
+
+    public List<String> getDetails() {
+        return details;
     }
 }
+

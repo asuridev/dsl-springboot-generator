@@ -23,6 +23,13 @@ if (indexes.length > 0) { %>,
         @Index(name = "<%- idx.name %>", columnList = "<%- idx.columnList %>")<%- i < indexes.length - 1 ? ',' : '' %><%
   }); %>
     }<%
+} %><%
+if (typeof uniqueConstraints !== 'undefined' && uniqueConstraints.length > 0) { %>,
+    uniqueConstraints = {<%
+  uniqueConstraints.forEach((uc, i) => { %>
+        @UniqueConstraint(name = "<%- uc.name %>", columnNames = "<%- uc.columnNames %>")<%- i < uniqueConstraints.length - 1 ? ',' : '' %><%
+  }); %>
+    }<%
 } %>
 )
 <% if (hasSoftDelete) { %>@org.hibernate.annotations.SQLRestriction("deleted_at IS NULL")

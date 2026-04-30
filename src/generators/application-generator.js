@@ -13,12 +13,26 @@ const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const HTTP_TO_EXCEPTION = {
+  // Classic statuses — keep historical mapping (BC).
   404: 'NotFoundException',
   409: 'ConflictException',
   400: 'BadRequestException',
   403: 'ForbiddenException',
   401: 'UnauthorizedException',
   422: 'BusinessException',
+  // Phase 2 — extended statuses route to DomainException directly.
+  // Reason: the generated *Error.java carries the dynamic httpStatus and is
+  // caught by the generic @ExceptionHandler(DomainException.class) handler
+  // in HandlerExceptions, which builds a ResponseEntity with that status.
+  // Keeping them under DomainException avoids 7 new abstract subclasses.
+  402: 'DomainException',
+  408: 'DomainException',
+  412: 'DomainException',
+  415: 'DomainException',
+  423: 'DomainException',
+  429: 'DomainException',
+  503: 'DomainException',
+  504: 'DomainException',
 };
 
 // ─── Error helpers ────────────────────────────────────────────────────────────
@@ -31,14 +45,52 @@ function deriveErrorType(code) {
     .join('') + 'Error';
 }
 
+// Compiles `"Hello {name}, count={n}"` + args=[{name},{n}] into a Java
+// expression string: `"Hello " + String.valueOf(name) + ", count=" + String.valueOf(n)`.
+// Unknown placeholders are kept literal (defensive).
+function compileMessageTemplate(template, argNames) {
+  if (!template) return null;
+  const known = new Set(argNames || []);
+  const parts = [];
+  let lastIdx = 0;
+  const re = /\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+  let m;
+  while ((m = re.exec(template)) !== null) {
+    if (m.index > lastIdx) {
+      parts.push(JSON.stringify(template.slice(lastIdx, m.index)));
+    }
+    if (known.has(m[1])) {
+      parts.push(`String.valueOf(${m[1]})`);
+    } else {
+      parts.push(JSON.stringify(m[0]));
+    }
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < template.length) {
+    parts.push(JSON.stringify(template.slice(lastIdx)));
+  }
+  return parts.length ? parts.join(' + ') : '""';
+}
+
+// Last segment of a fully-qualified Java type. `java.util.UUID` → `UUID`.
+function shortTypeName(fqn) {
+  const ix = fqn.lastIndexOf('.');
+  return ix === -1 ? fqn : fqn.slice(ix + 1);
+}
+
 function buildErrorMap(errors) {
   const map = {};
   for (const err of (errors || [])) {
     const errorType = err.errorType || deriveErrorType(err.code);
+    const args = Array.isArray(err.args) ? err.args : [];
     map[err.code] = {
       errorType,
       httpStatus: err.httpStatus,
       baseException: HTTP_TO_EXCEPTION[err.httpStatus] || 'BusinessException',
+      description: err.description || null,
+      chainable: err.chainable === true,
+      messageTemplate: err.messageTemplate || null,
+      args,
     };
   }
   return map;
@@ -47,6 +99,80 @@ function buildErrorMap(errors) {
 function normalizeNotFoundErrors(notFoundError) {
   if (!notFoundError || notFoundError === 'null') return [];
   return Array.isArray(notFoundError) ? notFoundError : [notFoundError];
+}
+
+// [Phase 3, Gap E8] Resolve the *primary* not-found error code for a UC.
+// Order of precedence:
+//   1. lookups[] entry whose `param` matches the input flagged loadAggregate:true
+//   2. the first lookups[] entry that targets `uc.aggregate` (no nestedIn)
+//   3. legacy uc.notFoundError (string or string[]; first entry wins)
+function resolvePrimaryNotFoundError(uc) {
+  const lookups = Array.isArray(uc.lookups) ? uc.lookups : [];
+  if (lookups.length > 0) {
+    const loadInput = (uc.input || []).find((i) => i.loadAggregate === true);
+    if (loadInput) {
+      const match = lookups.find((lk) => lk.param === loadInput.name && !lk.nestedIn);
+      if (match) return match.errorCode;
+    }
+    const sameAgg = lookups.find((lk) => !lk.nestedIn && lk.aggregate === uc.aggregate);
+    if (sameAgg) return sameAgg.errorCode;
+  }
+  return normalizeNotFoundErrors(uc.notFoundError)[0] || null;
+}
+
+// Returns the lookups[] entries that are NOT the primary lookup. Each becomes
+// an enriched TODO in the generated handler so the Phase-3 implementer has
+// the exact error class to throw without grepping the YAML again.
+function additionalLookups(uc) {
+  const lookups = Array.isArray(uc.lookups) ? uc.lookups : [];
+  if (lookups.length === 0) return [];
+  const primary = resolvePrimaryNotFoundError(uc);
+  return lookups.filter((lk) => lk.errorCode !== primary);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// [Phase 3, Gap E9] Decorate UC `validations[]` entries with metadata that
+// lets the Java template emit either a real throw (when the expression is a
+// recognizable Java boolean predicate) or an enriched TODO that nominates the
+// concrete error class for copy/paste. No inference: a malformed expression
+// stays as a TODO.
+//
+// Heuristic — an expression is treated as Java when it contains any of:
+//   ==  !=  <=  >=  <  >  &&  ||  leading !
+// (the same family already used for trigger.event filter expressions).
+// ─────────────────────────────────────────────────────────────────────────────
+function looksLikeJavaBoolean(expr) {
+  if (!expr || typeof expr !== 'string') return false;
+  const trimmed = expr.trim();
+  if (!trimmed) return false;
+  return /==|!=|<=|>=|&&|\|\||(^|[^a-zA-Z0-9_])(true|false)(?![a-zA-Z0-9_])/.test(trimmed)
+      || /[<>]/.test(trimmed)
+      || /^!\s*[a-zA-Z(]/.test(trimmed);
+}
+
+function enrichValidations(validations, errorMap) {
+  if (!Array.isArray(validations)) return [];
+  return validations.map((v) => {
+    const errorEntry = v.errorCode ? errorMap[v.errorCode] : null;
+    const errorClass = errorEntry ? errorEntry.errorType : null;
+    return {
+      ...v,
+      errorClass,
+      throwable: errorClass != null && looksLikeJavaBoolean(v.expression),
+    };
+  });
+}
+
+// Collects FQNs of error classes that the handler must import because
+// `enrichValidations` flagged the entry as throwable.
+function validationErrorImports(enriched, packageName, moduleName) {
+  const out = new Set();
+  for (const v of enriched) {
+    if (v.throwable && v.errorClass) {
+      out.add(`${packageName}.${moduleName}.domain.errors.${v.errorClass}`);
+    }
+  }
+  return [...out];
 }
 
 // ─── Repository method normalization ─────────────────────────────────────────
@@ -822,16 +948,32 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
 
   // Load aggregate (for non-create operations) — find the input with loadAggregate: true
   const loadAggInput = (uc.input || []).find((i) => i.loadAggregate === true);
-  const notFoundErrors = normalizeNotFoundErrors(uc.notFoundError);
-  const hasNotFoundError = notFoundErrors.length > 0;
+  // [Phase 3, Gap E8] lookups[] supersedes notFoundError. Resolve the primary
+  // lookup (one that drives findById.orElseThrow) and surface additional
+  // lookups as enriched TODOs.
+  const primaryNotFound = resolvePrimaryNotFoundError(uc);
+  const hasNotFoundError = primaryNotFound != null;
 
   if (!isCreate && loadAggInput && hasNotFoundError) {
-    const errorEntry = errorMap[notFoundErrors[0]];
+    const errorEntry = errorMap[primaryNotFound];
     const errorType = errorEntry ? errorEntry.errorType : 'NotFoundException';
     extraImports.add(`${packageName}.${moduleName}.domain.errors.${errorType}`);
     lines.push(
       `        ${agg.name} ${aggVarName} = ${repoFieldName}.findById(UUID.fromString(command.${loadAggInput.name}())).orElseThrow(${errorType}::new);`
     );
+  }
+
+  // [Phase 3, Gap E8] Additional lookups → enriched TODO with the exact class.
+  for (const lk of additionalLookups(uc)) {
+    const errorEntry = errorMap[lk.errorCode];
+    const errorType = errorEntry ? errorEntry.errorType : lk.errorCode;
+    extraImports.add(`${packageName}.${moduleName}.domain.errors.${errorType}`);
+    if (lk.nestedIn) {
+      lines.push(`        // TODO useCase(${uc.id}, lookup:${lk.param}): locate the ${lk.nestedIn} entry matching command.${lk.param}() and throw new ${errorType}() if missing.`);
+    } else {
+      const lkRepo = `${toCamelCase(lk.aggregate)}Repository`;
+      lines.push(`        // TODO useCase(${uc.id}, lookup:${lk.param}): ${lkRepo}.findById(UUID.fromString(command.${lk.param}())).orElseThrow(${errorType}::new);`);
+    }
   }
 
   // [G3] Ownership guard — runs after the aggregate is loaded.
@@ -994,6 +1136,22 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
 
   const notFoundErrors = normalizeNotFoundErrors(uc.notFoundError);
   const hasNotFoundError = notFoundErrors.length > 0;
+  // [Phase 3, Gap E8] lookups[] supersedes notFoundError for primary lookup.
+  const primaryNotFound = resolvePrimaryNotFoundError(uc);
+  const hasPrimary = primaryNotFound != null;
+  // Surface additional lookups as enriched TODOs (the query handler may load
+  // related entities for an enriched response, similar to commands).
+  for (const lk of additionalLookups(uc)) {
+    const errorEntry = errorMap[lk.errorCode];
+    const errorType = errorEntry ? errorEntry.errorType : lk.errorCode;
+    extraImports.add(`${packageName}.${moduleName}.domain.errors.${errorType}`);
+    if (lk.nestedIn) {
+      lines.push(`        // TODO useCase(${uc.id}, lookup:${lk.param}): locate the ${lk.nestedIn} entry matching query.${lk.param}() and throw new ${errorType}() if missing.`);
+    } else {
+      const lkRepo = `${toCamelCase(lk.aggregate)}Repository`;
+      lines.push(`        // TODO useCase(${uc.id}, lookup:${lk.param}): ${lkRepo}.findById(UUID.fromString(query.${lk.param}())).orElseThrow(${errorType}::new);`);
+    }
+  }
 
   extraImports.add('java.util.UUID');
   extraImports.add(`${packageName}.${moduleName}.domain.aggregate.${agg.name}`);
@@ -1021,7 +1179,7 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
       );
       return { body: lines.join('\n'), extraImports: [...extraImports].sort() };
     }
-    const errorEntry = hasNotFoundError ? errorMap[notFoundErrors[0]] : null;
+    const errorEntry = hasPrimary ? errorMap[primaryNotFound] : null;
     const errorType = errorEntry ? errorEntry.errorType : null;
     if (errorType) {
       extraImports.add(`${packageName}.${moduleName}.domain.errors.${errorType}`);
@@ -1124,7 +1282,7 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
       );
       return { body: lines.join('\n'), extraImports: [...extraImports].sort() };
     }
-    const errorEntry = hasNotFoundError ? errorMap[notFoundErrors[0]] : null;
+    const errorEntry = hasPrimary ? errorMap[primaryNotFound] : null;
     const errorType = errorEntry ? errorEntry.errorType : null;
     if (errorType) {
       extraImports.add(`${packageName}.${moduleName}.domain.errors.${errorType}`);
@@ -1325,6 +1483,33 @@ async function generateDomainErrors(errors, errorMap, moduleName, packageName, b
   for (const err of errors) {
     const entry = errorMap[err.code] || { baseException: 'BusinessException' };
     const errorType = entry.errorType || deriveErrorType(err.code);
+    const args = Array.isArray(entry.args) ? entry.args : [];
+    const argNames = args.map((a) => a.name);
+    const messageExpr = compileMessageTemplate(entry.messageTemplate, argNames);
+    // Java imports for arg types that are fully-qualified (contain a dot) and
+    // not already in java.lang. Generic parameters are stripped before checking.
+    const javaImports = [];
+    const seen = new Set();
+    for (const a of args) {
+      const raw = String(a.type).split('<')[0].trim();
+      if (!raw.includes('.')) continue;
+      if (raw.startsWith('java.lang.')) continue;
+      if (seen.has(raw)) continue;
+      seen.add(raw);
+      javaImports.push(raw);
+    }
+    // Constructor-parameter typed declarations (using short names where imported).
+    const ctorParams = args
+      .map((a) => {
+        const raw = String(a.type).trim();
+        const head = raw.split('<')[0].trim();
+        if (head.includes('.') && !head.startsWith('java.lang.')) {
+          // replace head with its short form
+          return `${shortTypeName(head)}${raw.slice(head.length)} ${a.name}`;
+        }
+        return `${raw.startsWith('java.lang.') ? raw.slice('java.lang.'.length) : raw} ${a.name}`;
+      })
+      .join(', ');
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'domain', 'DomainError.java.ejs'),
       path.join(errorsDir, `${errorType}.java`),
@@ -1334,6 +1519,15 @@ async function generateDomainErrors(errors, errorMap, moduleName, packageName, b
         errorType,
         errorCode: err.code,
         baseException: entry.baseException,
+        description: entry.description || err.description || null,
+        chainable: entry.chainable === true,
+        httpStatus: entry.httpStatus || null,
+        messageTemplate: entry.messageTemplate || null,
+        messageExpr,
+        args,
+        argNames,
+        ctorParams,
+        javaImports,
       }
     );
   }
@@ -1611,8 +1805,14 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
       body,
       imports: extraImports,
       returnType,
-      // [G20] declarative cross-field validations (TODO comments only)
-      validations: Array.isArray(uc.validations) ? uc.validations : [],
+      // [G20] declarative cross-field validations — enriched with errorClass/throwable (Phase 3, Gap E9)
+      validations: (function() {
+        const enriched = enrichValidations(uc.validations, errorMap);
+        for (const imp of validationErrorImports(enriched, packageName, moduleName)) {
+          if (!extraImports.includes(imp)) extraImports.push(imp);
+        }
+        return enriched;
+      })(),
     }
   );
 }
@@ -1925,8 +2125,14 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
       implementation: effectiveImpl,
       body,
       imports: extraImports,
-      // [G20] declarative cross-field validations (TODO comments only)
-      validations: Array.isArray(uc.validations) ? uc.validations : [],
+      // [G20] declarative cross-field validations — enriched with errorClass/throwable (Phase 3, Gap E9)
+      validations: (function() {
+        const enriched = enrichValidations(uc.validations, errorMap);
+        for (const imp of validationErrorImports(enriched, packageName, moduleName)) {
+          if (!extraImports.includes(imp)) extraImports.push(imp);
+        }
+        return enriched;
+      })(),
     }
   );
 }
@@ -2030,7 +2236,7 @@ async function generateProjections(bcYaml, config, outputDir) {
 //   • For steps that declare `onFailure.compensate`, emits a try/catch that
 //     iterates compensation steps in reverse insertion order before re-throwing.
 // Cross-BC orchestration is NOT supported here — those go through system.yaml#/sagas.
-async function generateMultiAggregateCommandHandler(uc, moduleName, packageName, bcDir, bcYaml) {
+async function generateMultiAggregateCommandHandler(uc, moduleName, packageName, bcDir, bcYaml, errorMap = {}) {
   const ucClassName = toPascalCase(uc.name);
   const primaryAggName = uc.aggregates[0];
   const repoName = `${primaryAggName}Repository`;
@@ -2109,10 +2315,13 @@ async function generateMultiAggregateCommandHandler(uc, moduleName, packageName,
       // 'full' so the template emits our body instead of the scaffold throw.
       implementation: 'full',
       body,
-      imports: [],
+      imports: (function() {
+        const enriched = enrichValidations(uc.validations, errorMap);
+        return validationErrorImports(enriched, packageName, moduleName);
+      })(),
       returnType: null,
-      // [G20] cross-field validations (saga orchestrator UC)
-      validations: Array.isArray(uc.validations) ? uc.validations : [],
+      // [G20] cross-field validations — enriched with errorClass/throwable (Phase 3, Gap E9)
+      validations: enrichValidations(uc.validations, errorMap),
     }
   );
 }
@@ -2345,7 +2554,7 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
           // aggregate's repository and emits the steps[] orchestration with
           // application-level compensation.
           const voRequestsNeeded = await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml);
-          await generateMultiAggregateCommandHandler(uc, moduleName, packageName, bcDir, bcYaml);
+          await generateMultiAggregateCommandHandler(uc, moduleName, packageName, bcDir, bcYaml, errorMap);
           for (const voName of voRequestsNeeded) {
             if (!generatedVoRequests.has(voName)) {
               generatedVoRequests.add(voName);
@@ -2399,4 +2608,4 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
   }
 }
 
-module.exports = { generateApplicationLayer, generateProjections };
+module.exports = { generateApplicationLayer, generateProjections, buildErrorMap };

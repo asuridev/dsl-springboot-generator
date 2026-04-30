@@ -1,11 +1,36 @@
 package <%= packageName %>.<%= moduleName %>.domain.errors;
 
 import <%= packageName %>.shared.domain.customExceptions.<%= baseException %>;
+<% (typeof javaImports !== 'undefined' ? javaImports : []).forEach(function(imp) { -%>
+import <%= imp %>;
+<% }); -%>
 
+<% if (typeof description !== 'undefined' && description) { -%>
+/**
+ * <%- String(description).replace(/\*\//g, '*\\/').trim().replace(/\n/g, '\n * ') %>
+ */
+<% } -%>
 // derived_from: errors[<%= errorCode %>]
 public class <%= errorType %> extends <%= baseException %> {
 
+<% if (typeof messageTemplate !== 'undefined' && messageTemplate && (args || []).length > 0) { -%>
+    public <%= errorType %>(<%= ctorParams %>) {
+        super(<%- messageExpr %>, "<%= errorCode %>"<% if (typeof httpStatus !== 'undefined' && httpStatus) { %>, <%= httpStatus %><% } %>, new Object[]{ <%= argNames.join(', ') %> });
+    }
+<% } else if (typeof messageTemplate !== 'undefined' && messageTemplate) { -%>
+    public <%= errorType %>() {
+        super(<%- messageExpr %>, "<%= errorCode %>"<% if (typeof httpStatus !== 'undefined' && httpStatus) { %>, <%= httpStatus %><% } %>, null);
+    }
+<% } else { -%>
     public <%= errorType %>() {
         super("<%= errorCode %>");
     }
+<% } -%>
+<% if (typeof chainable !== 'undefined' && chainable) { -%>
+
+    public <%= errorType %>(Throwable cause) {
+        super("<%= errorCode %>", cause);
+    }
+<% } -%>
 }
+

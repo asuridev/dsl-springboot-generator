@@ -9,6 +9,11 @@ public class ValidationException extends DomainException {
         this.rowNumber = null;
     }
 
+    public ValidationException(String message, Throwable cause) {
+        super(message, cause);
+        this.rowNumber = null;
+    }
+
     public ValidationException(Integer rowNumber, String message) {
         super(message);
         this.rowNumber = rowNumber;

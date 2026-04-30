@@ -532,6 +532,17 @@ function buildJpaEntityContext(aggregate, bcYaml, config) {
 
   const indexes = buildIndexes(aggregate.name, aggregate.properties);
 
+  // [Phase 3, Gap E6] Emit named DB-level UNIQUE constraints for uniqueness
+  // domainRules that declare both `field` and `constraintName`. The named
+  // constraint is what `HandlerExceptions.onDataIntegrityViolation` uses to
+  // map the SQL constraint violation back to the declared `errorCode`.
+  const uniqueConstraints = (aggregate.domainRules || [])
+    .filter((r) => r.type === 'uniqueness' && r.constraintName && r.field)
+    .map((r) => ({
+      name: r.constraintName,
+      columnNames: toSnakeCase(r.field),
+    }));
+
   const childEntities = (aggregate.entities || []).map((entity) => {
     // S6 — cardinality + relationship (defaults: oneToMany + composition)
     const cardinality = entity.cardinality === 'oneToOne' ? 'oneToOne' : 'oneToMany';
@@ -569,6 +580,7 @@ function buildJpaEntityContext(aggregate, bcYaml, config) {
     hasVersion,
     baseClass,
     indexes,
+    uniqueConstraints,
     fields,
     childEntities,
     imports,

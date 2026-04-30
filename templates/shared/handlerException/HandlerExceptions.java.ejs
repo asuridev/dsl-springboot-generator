@@ -3,6 +3,7 @@ package <%= packageName %>.shared.infrastructure.handlerException;
 import <%= packageName %>.shared.domain.customExceptions.BadRequestException;
 import <%= packageName %>.shared.domain.customExceptions.BusinessException;
 import <%= packageName %>.shared.domain.customExceptions.ConflictException;
+import <%= packageName %>.shared.domain.customExceptions.DomainException;
 import <%= packageName %>.shared.domain.customExceptions.ForbiddenException;
 import <%= packageName %>.shared.domain.customExceptions.InvalidStateTransitionException;
 import <%= packageName %>.shared.domain.customExceptions.NotFoundException;
@@ -15,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -23,10 +25,39 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
+<% const constraintMap = (typeof constraintErrorMap !== 'undefined' ? constraintErrorMap : []) || []; -%>
+<% const infraMap = (typeof infrastructureErrorMap !== 'undefined' ? infrastructureErrorMap : []) || []; -%>
+<% constraintMap.forEach(c => { -%>
+import <%= c.errorClassFqn %>;
+<% }); -%>
+<% if (constraintMap.length > 0) { -%>
+import java.util.Map;
+<% } -%>
+<% infraMap.forEach(i => { -%>
+import <%= i.errorClassFqn %>;
+<% if (i.triggerFqn.includes('.')) { -%>
+import <%= i.triggerFqn %>;
+<% } -%>
+<% }); -%>
+
 @RestControllerAdvice
 public class HandlerExceptions {
 
     private static final Logger log = LoggerFactory.getLogger(HandlerExceptions.class);
+<% if (constraintMap.length > 0) { -%>
+
+    /**
+     * [Phase 3, Gap E6] Map of DB UNIQUE constraint name → factory for the
+     * declared domain error. Populated from `aggregates[].domainRules[]`
+     * entries with both `constraintName` and `errorCode`. Lookup is
+     * case-insensitive because Hibernate normalizes constraint names.
+     */
+    private static final Map<String, java.util.function.Supplier<? extends DomainException>> CONSTRAINT_TO_ERROR = Map.ofEntries(
+<% constraintMap.forEach((c, i) => { -%>
+        Map.entry("<%= c.constraintName.toLowerCase() %>", <%= c.errorClassSimple %>::new)<%= i < constraintMap.length - 1 ? ',' : '' %>
+<% }); -%>
+    );
+<% } -%>
 
     // ── Validation errors ──────────────────────────────────────────
 
@@ -72,10 +103,54 @@ public class HandlerExceptions {
     @ResponseStatus(HttpStatus.CONFLICT)
     @ExceptionHandler(DataIntegrityViolationException.class)
     @ResponseBody
-    public ErrorResponse onDataIntegrityViolation(DataIntegrityViolationException ex) {
-        return new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict",
+    public ResponseEntity<ErrorResponse> onDataIntegrityViolation(DataIntegrityViolationException ex) {
+<% if (constraintMap.length > 0) { -%>
+        // [Phase 3, Gap E6] When the violation is raised by a UNIQUE constraint
+        // declared via `domainRules[].constraintName`, surface the original
+        // domain error (preserving its `code`, `httpStatus` and `description`)
+        // instead of returning the generic 409.
+        String constraintName = extractConstraintName(ex);
+        if (constraintName != null) {
+            java.util.function.Supplier<? extends DomainException> factory =
+                    CONSTRAINT_TO_ERROR.get(constraintName.toLowerCase());
+            if (factory != null) {
+                DomainException domainEx = factory.get();
+                Integer rawStatus = domainEx.getHttpStatus();
+                HttpStatus status = rawStatus != null ? HttpStatus.valueOf(rawStatus) : HttpStatus.CONFLICT;
+                ErrorResponse body = new ErrorResponse(
+                        status.value(),
+                        status.getReasonPhrase(),
+                        domainEx.getCode(),
+                        domainEx.getMessage(),
+                        domainEx.getDetails()
+                );
+                return ResponseEntity.status(status).body(body);
+            }
+        }
+<% } -%>
+        ErrorResponse body = new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict",
                 "Data integrity violation — a constraint was not satisfied");
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
     }
+<% if (constraintMap.length > 0) { -%>
+
+    /**
+     * Extract the SQL constraint name from a Hibernate
+     * `ConstraintViolationException` chained inside the Spring
+     * `DataIntegrityViolationException`. Returns null when the cause is not
+     * a constraint violation (e.g. NOT NULL).
+     */
+    private static String extractConstraintName(DataIntegrityViolationException ex) {
+        Throwable cause = ex.getCause();
+        while (cause != null) {
+            if (cause instanceof org.hibernate.exception.ConstraintViolationException cve) {
+                return cve.getConstraintName();
+            }
+            cause = cause.getCause();
+        }
+        return null;
+    }
+<% } -%>
 
     // ── Security errors ────────────────────────────────────────────
 
@@ -83,16 +158,14 @@ public class HandlerExceptions {
     @ExceptionHandler(UnauthorizedException.class)
     @ResponseBody
     public ErrorResponse onUnauthorizedException(UnauthorizedException ex) {
-        return new ErrorResponse(HttpStatus.UNAUTHORIZED.value(), "Unauthorized",
-                ex.getMessage() != null ? ex.getMessage() : "Authentication required");
+        return buildResponse(HttpStatus.UNAUTHORIZED, "Unauthorized", ex, "Authentication required");
     }
 
     @ResponseStatus(HttpStatus.FORBIDDEN)
     @ExceptionHandler(ForbiddenException.class)
     @ResponseBody
     public ErrorResponse onForbiddenException(ForbiddenException ex) {
-        return new ErrorResponse(HttpStatus.FORBIDDEN.value(), "Forbidden",
-                ex.getMessage() != null ? ex.getMessage() : "Access denied");
+        return buildResponse(HttpStatus.FORBIDDEN, "Forbidden", ex, "Access denied");
     }
 
     // ── Domain exceptions ──────────────────────────────────────────
@@ -101,24 +174,21 @@ public class HandlerExceptions {
     @ExceptionHandler(BadRequestException.class)
     @ResponseBody
     public ErrorResponse onBadRequestException(BadRequestException ex) {
-        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request",
-                ex.getMessage() != null ? ex.getMessage() : "Bad request");
+        return buildResponse(HttpStatus.BAD_REQUEST, "Bad Request", ex, "Bad request");
     }
 
     @ResponseStatus(HttpStatus.NOT_FOUND)
     @ExceptionHandler(NotFoundException.class)
     @ResponseBody
     public ErrorResponse onNotFoundException(NotFoundException ex) {
-        return new ErrorResponse(HttpStatus.NOT_FOUND.value(), "Not Found",
-                ex.getMessage() != null ? ex.getMessage() : "Resource not found");
+        return buildResponse(HttpStatus.NOT_FOUND, "Not Found", ex, "Resource not found");
     }
 
     @ResponseStatus(HttpStatus.CONFLICT)
     @ExceptionHandler(ConflictException.class)
     @ResponseBody
     public ErrorResponse onConflictException(ConflictException ex) {
-        return new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict",
-                ex.getMessage() != null ? ex.getMessage() : "Resource conflict");
+        return buildResponse(HttpStatus.CONFLICT, "Conflict", ex, "Resource conflict");
     }
 
     @ResponseStatus(HttpStatus.CONFLICT)
@@ -133,9 +203,58 @@ public class HandlerExceptions {
     @ExceptionHandler(BusinessException.class)
     @ResponseBody
     public ErrorResponse onBusinessException(BusinessException ex) {
-        return new ErrorResponse(HttpStatus.UNPROCESSABLE_ENTITY.value(), "Business Rule Violation",
-                ex.getMessage() != null ? ex.getMessage() : "A business rule was violated");
+        return buildResponse(HttpStatus.UNPROCESSABLE_ENTITY, "Business Rule Violation", ex,
+                "A business rule was violated");
     }
+
+    // ── Generic DomainException with dynamic httpStatus ────────────
+    // Catches errors generated for extended HTTP statuses (402, 408, 412, 415,
+    // 423, 429, 503, 504) which extend DomainException directly. The status
+    // and code are read from the structured DomainException metadata.
+    @ExceptionHandler(DomainException.class)
+    @ResponseBody
+    public ResponseEntity<ErrorResponse> onDomainException(DomainException ex) {
+        Integer status = ex.getHttpStatus();
+        HttpStatus http = status != null
+                ? HttpStatus.valueOf(status)
+                : HttpStatus.UNPROCESSABLE_ENTITY;
+        ErrorResponse body = new ErrorResponse(
+                http.value(),
+                http.getReasonPhrase(),
+                ex.getCode(),
+                ex.getMessage() != null ? ex.getMessage() : http.getReasonPhrase(),
+                ex.getDetails()
+        );
+        return ResponseEntity.status(http).body(body);
+    }
+<% if (infraMap.length > 0) { -%>
+
+    // ── Infrastructure → domain error translation ─────────────────
+    // [Phase 4, Gap E5] Each `errors[]` entry declared with
+    // `kind: infrastructure` and `triggeredBy: <Exception>` produces a
+    // dedicated handler that converts the underlying JVM exception into
+    // the corresponding domain error. The original cause is preserved as
+    // the throwable cause when the domain error declares `chainable: true`.
+<% infraMap.forEach(i => { -%>
+
+    @ExceptionHandler(<%= i.triggerSimple %>.class)
+    @ResponseBody
+    public ResponseEntity<ErrorResponse> on<%= i.errorClassSimple %>(<%= i.triggerSimple %> ex) {
+        log.warn("Infrastructure failure mapped to <%= i.errorCode %>", ex);
+        DomainException domainEx = new <%= i.errorClassSimple %>();
+        Integer rawStatus = domainEx.getHttpStatus();
+        HttpStatus status = rawStatus != null ? HttpStatus.valueOf(rawStatus) : HttpStatus.SERVICE_UNAVAILABLE;
+        ErrorResponse body = new ErrorResponse(
+                status.value(),
+                status.getReasonPhrase(),
+                domainEx.getCode(),
+                domainEx.getMessage() != null ? domainEx.getMessage() : status.getReasonPhrase(),
+                domainEx.getDetails()
+        );
+        return ResponseEntity.status(status).body(body);
+    }
+<% }); -%>
+<% } -%>
 
     // ── Catch-all ──────────────────────────────────────────────────
 
@@ -146,5 +265,12 @@ public class HandlerExceptions {
         log.error("Unhandled exception", ex);
         return new ErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR.value(), "Internal Server Error",
                 "An unexpected error occurred");
+    }
+
+    // ── Helpers ────────────────────────────────────────────────────
+
+    private static ErrorResponse buildResponse(HttpStatus status, String error, DomainException ex, String fallbackMessage) {
+        String message = ex.getMessage() != null ? ex.getMessage() : fallbackMessage;
+        return new ErrorResponse(status.value(), error, ex.getCode(), message, ex.getDetails());
     }
 }

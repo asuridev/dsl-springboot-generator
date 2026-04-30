@@ -6,6 +6,7 @@ const { toPascalCase, toPackagePath, getApplicationClassName } = require('../uti
 const { loadParameters } = require('../utils/config-manager');
 const { hasAnyPersistentProjection } = require('./projection-updater-generator');
 const { hasAnyResilience, hasAnyOAuth2Cc } = require('../utils/resilience-auth-resolver');
+const { buildErrorMap } = require('./application-generator');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -32,6 +33,80 @@ function buildHttpIntegrations(system) {
       }
       return acc;
     }, []);
+}
+
+/**
+ * [Phase 3, Gap E6] Build a constraint-name → fully-qualified error class map
+ * by scanning every BC's `aggregates[].domainRules[]` for entries that declare
+ * both `constraintName` and `errorCode`. The shared `HandlerExceptions` uses
+ * this map to translate a JPA `DataIntegrityViolationException` raised by the
+ * named UNIQUE constraint into the declared domain error (preserving its
+ * `code`, `httpStatus` and `description`). Without an entry the handler
+ * keeps the previous generic 409 behaviour.
+ */
+function buildConstraintErrorMap(packageName, allBcYamls) {
+  const entries = [];
+  for (const bc of allBcYamls || []) {
+    if (!bc || !bc.bc) continue;
+    const errorMap = buildErrorMap(bc.errors || []);
+    for (const agg of bc.aggregates || []) {
+      for (const rule of agg.domainRules || []) {
+        if (rule.type !== 'uniqueness') continue;
+        if (!rule.constraintName || !rule.errorCode) continue;
+        const err = errorMap[rule.errorCode];
+        if (!err) continue;
+        entries.push({
+          constraintName: rule.constraintName,
+          errorClassFqn: `${packageName}.${bc.bc}.domain.errors.${err.errorType}`,
+          errorClassSimple: err.errorType,
+        });
+      }
+    }
+  }
+  return entries;
+}
+
+/**
+ * [Phase 4, Gap E5] Build a JVM-exception → domain error mapping by scanning
+ * every BC's `errors[]` for entries with `kind: infrastructure` and
+ * `triggeredBy: <ExceptionClass>`. The shared `HandlerExceptions` will emit
+ * one `@ExceptionHandler` per unique triggering exception class that
+ * translates it to the declared domain error (preserving `code`, `httpStatus`
+ * and `details`). If two errors map to the same exception class, fail with
+ * a clear message — the mapping must be unambiguous across all BCs.
+ */
+function buildInfrastructureErrorMap(packageName, allBcYamls) {
+  const byTrigger = new Map();
+  for (const bc of allBcYamls || []) {
+    if (!bc || !bc.bc) continue;
+    for (const err of bc.errors || []) {
+      if (err.kind !== 'infrastructure' || !err.triggeredBy) continue;
+      const errorMap = buildErrorMap([err]);
+      const errEntry = errorMap[err.code];
+      if (!errEntry) continue;
+      const triggerFqn = err.triggeredBy.includes('.')
+        ? err.triggeredBy
+        : err.triggeredBy; // simple name kept as-is; user must import via FQN
+      const existing = byTrigger.get(triggerFqn);
+      const candidate = {
+        triggerFqn,
+        triggerSimple: triggerFqn.includes('.') ? triggerFqn.substring(triggerFqn.lastIndexOf('.') + 1) : triggerFqn,
+        errorClassFqn: `${packageName}.${bc.bc}.domain.errors.${errEntry.errorType}`,
+        errorClassSimple: errEntry.errorType,
+        errorCode: err.code,
+        bc: bc.bc,
+      };
+      if (existing && existing.errorClassFqn !== candidate.errorClassFqn) {
+        throw new Error(
+          `[base-project-generator] Ambiguous infrastructure mapping: triggeredBy "${triggerFqn}" is declared by both ` +
+            `error "${existing.errorCode}" (BC "${existing.bc}") and "${candidate.errorCode}" (BC "${candidate.bc}"). ` +
+            `Each JVM exception class can be mapped to at most one domain error.`
+        );
+      }
+      if (!existing) byTrigger.set(triggerFqn, candidate);
+    }
+  }
+  return [...byTrigger.values()];
 }
 
 /**
@@ -289,7 +364,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'shared', 'handlerException', 'HandlerExceptions.java.ejs'),
     path.join(handlerDir, 'HandlerExceptions.java'),
-    { packageName }
+    { packageName, constraintErrorMap: buildConstraintErrorMap(packageName, allBcYamls), infrastructureErrorMap: buildInfrastructureErrorMap(packageName, allBcYamls) }
   );
 
   // ── Shared: CQRS interfaces ───────────────────────────────────────────────

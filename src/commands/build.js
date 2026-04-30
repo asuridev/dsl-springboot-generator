@@ -23,6 +23,7 @@ const { generateRequestIdempotencyArtifacts } = require('../generators/request-i
 const { generateAsyncJobArtifacts } = require('../generators/async-job-generator');
 const { generateProjectionUpdaters } = require('../generators/projection-updater-generator');
 const { generateSagaArtifacts } = require('../generators/saga-generator');
+const { generateErrorsCatalog } = require('../generators/errors-catalog-generator');
 const { generateControllerLayer } = require('../generators/controller-generator');
 const { generateMessagingLayer, generateSharedBrokerConfig, buildRabbitMQTopology, buildKafkaTopology } = require('../generators/messaging-generator');
 const { readBcYaml } = require('../utils/bc-yaml-reader');
@@ -309,6 +310,13 @@ async function buildCommand(options = {}) {
       await generateApplicationLayer(bcYaml, resolvedConfig, outputDir, internalApiDocForApp, publicApiDocForApp);
     }
     appSpinner.succeed(`Application layer generated for ${allBcYamls.length} bounded context(s)`);
+
+    // ── 8a. Per-BC errors catalog (Phase 4, Gap E7) ─────────────────────────
+    const errorsCatalogSpinner = ora('Generating errors catalogs…').start();
+    for (const bcYaml of allBcYamls) {
+      await generateErrorsCatalog(bcYaml, resolvedConfig, outputDir);
+    }
+    errorsCatalogSpinner.succeed(`Errors catalog generated for ${allBcYamls.length} bounded context(s)`);
 
     // ── 8b. Per-BC outbound HTTP adapters (Feign + ACL) ─────────────────────
     const outboundSpinner = ora('Generating outbound HTTP adapters…').start();

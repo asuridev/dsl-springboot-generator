@@ -17,6 +17,16 @@ const SOFT_DELETE_FIELD = 'deletedAt';
 // (in addition to readOnly fields that have a defaultValue)
 const ALWAYS_EXCLUDE_FROM_CREATION = new Set(['createdAt', 'updatedAt', 'deletedAt']);
 
+// [Phase 3, Gap E1.d] Local copy of `deriveErrorType` from
+// application-generator: SCREAMING_SNAKE → PascalCase + "Error" suffix.
+function deriveErrorTypeLocal(code) {
+  return code
+    .toLowerCase()
+    .split('_')
+    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
+    .join('') + 'Error';
+}
+
 // ─── Helper: resolve Java type for a param name ───────────────────────────────
 function resolveParamType(paramName, aggregateProps, childEntities, typeHint, bcYaml) {
   // 1. Match against aggregate properties
@@ -259,7 +269,7 @@ function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParam
 }
 
 // ─── Helper: compute the body string for a business method ───────────────────
-function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents, eventConfig = null) {
+function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents, eventConfig = null, terminalStateErrorClass = null) {
   const rules = uc.rules || [];
   // Split rule IDs into validation-style vs side-effect-style based on the
   // aggregate's domainRules catalog (S13). Side effects are scaffolded as a
@@ -292,7 +302,15 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
       const transition = detectStateTransition(uc.id, aggregate, bcEnums);
       if (transition) {
         let body = `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}\n`;
-        body += `        this.${transition.statusField} = this.${transition.statusField}.transitionTo(${transition.enumType}.${transition.targetValue});`;
+        const transitionLine = `this.${transition.statusField} = this.${transition.statusField}.transitionTo(${transition.enumType}.${transition.targetValue});`;
+        // [Phase 3, Gap E1.d] terminalState rule with `errorCode` → wrap the
+        // generic InvalidStateTransitionException into the declared domain
+        // error so callers see the precise code (e.g. PRODUCT_ALREADY_DISCONTINUED).
+        if (terminalStateErrorClass) {
+          body += `        try {\n            ${transitionLine}\n        } catch (InvalidStateTransitionException ex) {\n            throw new ${terminalStateErrorClass}();\n        }`;
+        } else {
+          body += `        ${transitionLine}`;
+        }
         const emitsName = sig.emits || transition.emits;
         const raiseCall = buildRaiseCall(emitsName, publishedEvents, aggregate, params, eventConfig);
         if (raiseCall) body += `\n        ${raiseCall}`;
@@ -310,7 +328,13 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
   if (params.length === 0) {
     const transition = detectStateTransition(uc.id, aggregate, bcEnums);
     if (transition) {
-      let body = `this.${transition.statusField} = this.${transition.statusField}.transitionTo(${transition.enumType}.${transition.targetValue});`;
+      const transitionLine = `this.${transition.statusField} = this.${transition.statusField}.transitionTo(${transition.enumType}.${transition.targetValue});`;
+      let body;
+      if (terminalStateErrorClass) {
+        body = `try {\n            ${transitionLine}\n        } catch (InvalidStateTransitionException ex) {\n            throw new ${terminalStateErrorClass}();\n        }`;
+      } else {
+        body = transitionLine;
+      }
       const emitsName = sig.emits || transition.emits;
       const raiseCall = buildRaiseCall(emitsName, publishedEvents, aggregate, params, eventConfig);
       if (raiseCall) body += `\n        ${raiseCall}`;
@@ -595,6 +619,23 @@ async function generateAggregates(bcYaml, config, outputDir) {
       ? []
       : publishedEvents.filter((e) => !e.aggregate || e.aggregate === aggregate.name);
 
+    // [Phase 3, Gap E1.d] When the aggregate declares a `terminalState`
+    // domainRule with an `errorCode`, transitions in this aggregate are
+    // wrapped in a try/catch that converts the generic
+    // `InvalidStateTransitionException` into the declared domain error.
+    let terminalStateErrorClass = null;
+    {
+      const tsRule = (aggregate.domainRules || []).find(
+        (r) => r.type === 'terminalState' && r.errorCode
+      );
+      if (tsRule) {
+        const errEntry = (bcYaml.errors || []).find((e) => e.code === tsRule.errorCode);
+        if (errEntry) {
+          terminalStateErrorClass = errEntry.errorType || deriveErrorTypeLocal(errEntry.code);
+        }
+      }
+    }
+
     // ── 1. Build scalar fields (from YAML properties, excluding id and audit) ──
     const allProps = aggregate.properties || [];
     const scalarFields = allProps
@@ -774,7 +815,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
       // computeMethodBody receives a sig-like object with {name, params, emits}
       const dmEmits = (dm.emitsList && dm.emitsList.length > 0) ? dm.emitsList : null;
       const sigForBody = { name: dm.name, params: (dm.params || []).map((p) => ({ name: p.name, optional: false, typeHint: p.type })), emits: dmEmits };
-      const body = computeMethodBody(uc, sigForBody, aggregate, bcEnums, bc, aggregatePublishedEvents, eventConfig);
+      const body = computeMethodBody(uc, sigForBody, aggregate, bcEnums, bc, aggregatePublishedEvents, eventConfig, terminalStateErrorClass);
 
       businessMethods.push({
         name: dm.name,
@@ -817,6 +858,14 @@ async function generateAggregates(bcYaml, config, outputDir) {
 
     // ── 6. Build imports (after businessMethods so param types are included) ──
     const imports = buildImports(aggregate, bcYaml, config, businessMethods, aggregatePublishedEvents);
+
+    // [Phase 3, Gap E1.d] Imports required by terminalState try/catch wrapper.
+    if (terminalStateErrorClass) {
+      const errImp = `import ${config.packageName}.${bc}.domain.errors.${terminalStateErrorClass};`;
+      if (!imports.includes(errImp)) imports.push(errImp);
+      const isteImp = `import ${config.packageName}.shared.domain.customExceptions.InvalidStateTransitionException;`;
+      if (!imports.includes(isteImp)) imports.push(isteImp);
+    }
 
     // ── 6.b Validation checks for the creation constructor ─────────────────────
     // Aggregates apply DSL `validations[]` on creation; the reconstruction ctor

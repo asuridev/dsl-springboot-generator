@@ -50,7 +50,14 @@ function mapDeleteGuard(rule, ctx) {
   const { aggVarName, errorMap, packageName, moduleName } = ctx;
 
   if (!rule.targetAggregate || !rule.targetRepositoryMethod) {
+    // Enriched TODO (Phase 3, Gap E1): nominate the Java error class so a
+    // Phase-3 implementer can copy/paste a working throw without grepping.
+    const errorEntry = errorMap[rule.errorCode];
+    const errorType = errorEntry ? errorEntry.errorType : rule.errorCode;
     out.lines.push(`        // TODO domainRule(${rule.id}, deleteGuard): ${rule.description?.trim() || ''}`);
+    out.lines.push(`        //      Declare "targetAggregate" + "targetRepositoryMethod" in the YAML to`);
+    out.lines.push(`        //      auto-generate the guard, or emit manually:`);
+    out.lines.push(`        //      if (<dependentsRepo>.<countMethod>(${aggVarName}.getId()) > 0) throw new ${errorType}();`);
     return out;
   }
 
@@ -95,7 +102,13 @@ function mapCrossAggregateConstraint(rule, ctx) {
   const { uc, errorMap, packageName, moduleName, bcYaml, isCreate } = ctx;
 
   if (!rule.targetAggregate || !rule.field || !rule.expectedStatus) {
+    // Enriched TODO (Phase 3, Gap E1): nominate the Java error class.
+    const errorEntry = errorMap[rule.errorCode];
+    const errorType = errorEntry ? errorEntry.errorType : rule.errorCode;
     out.lines.push(`        // TODO domainRule(${rule.id}, crossAggregateConstraint): ${rule.description?.trim() || ''}`);
+    out.lines.push(`        //      Declare "targetAggregate" + "field" + "expectedStatus" in the YAML to`);
+    out.lines.push(`        //      auto-generate the guard, or emit manually:`);
+    out.lines.push(`        //      if (<targetVar>.getStatus() != <Enum>.<EXPECTED>) throw new ${errorType}();`);
     return out;
   }
 
@@ -149,6 +162,96 @@ function mapCrossAggregateConstraint(rule, ctx) {
 }
 
 /**
+ * uniqueness — guards a create/update UC against duplicates of a unique field.
+ *
+ * Optional YAML hint (Phase 3):
+ *   - field: <propertyName on the aggregate root>
+ *
+ * When the hint is declared, the mapper emits:
+ *
+ *     if (categoryRepository.findByName(command.name()).isPresent()) {
+ *         throw new CategoryNameAlreadyExistsError();
+ *     }
+ *
+ * Without the hint, the rule still validates (the property is expected to
+ * carry `unique: true`, which JPA enforces via @Column(unique = true)) and an
+ * enriched TODO is emitted nominating the error class — no inference.
+ */
+function mapUniqueness(rule, ctx) {
+  const out = emptyResult();
+  const { uc, agg, errorMap, packageName, moduleName, isCreate } = ctx;
+
+  const errorEntry = errorMap[rule.errorCode];
+  const errorType = errorEntry ? errorEntry.errorType : rule.errorCode;
+  const repoFieldName = `${toCamelCase(agg.name)}Repository`;
+
+  if (!rule.field) {
+    out.lines.push(`        // TODO domainRule(${rule.id}, uniqueness): ${rule.description?.trim() || ''}`);
+    out.lines.push(`        //      Declare "field: <propertyName>" in the YAML to auto-generate the guard, or emit manually:`);
+    out.lines.push(`        //      if (${repoFieldName}.findBy<Field>(<source>).isPresent()) throw new ${errorType}();`);
+    return out;
+  }
+
+  // Resolve the value source: prefer a UC input matching the field name; on update
+  // operations, the field may not be in the inputs (immutable update paths) — emit
+  // a TODO in that case.
+  const inputField = (uc.input || []).find((i) => i.name === rule.field);
+  const propDef = (agg.properties || []).find((p) => p.name === rule.field);
+  if (!inputField) {
+    out.lines.push(`        // TODO domainRule(${rule.id}, uniqueness): UC has no input named "${rule.field}". Emit manually:`);
+    out.lines.push(`        //      if (${repoFieldName}.findBy${rule.field.charAt(0).toUpperCase() + rule.field.slice(1)}(<source>).isPresent()) throw new ${errorType}();`);
+    return out;
+  }
+
+  // Build the value expression from the input type
+  let valueExpr = `command.${rule.field}()`;
+  if (inputField.type === 'Uuid') {
+    valueExpr = `UUID.fromString(command.${rule.field}())`;
+    out.extraImports.push('java.util.UUID');
+  } else if (inputField.type === 'Url') {
+    valueExpr = `URI.create(command.${rule.field}())`;
+    out.extraImports.push('java.net.URI');
+  }
+
+  const findMethod = `findBy${rule.field.charAt(0).toUpperCase() + rule.field.slice(1)}`;
+  out.extraImports.push(`${packageName}.${moduleName}.domain.errors.${errorType}`);
+
+  out.lines.push(`        // domainRule(${rule.id}): ${rule.errorCode}`);
+  if (isCreate) {
+    out.lines.push(`        if (${repoFieldName}.${findMethod}(${valueExpr}).isPresent()) {`);
+    out.lines.push(`            throw new ${errorType}();`);
+    out.lines.push(`        }`);
+  } else {
+    // On update operations, allow the same aggregate to keep its current value.
+    // The aggregate has been loaded as `<aggVar>` by the time this rule runs.
+    const aggVar = ctx.aggVarName;
+    out.lines.push(`        ${repoFieldName}.${findMethod}(${valueExpr}).ifPresent(other -> {`);
+    out.lines.push(`            if (!other.getId().equals(${aggVar}.getId())) {`);
+    out.lines.push(`                throw new ${errorType}();`);
+    out.lines.push(`            }`);
+    out.lines.push(`        });`);
+  }
+  return out;
+}
+
+/**
+ * statePrecondition — guards a state transition against an invariant on the
+ * aggregate's current state. The invariant is too domain-specific to express
+ * in YAML today (would need an expression sub-language), so this mapper always
+ * emits an enriched TODO that nominates the error class for copy/paste.
+ */
+function mapStatePrecondition(rule, ctx) {
+  const out = emptyResult();
+  const { errorMap, aggVarName } = ctx;
+  const errorEntry = errorMap[rule.errorCode];
+  const errorType = errorEntry ? errorEntry.errorType : rule.errorCode;
+  out.lines.push(`        // TODO domainRule(${rule.id}, statePrecondition): ${rule.description?.trim() || ''}`);
+  out.lines.push(`        //      Enforce the precondition on ${aggVarName} before invoking the domain method:`);
+  out.lines.push(`        //      if (!(<invariant on ${aggVarName}>)) throw new ${errorType}();`);
+  return out;
+}
+
+/**
  * Public dispatcher.
  *
  * @param rule  - the domainRule object (already validated against the schema)
@@ -163,12 +266,14 @@ function mapRule(rule, ctx) {
     case 'crossAggregateConstraint':
       return mapCrossAggregateConstraint(rule, ctx);
     case 'uniqueness':
+      return mapUniqueness(rule, ctx);
     case 'statePrecondition':
+      return mapStatePrecondition(rule, ctx);
     case 'terminalState':
     case 'sideEffect':
       // Intentionally inert in the handler — these are emitted as
       // documentation in the aggregate or covered by other generators
-      // (uniqueness → JPA @Column unique=true; terminalState → Enum.transitionTo).
+      // (terminalState → Enum.transitionTo).
       return emptyResult();
     default:
       return emptyResult();
