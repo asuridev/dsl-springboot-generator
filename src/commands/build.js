@@ -211,9 +211,15 @@ async function buildCommand(options = {}) {
     }
 
     const allBcYamls = [];
+    const systemActorNames = new Set(
+      (system.actors || [])
+        .map((a) => (typeof a === 'string' ? a : a && a.name))
+        .filter(Boolean)
+    );
+    const readBcYamlOpts = systemActorNames.size > 0 ? { systemActors: systemActorNames } : {};
     for (const bcName of bcNames) {
       try {
-        allBcYamls.push(await readBcYaml(bcName));
+        allBcYamls.push(await readBcYaml(bcName, readBcYamlOpts));
       } catch (err) {
         if (err.message.includes('not found')) {
           // File not found: already warned via cross-check above, skip silently

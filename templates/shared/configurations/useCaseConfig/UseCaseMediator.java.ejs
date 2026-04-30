@@ -4,6 +4,8 @@ import <%= packageName %>.shared.domain.interfaces.Command;
 import <%= packageName %>.shared.domain.interfaces.CommandHandler;
 import <%= packageName %>.shared.domain.interfaces.Query;
 import <%= packageName %>.shared.domain.interfaces.QueryHandler;
+import <%= packageName %>.shared.domain.interfaces.ReturningCommand;
+import <%= packageName %>.shared.domain.interfaces.ReturningCommandHandler;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -31,5 +33,14 @@ public class UseCaseMediator {
             throw new IllegalArgumentException("No registered instance found for type: " + command.getClass().getName());
         }
         instance.handle(command);
+    }
+
+    @SuppressWarnings("unchecked")
+    public <R, C extends ReturningCommand<R>> R dispatch(C command) {
+        ReturningCommandHandler<C, R> instance = (ReturningCommandHandler<C, R>) useCaseContainer.resolve(command.getClass());
+        if (instance == null) {
+            throw new IllegalArgumentException("No registered instance found for type: " + command.getClass().getName());
+        }
+        return instance.handle(command);
     }
 }

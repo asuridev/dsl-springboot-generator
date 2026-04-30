@@ -2,6 +2,7 @@ package <%= packageName %>.<%= moduleName %>.domain.errors;
 
 import <%= packageName %>.shared.domain.customExceptions.<%= baseException %>;
 
+// derived_from: errors[<%= errorCode %>]
 public class <%= errorType %> extends <%= baseException %> {
 
     public <%= errorType %>() {

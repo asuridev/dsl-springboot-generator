@@ -27,4 +27,19 @@ function derivedFromBlock(pointer) {
   return ` * derived_from: ${pointer}`;
 }
 
-module.exports = { derivedFrom, derivedFromBlock };
+/**
+ * Variante específica para casos de uso. Estandariza el pointer a
+ * `useCases[<id>]` (matches arch/{bc}/{bc}.yaml#/useCases/<id>).
+ * @param {string} useCaseId
+ */
+function derivedFromUseCase(useCaseId) {
+  if (!useCaseId || typeof useCaseId !== 'string') return '';
+  return `// derived_from: useCases[${useCaseId}]`;
+}
+
+function derivedFromUseCaseBlock(useCaseId) {
+  if (!useCaseId || typeof useCaseId !== 'string') return '';
+  return ` * derived_from: useCases[${useCaseId}]`;
+}
+
+module.exports = { derivedFrom, derivedFromBlock, derivedFromUseCase, derivedFromUseCaseBlock };

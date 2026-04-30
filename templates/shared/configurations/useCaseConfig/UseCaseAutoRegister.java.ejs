@@ -3,6 +3,7 @@ package <%= packageName %>.shared.infrastructure.configurations.useCaseConfig;
 import <%= packageName %>.shared.domain.interfaces.CommandHandler;
 import <%= packageName %>.shared.domain.interfaces.Dispatchable;
 import <%= packageName %>.shared.domain.interfaces.QueryHandler;
+import <%= packageName %>.shared.domain.interfaces.ReturningCommandHandler;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.ApplicationContext;
 import org.springframework.stereotype.Component;
@@ -37,6 +38,12 @@ public class UseCaseAutoRegister implements CommandLineRunner {
             Class<Dispatchable> queryType = getGenericType(handler.getClass());
             useCaseContainer.register(queryType, handler);
         });
+        // Register all ReturningCommandHandlers (commands that return a value)
+        Map<String, ReturningCommandHandler> returningCommandHandlers = applicationContext.getBeansOfType(ReturningCommandHandler.class);
+        returningCommandHandlers.values().forEach(handler -> {
+            Class<Dispatchable> commandType = getGenericType(handler.getClass());
+            useCaseContainer.register(commandType, handler);
+        });
     }
 
     @SuppressWarnings("unchecked")
@@ -48,7 +55,8 @@ public class UseCaseAutoRegister implements CommandLineRunner {
                     java.lang.reflect.Type rawType = parameterizedType.getRawType();
                     if (rawType instanceof Class<?> interfaceClass) {
                         if (CommandHandler.class.isAssignableFrom(interfaceClass)
-                                || QueryHandler.class.isAssignableFrom(interfaceClass)) {
+                                || QueryHandler.class.isAssignableFrom(interfaceClass)
+                                || ReturningCommandHandler.class.isAssignableFrom(interfaceClass)) {
                             return (Class<Dispatchable>) parameterizedType.getActualTypeArguments()[0];
                         }
                     }

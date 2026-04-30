@@ -315,7 +315,17 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods) {
             // Normalize OpenAPI schema name → Java class name (e.g. "CategoryResponse" → "CategoryResponseDto")
             return normalizeInner(raw);
           })()
-    : 'void';
+    : uc.returns
+      // [G4] command with declared returns: handler is a ReturningCommandHandler<C, R>
+      // and the controller method returns R (mirror query return-type resolution).
+      ? (() => {
+          const paged2 = /^Page\[(.+)\]$/.exec(uc.returns);
+          if (paged2) return `PagedResponse<${normalizeInner(paged2[1])}>`;
+          const list2 = /^List\[(.+)\]$/.exec(uc.returns);
+          if (list2) return `List<${normalizeInner(list2[1])}>`;
+          return normalizeInner(uc.returns);
+        })()
+      : 'void';
 
   // Command fields (in declaration order from the record)
   const allCmdFields = isQuery ? [] : getCommandFields(uc, agg);
@@ -602,7 +612,7 @@ function buildMethodStrings(op) {
     .join('\n        ');
 
   // Dispatch statement
-  const returnKeyword = !op.isCommand ? 'return ' : '';
+  const returnKeyword = (!op.isCommand || (op.returnType && op.returnType !== 'void')) ? 'return ' : '';
   const dispatchLine = `${returnKeyword}useCaseMediator.dispatch(${op.dispatchCall});`;
   const dispatchStatement = authContextLocals
     ? `${authContextLocals}\n        ${dispatchLine}`
@@ -637,6 +647,20 @@ function buildControllerImports(operations, packageName, moduleName) {
       imports.add(`${packageName}.${moduleName}.application.queries.${op.ucName}Query`);
     }
     if (!op.isCommand && op.returnType && op.returnType !== 'void') {
+      let baseDtoType;
+      if (op.returnType.startsWith('PagedResponse<')) {
+        baseDtoType = op.returnType.replace('PagedResponse<', '').replace('>', '');
+        imports.add(`${packageName}.shared.application.dtos.PagedResponse`);
+      } else if (op.returnType.startsWith('List<')) {
+        baseDtoType = op.returnType.replace('List<', '').replace('>', '');
+        imports.add('java.util.List');
+      } else {
+        baseDtoType = op.returnType;
+      }
+      imports.add(`${packageName}.${moduleName}.application.dtos.${baseDtoType}`);
+    }
+    // [G4] commands with returns: import the response DTO and any wrappers.
+    if (op.isCommand && op.returnType && op.returnType !== 'void') {
       let baseDtoType;
       if (op.returnType.startsWith('PagedResponse<')) {
         baseDtoType = op.returnType.replace('PagedResponse<', '').replace('>', '');

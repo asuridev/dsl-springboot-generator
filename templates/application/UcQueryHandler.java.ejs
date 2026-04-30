@@ -12,7 +12,13 @@ import <%= packageName %>.shared.domain.interfaces.QueryHandler;
 <% } %>
 import org.springframework.transaction.annotation.Transactional;
 
-@ApplicationComponent
+<% if (description && description.trim()) { %>/**
+<% description.split(/\n/).forEach(function(line) { %> * <%- line %>
+<% }); %> *
+ * derived_from: useCases[<%= useCaseId %>]
+ */
+<% } else { %>// derived_from: useCases[<%= useCaseId %>]
+<% } %>@ApplicationComponent
 public class <%= useCaseName %>QueryHandler implements QueryHandler<<%= useCaseName %>Query, <%- returnType %>> {
 
     private final <%= repoName %> <%= repoFieldName %>;

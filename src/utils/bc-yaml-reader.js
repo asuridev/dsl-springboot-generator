@@ -51,15 +51,139 @@ function validateProperties(properties, context) {
 /**
  * Full validation per BC-YAML-GENERATOR-SPEC §15.
  */
-function validate(doc) {
+function validate(doc, opts = {}) {
   const bc = doc.bc;
+  const systemActors = opts.systemActors instanceof Set ? opts.systemActors : null;
 
   // ── 3. Uniqueness of IDs ───────────────────────────────────────────────────
   const useCases = doc.useCases || [];
   assertUnique(useCases, (uc) => uc.id, 'use case id');
 
+  // ── useCases schema (whitelist + actor cross-check) ───────────────────────
+  // [G18] strict whitelist on useCases[] and useCases[].input[] keys; an
+  // unknown key (e.g. "triger" or "inputs") aborts the build instead of
+  // silently producing incomplete code.
+  const ALLOWED_UC_KEYS = new Set([
+    'id', 'name', 'type', 'actor', 'description',
+    'trigger', 'aggregate', 'method',
+    'input', 'returns', 'rules', 'notFoundError',
+    'fkValidations', 'implementation', 'emits',
+    // tolerated aliases / late-stage normalisations
+    'emitsList',
+  ]);
+  const ALLOWED_UC_TRIGGER_KEYS = new Set(['kind', 'operationId']);
+  const ALLOWED_UC_INPUT_KEYS = new Set([
+    'name', 'type', 'required', 'source', 'loadAggregate',
+  ]);
+  const ALLOWED_UC_FK_KEYS = new Set([
+    'aggregate', 'param', 'error', 'notFoundError', 'bc', 'conditional',
+  ]);
+  const ALLOWED_UC_TYPES = new Set(['command', 'query']);
+  const ALLOWED_UC_TRIGGER_KINDS = new Set(['http', 'event']);
+  const ALLOWED_UC_INPUT_SOURCES = new Set(['body', 'path', 'query', 'authContext']);
+  const ALLOWED_UC_IMPLEMENTATIONS = new Set(['full', 'scaffold']);
+
+  for (const uc of useCases) {
+    if (!uc || typeof uc !== 'object' || Array.isArray(uc)) {
+      fail(`useCases[] contains a non-mapping entry; each use case must be an object with at least "id", "name" and "type".`);
+    }
+    for (const key of Object.keys(uc)) {
+      if (!ALLOWED_UC_KEYS.has(key)) {
+        fail(`Use case "${uc.id || uc.name || '<unnamed>'}" declares unsupported attribute "${key}". Allowed keys: ${[...ALLOWED_UC_KEYS].join(', ')}.`);
+      }
+    }
+    if (!uc.id) fail(`A useCases[] entry is missing required field "id".`);
+    if (!uc.name) fail(`Use case "${uc.id}" is missing required field "name".`);
+    if (!uc.type) fail(`Use case "${uc.id}" is missing required field "type".`);
+    if (!ALLOWED_UC_TYPES.has(uc.type)) {
+      fail(`Use case "${uc.id}" has unsupported type "${uc.type}". Allowed: ${[...ALLOWED_UC_TYPES].join(', ')}.`);
+    }
+    if (uc.implementation != null && !ALLOWED_UC_IMPLEMENTATIONS.has(uc.implementation)) {
+      fail(`Use case "${uc.id}" has unsupported implementation "${uc.implementation}". Allowed: ${[...ALLOWED_UC_IMPLEMENTATIONS].join(', ')}.`);
+    }
+    if (uc.trigger != null) {
+      if (typeof uc.trigger !== 'object' || Array.isArray(uc.trigger)) {
+        fail(`Use case "${uc.id}" has invalid "trigger"; expected a mapping with "kind" (and optional "operationId").`);
+      }
+      for (const k of Object.keys(uc.trigger)) {
+        if (!ALLOWED_UC_TRIGGER_KEYS.has(k)) {
+          fail(`Use case "${uc.id}" trigger declares unsupported key "${k}". Allowed: ${[...ALLOWED_UC_TRIGGER_KEYS].join(', ')}.`);
+        }
+      }
+      if (uc.trigger.kind && !ALLOWED_UC_TRIGGER_KINDS.has(uc.trigger.kind)) {
+        fail(`Use case "${uc.id}" trigger.kind "${uc.trigger.kind}" is not supported. Allowed: ${[...ALLOWED_UC_TRIGGER_KINDS].join(', ')}.`);
+      }
+      if (uc.trigger.kind === 'http' && !uc.trigger.operationId) {
+        fail(`Use case "${uc.id}" trigger.kind: http requires "operationId".`);
+      }
+    }
+    if (uc.input != null) {
+      if (!Array.isArray(uc.input)) {
+        fail(`Use case "${uc.id}" "input" must be a list of input mappings.`);
+      }
+      for (const inp of uc.input) {
+        if (!inp || typeof inp !== 'object' || Array.isArray(inp)) {
+          fail(`Use case "${uc.id}" input[] contains a non-mapping entry.`);
+        }
+        for (const k of Object.keys(inp)) {
+          if (!ALLOWED_UC_INPUT_KEYS.has(k)) {
+            fail(`Use case "${uc.id}" input "${inp.name || '<unnamed>'}" declares unsupported attribute "${k}". Allowed: ${[...ALLOWED_UC_INPUT_KEYS].join(', ')}.`);
+          }
+        }
+        if (!inp.name) fail(`Use case "${uc.id}" has an input without "name".`);
+        if (!inp.type) fail(`Use case "${uc.id}" input "${inp.name}" is missing required field "type".`);
+        if (!inp.source) fail(`Use case "${uc.id}" input "${inp.name}" is missing required field "source".`);
+        if (!ALLOWED_UC_INPUT_SOURCES.has(inp.source)) {
+          fail(`Use case "${uc.id}" input "${inp.name}" has unsupported source "${inp.source}". Allowed: ${[...ALLOWED_UC_INPUT_SOURCES].join(', ')}.`);
+        }
+      }
+    }
+    if (uc.fkValidations != null) {
+      if (!Array.isArray(uc.fkValidations)) {
+        fail(`Use case "${uc.id}" "fkValidations" must be a list.`);
+      }
+      for (const fk of uc.fkValidations) {
+        if (!fk || typeof fk !== 'object' || Array.isArray(fk)) {
+          fail(`Use case "${uc.id}" fkValidations[] contains a non-mapping entry.`);
+        }
+        for (const k of Object.keys(fk)) {
+          if (!ALLOWED_UC_FK_KEYS.has(k)) {
+            fail(`Use case "${uc.id}" fkValidation declares unsupported attribute "${k}". Allowed: ${[...ALLOWED_UC_FK_KEYS].join(', ')}.`);
+          }
+        }
+      }
+    }
+    // [G14] actor cross-validation (only when system.yaml declares actors[])
+    if (systemActors && uc.actor && !systemActors.has(uc.actor)) {
+      fail(`Use case "${uc.id}" actor "${uc.actor}" is not declared in system.yaml#/actors. Declare it there or fix the typo.`);
+    }
+  }
+
   const errors = doc.errors || [];
   assertUnique(errors, (e) => e.code, 'error code');
+
+  // ── errors[] schema (whitelist + httpStatus enum) ──────────────────────
+  // [G18 cont.] strict whitelist on errors[] keys; httpStatus must be one
+  // of the values supported by HandlerExceptions (otherwise the generated
+  // error class would silently default to BusinessException → 422).
+  const ALLOWED_ERROR_KEYS = new Set([
+    'code', 'httpStatus', 'description', 'message', 'title',
+  ]);
+  const ALLOWED_HTTP_STATUSES = new Set([400, 401, 403, 404, 409, 422]);
+  for (const err of errors) {
+    if (!err || typeof err !== 'object' || Array.isArray(err)) {
+      fail(`errors[] contains a non-mapping entry; each error must be an object with at least "code".`);
+    }
+    for (const key of Object.keys(err)) {
+      if (!ALLOWED_ERROR_KEYS.has(key)) {
+        fail(`Error "${err.code || '<unnamed>'}" declares unsupported attribute "${key}". Allowed keys: ${[...ALLOWED_ERROR_KEYS].join(', ')}.`);
+      }
+    }
+    if (!err.code) fail(`An errors[] entry is missing required field "code".`);
+    if (err.httpStatus != null && !ALLOWED_HTTP_STATUSES.has(err.httpStatus)) {
+      fail(`Error "${err.code}" has unsupported httpStatus "${err.httpStatus}". Allowed: ${[...ALLOWED_HTTP_STATUSES].join(', ')}.`);
+    }
+  }
 
   // Collect all rule IDs across aggregates
   const allRuleIds = new Set();
@@ -486,7 +610,7 @@ function normalizeInlineReturns(doc) {
   }
 }
 
-async function readBcYaml(bcName) {
+async function readBcYaml(bcName, opts = {}) {
   const filePath = path.join(process.cwd(), 'arch', bcName, `${bcName}.yaml`);
 
   if (!(await fs.pathExists(filePath))) {
@@ -516,7 +640,7 @@ async function readBcYaml(bcName) {
 
   normalizeInlineReturns(doc);
 
-  validate(doc);
+  validate(doc, opts);
 
   return doc;
 }

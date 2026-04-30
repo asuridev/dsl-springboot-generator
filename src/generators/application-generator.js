@@ -1240,10 +1240,37 @@ async function generateApplicationMapper(agg, moduleName, packageName, bcDir, vo
 async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames = new Set(), bcYaml = null) {
   const ucClassName = toPascalCase(uc.name);
   const { fields, imports, voRequestsNeeded } = buildCommandFields(uc, agg, packageName, moduleName, voNames, bcYaml);
+  // [G4] command return type: when uc.returns is declared, the record implements
+  // ReturningCommand<R> instead of Command. Reuses query return-type resolution
+  // (Page[X], List[X], <AggName>Response → <AggName>ResponseDto, bare DTO).
+  const returnType = uc.returns ? buildQueryReturnType(uc, agg, []) : null;
+  // Add ResponseDto import when returnType references it (mirror controller import logic)
+  const cmdImports = [...imports];
+  if (returnType) {
+    const baseDto = returnType
+      .replace(/^PagedResponse<(.+)>$/, '$1')
+      .replace(/^List<(.+)>$/, '$1');
+    if (returnType.startsWith('PagedResponse<')) {
+      cmdImports.push(`${packageName}.shared.application.dtos.PagedResponse`);
+    }
+    if (returnType.startsWith('List<')) {
+      cmdImports.push('java.util.List');
+    }
+    cmdImports.push(`${packageName}.${moduleName}.application.dtos.${baseDto}`);
+  }
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'UcCommand.java.ejs'),
     path.join(bcDir, 'application', 'commands', `${ucClassName}Command.java`),
-    { packageName, moduleName, useCaseName: ucClassName, imports, fields }
+    {
+      packageName,
+      moduleName,
+      useCaseName: ucClassName,
+      useCaseId: uc.id,
+      description: uc.description || '',
+      imports: cmdImports,
+      fields,
+      returnType,
+    }
   );
   return voRequestsNeeded;
 }
@@ -1303,6 +1330,28 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
     }
   }
 
+  // [G4] command return type: when uc.returns is declared, the handler
+  // implements ReturningCommandHandler<C, R> and the handle() method returns R.
+  const returnType = uc.returns ? buildQueryReturnType(uc, agg, repoMethods) : null;
+  if (returnType) {
+    const baseDto = returnType
+      .replace(/^PagedResponse<(.+)>$/, '$1')
+      .replace(/^List<(.+)>$/, '$1');
+    if (returnType.startsWith('PagedResponse<')) {
+      extraImports.push(`${packageName}.shared.application.dtos.PagedResponse`);
+    }
+    if (returnType.startsWith('List<')) {
+      extraImports.push('java.util.List');
+    }
+    extraImports.push(`${packageName}.${moduleName}.application.dtos.${baseDto}`);
+    // For implementation: full + returns the auto-generated body has no return stmt;
+    // emit a TODO so the developer knows to map the result. The scaffold branch
+    // already throws UnsupportedOperationException so no fix is needed there.
+    if (uc.implementation === 'full' && body) {
+      body = body + `\n        // TODO useCase(${uc.id}, returns): map result to ${returnType}\n        return null;`;
+    }
+  }
+
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'UcCommandHandler.java.ejs'),
     path.join(bcDir, 'application', 'usecases', `${ucClassName}CommandHandler.java`),
@@ -1310,6 +1359,8 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
       packageName,
       moduleName,
       useCaseName: ucClassName,
+      useCaseId: uc.id,
+      description: uc.description || '',
       aggregateName: agg.name,
       repoName,
       repoFieldName,
@@ -1322,6 +1373,7 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
       implementation: uc.implementation || 'scaffold',
       body,
       imports: extraImports,
+      returnType,
     }
   );
 }
@@ -1336,7 +1388,16 @@ async function generateQuery(uc, agg, moduleName, packageName, bcDir, repoMethod
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'UcQuery.java.ejs'),
     path.join(bcDir, 'application', 'queries', `${ucClassName}Query.java`),
-    { packageName, moduleName, useCaseName: ucClassName, returnType, fields, imports }
+    {
+      packageName,
+      moduleName,
+      useCaseName: ucClassName,
+      useCaseId: uc.id,
+      description: uc.description || '',
+      returnType,
+      fields,
+      imports,
+    }
   );
 }
 
@@ -1601,6 +1662,8 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
       packageName,
       moduleName,
       useCaseName: ucClassName,
+      useCaseId: uc.id,
+      description: uc.description || '',
       aggregateName: agg.name,
       repoName,
       repoFieldName,
@@ -1857,6 +1920,8 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
             packageName,
             moduleName,
             useCaseName: ucClassName,
+            useCaseId: uc.id,
+            description: uc.description || '',
             returnType: responseReturnType,
             fields: queryFields,
             imports: [...queryImports].sort(),

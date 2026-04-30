@@ -5,7 +5,13 @@ import <%= packageName %>.shared.domain.interfaces.Query;
 <% imports.forEach(imp => { %>import <%- imp %>;
 <% }); %>
 <% } %>
-public record <%= useCaseName %>Query(
+<% if (description && description.trim()) { %>/**
+<% description.split(/\n/).forEach(function(line) { %> * <%- line %>
+<% }); %> *
+ * derived_from: useCases[<%= useCaseId %>]
+ */
+<% } else { %>// derived_from: useCases[<%= useCaseId %>]
+<% } %>public record <%= useCaseName %>Query(
 <%- fields.map((f, i) => {
   const ann = (f.annotations && f.annotations.length > 0) ? f.annotations.join(' ') + ' ' : '';
   const comma = i < fields.length - 1 ? ',' : '';

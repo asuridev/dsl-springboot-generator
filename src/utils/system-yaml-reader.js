@@ -57,6 +57,10 @@ async function readSystemYaml() {
     externalSystems: doc.externalSystems || [],
     // Phase 4 — choreographed sagas (optional). Pass-through when absent → [].
     sagas: Array.isArray(doc.sagas) ? doc.sagas : [],
+    // useCases Phase 0 (G14) — optional list of actors. When present, each
+    // useCase.actor must reference one of these names; when absent the cross
+    // validation is skipped (legacy behaviour).
+    actors: Array.isArray(doc.actors) ? doc.actors : [],
   };
 }
 

@@ -4,7 +4,9 @@ import <%= packageName %>.<%= moduleName %>.application.commands.<%= useCaseName
 import <%= packageName %>.<%= moduleName %>.domain.repository.<%= repoName %>;
 import <%= packageName %>.shared.domain.annotations.ApplicationComponent;
 import <%= packageName %>.shared.domain.annotations.LogExceptions;
-import <%= packageName %>.shared.domain.interfaces.CommandHandler;
+<% if (returnType) { %>import <%= packageName %>.shared.domain.interfaces.ReturningCommandHandler;
+<% } else { %>import <%= packageName %>.shared.domain.interfaces.CommandHandler;
+<% } %>
 <% if (fkRepos && fkRepos.length > 0) { %>
 <% fkRepos.forEach(fk => { %>import <%= packageName %>.<%= moduleName %>.domain.repository.<%= fk.repoName %>;
 <% }); %>
@@ -19,8 +21,14 @@ import <%= packageName %>.shared.domain.interfaces.CommandHandler;
 <% } %>
 import org.springframework.transaction.annotation.Transactional;
 
-@ApplicationComponent
-public class <%= useCaseName %>CommandHandler implements CommandHandler<<%= useCaseName %>Command> {
+<% if (description && description.trim()) { %>/**
+<% description.split(/\n/).forEach(function(line) { %> * <%- line %>
+<% }); %> *
+ * derived_from: useCases[<%= useCaseId %>]
+ */
+<% } else { %>// derived_from: useCases[<%= useCaseId %>]
+<% } %>@ApplicationComponent
+public class <%= useCaseName %>CommandHandler implements <% if (returnType) { %>ReturningCommandHandler<<%= useCaseName %>Command, <%= returnType %>><% } else { %>CommandHandler<<%= useCaseName %>Command><% } %> {
 
     private final <%= repoName %> <%= repoFieldName %>;
 <% if (fkRepos && fkRepos.length > 0) { %>
@@ -65,7 +73,7 @@ public class <%= useCaseName %>CommandHandler implements CommandHandler<<%= useC
     @Override
     @Transactional
     @LogExceptions
-    public void handle(<%= useCaseName %>Command command) {
+    public <%= returnType ? returnType : 'void' %> handle(<%= useCaseName %>Command command) {
 <% if (implementation === 'scaffold') { %>
 <% if (authContextFields && authContextFields.length > 0) { %>
 <% authContextFields.forEach(function(f) { %>        // TODO (authContext): inject <%- f.javaType %> <%- f.name %> from SecurityContextHolder.getContext().getAuthentication()

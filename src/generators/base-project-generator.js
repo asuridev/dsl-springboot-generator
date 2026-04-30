@@ -287,7 +287,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   // ── Shared: CQRS interfaces ───────────────────────────────────────────────
 
   const interfacesDir = path.join(javaMainDir, 'shared', 'domain', 'interfaces');
-  const cqrsInterfaces = ['Dispatchable', 'Handler', 'Command', 'CommandHandler', 'Query', 'QueryHandler'];
+  const cqrsInterfaces = ['Dispatchable', 'Handler', 'Command', 'CommandHandler', 'Query', 'QueryHandler', 'ReturningCommand', 'ReturningCommandHandler'];
   for (const iface of cqrsInterfaces) {
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'shared', 'interfaces', `${iface}.java.ejs`),
