@@ -1,0 +1,33 @@
+package <%= packageName %>.shared.infrastructure.web;
+
+import java.time.Duration;
+import java.util.Optional;
+
+/**
+ * Storage abstraction for idempotent request results.
+ *
+ * Implementations must guarantee that {@link #saveIfAbsent} is atomic: when
+ * two concurrent callers race with the same key, exactly one wins. Losers
+ * receive the stored response from a subsequent {@link #find} call.
+ *
+ * derived_from: useCases[*].idempotency.storage
+ */
+public interface IdempotencyStore {
+
+    /**
+     * Snapshot of a previously executed response.
+     */
+    record StoredResponse(int status, byte[] body, String contentType) { }
+
+    /**
+     * Returns the stored response for {@code key} when present and not expired.
+     */
+    Optional<StoredResponse> find(String key);
+
+    /**
+     * Atomically stores a response for {@code key} when no entry exists.
+     * Returns {@code true} when the entry was inserted; {@code false} when
+     * another caller had already won.
+     */
+    boolean saveIfAbsent(String key, String requestHash, StoredResponse response, Duration ttl);
+}

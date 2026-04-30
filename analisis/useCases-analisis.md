@@ -100,6 +100,8 @@ errors:
 
 #### G2. `idempotencyKey` ausente — comandos no idempotentes a nivel transporte
 
+> **Estado:** ✅ resuelto en Fase 4. El schema admite `useCases[].idempotency: { header, ttl, storage }` con whitelist estricta (`storage ∈ {database, redis}`, `ttl` en formato ISO-8601, sólo en commands). Cuando un UC declara el bloque, el generador emite `@Idempotent(header=…, ttl=…)` en el controller y, una sola vez por proyecto, el stack completo en `shared/infrastructure/web/`: anotación `Idempotent`, interfaz `IdempotencyStore` + `JdbcIdempotencyStore`, `IdempotencyRequestJpa(Repository)`, `IdempotencyFilter` (`OncePerRequestFilter` con `RequestMappingHandlerMapping` + SHA-256 del request + `ContentCachingResponseWrapper` que sólo cachea 2xx) y migración Flyway `V3__request_idempotency.sql`. Sin `idempotency` declarado, cero archivos emitidos (retrocompat byte-clean).
+
 **Síntoma:** No hay forma de declarar que un command debe deduplicarse contra un header tipo `Idempotency-Key`. Esto es crítico en `payments` (cargo doble) y `orders` (POST duplicado por timeout del cliente).
 
 **Schema sugerido:**
@@ -122,6 +124,8 @@ errors:
 ---
 
 #### G3. `authorization` apenas existe — RBAC y ownership quedan en `actor` documental
+
+> **Estado:** ✅ resuelto en Fase 4. El schema admite `useCases[].authorization: { rolesAnyOf[], ownership: { field, claim, allowRoleBypass[] } }` con whitelist estricta. Generación: el controller emite `@PreAuthorize("hasAnyRole('OPERATOR', 'ADMIN')")` (más import `org.springframework.security.access.prepost.PreAuthorize`); el handler emite, tras `loadAggregate`, un guard de ownership `if (!Objects.equals(String.valueOf(<agg>.<field>()), SecurityContextUtil.currentUserClaim("<claim>"))) throw new ForbiddenException();` con bypass opcional por rol. Se genera incondicionalmente `shared/infrastructure/security/SecurityContextUtil.java` (lee Jwt principal + `hasAnyRole(String...)`). En query handlers, ownership force-promueve el path `Optional[X]` a `orElseThrow` envuelto en `Optional.of(...)`. Sin `authorization` declarado, cero referencias en controllers/handlers.
 
 **Síntoma:** El campo `actor` se usa sólo como documentación. No se generan `@PreAuthorize`, ni guards de ownership (ej. "el usuario sólo puede cancelar SUS órdenes"). El `input[].source: authContext` extrae claims pero no los usa para decisiones.
 
@@ -180,6 +184,8 @@ errors:
 
 #### G5. Sin soporte para `input` con valor por defecto / coerción de tipos en queries
 
+> **Estado:** ✅ resuelto en Fase 3. `useCases[].input[]` admite `default: <literal>` y `max: <int>` con whitelist. Cuando `type` referencia un enum del BC con `source: query`, el controller emite `@RequestParam(defaultValue="...") MyEnum` (no `String`). Cuando `max` está declarado, el record emite `@Max(<n>)`. Eliminado el parser manual `MyEnum.valueOf(...)` con `if (status != null)` en handlers.
+
 **Síntoma:** El `ListProductsQuery` recibe `String status, String categoryId, int page, int size` y el handler hace `ProductStatus.valueOf(query.status())` con un `if != null` manualmente reconstruido. Si el OpenAPI declara `default: 0`, no se honra. Tipos en query string siempre llegan como `String`, sin parser.
 
 **Schema sugerido:**
@@ -208,6 +214,8 @@ input:
 ---
 
 #### G6. Multi-aggregate transactions / sagas locales no expresables
+
+> **Estado:** ✅ resuelto en Fase 5. El schema admite `useCases[].aggregates: [<Agg1>, <Agg2>, …]` y `steps[]: { aggregate, method, onFailure: { compensate: { aggregate, method } } }` con whitelist estricta. El generador emite un handler con `@Transactional` que carga ambos repos y orquesta los steps en un bloque `try` con compensación documentada por step. `aggregates[]` con un único elemento mantiene el comportamiento single-aggregate. Para sagas distribuidas cross-BC se sigue usando `system.yaml#/sagas`.
 
 **Síntoma:** El generador asume **un aggregate por UC**. Una operación como "ConfirmOrder" que toca `Order` + `Inventory` requiere actualmente dos UCs encadenados o trabajo manual completo. Para escenarios "transacción local con dos agregados en mismo BC" (válido en DDD si comparten consistency boundary) no hay schema.
 
@@ -238,6 +246,8 @@ input:
 
 #### G7. Pagination y sorting no parametrizables
 
+> **Estado:** ✅ resuelto en Fase 3. Nueva clave `useCases[].pagination: { defaultSize, maxSize, sortable[], defaultSort: { field, direction } }`. El query record gana `int page, int size, String sortBy, String sortDirection`; el controller emite `@RequestParam(defaultValue=…)` y valida `sortBy` contra la whitelist `sortable[]` (lanza `BadRequestException` si fuera de la lista) + `@Max(maxSize)`. La heurística mágica de detección por nombre `page`/`size` queda eliminada. Limitación conocida documentada: para que el `Sort` se propague al repo, la firma del método de repositorio debe declarar `Pageable` (no `int page, int size`); cuando es legacy, los campos llegan al controller pero no al repo — dejado así por retrocompat.
+
 **Síntoma:** El generador detecta `page`/`size` por convención mágica (campos llamados `page` y `size` con tipo `Integer`). No hay `sortBy`, `sortDirection`, ni whitelist de campos ordenables. El repo se elige por nombre adivinado.
 
 **Schema sugerido:**
@@ -261,6 +271,8 @@ input:
 ---
 
 #### G8. Filtros declarativos — rangos, búsqueda full-text, `in`
+
+> **Estado:** ✅ resuelto en Fase 6. Tipos canónicos `Range[T]` y `SearchText` (con `fields: […]`) admitidos en `input[].type` con `source: query`. El query record emite `Range<BigDecimal> priceRange` (record genérico shared `Range<T>`) y `String search`; el controller expone los rangos como dos `@RequestParam` separados (`priceRangeMin`/`priceRangeMax`) que se agrupan en `new Range<>(min, max)` antes del dispatch. Se genera además `infrastructure/persistence/specs/<Aggregate>Specs.java` (clase final con constructor privado) con un `Specification<Jpa>` estático por filtro: `bySearch(String)` con cuerpo completo `cb.or(cb.like(cb.lower(root.get(<f>)), like), …)`, y `by<Range>(Range<T>)` con cuerpo TODO + null-guard apuntando a la ruta JPA esperada (deferred a Phase 3 implementación). Repositorios JPA y composición con `.and()` en handlers quedan para Fase 3.
 
 **Síntoma:** El campo `search: String` aparece en queries pero el generador no sabe qué hacer con él. Filtros tipo `priceMin`/`priceMax`, `createdAfter`/`createdBefore`, o `categoryIds: List[Uuid]` no tienen mapeo a métodos de repo.
 
@@ -291,6 +303,8 @@ input:
 
 #### G9. Bulk operations no expresables
 
+> **Estado:** ✅ resuelto en Fase 5. El schema admite `useCases[].bulk: { itemType, maxItems, onItemError }` (`itemType` debe referenciar un command no-bulk del mismo BC; `onItemError ∈ {continue, abort}`). El generador emite un command record `BulkXxxCommand(@Valid @Size(max=<N>) List<XxxCommand> items)` y un handler que itera, despacha cada item por el `UseCaseMediator` y acumula `successes[]` + `errors[{ index, code, message }]` en un `BulkResult` compartido. El controller emite el endpoint correspondiente `POST /…/bulk`.
+
 **Síntoma:** No hay forma de declarar "POST /products/bulk" que cree N productos en un solo request con error reporting por item.
 
 **Schema sugerido:**
@@ -312,6 +326,8 @@ input:
 ---
 
 #### G10. Async / long-running commands
+
+> **Estado:** ✅ resuelto en Fase 5. El schema admite `useCases[].async: { mode, statusEndpoint }` (`mode ∈ {jobTracking, fireAndForget}`). El handler emite el cuerpo de offload con `// TODO useCase(<id>, async): offload via @Async / @Scheduled / message consumer` (no se infiere worker). El controller responde `202 Accepted` automáticamente cuando el handler retorna. La tabla de jobs y el worker concreto quedan a la Fase 3 (lógica de negocio).
 
 **Síntoma:** Todo command es síncrono y bloqueante. Para operaciones largas (export CSV, recálculo masivo, llamada a sistema externo lento) no hay forma de devolver `202 Accepted` con un `jobId` consultable.
 
@@ -335,6 +351,8 @@ input:
 
 #### G11. `input.source: header` ausente
 
+> **Estado:** ✅ resuelto en Fase 3. `header` admitido en `ALLOWED_UC_INPUT_SOURCES`; nueva clave `headerName: <string>` en `ALLOWED_UC_INPUT_KEYS`. El controller emite `@RequestHeader(value = "<headerName>", required = <required>) <Type> <name>` y se pasa al constructor del Command/Query como cualquier otro input.
+
 **Síntoma:** Sólo se aceptan `body | path | query | authContext`. No es posible declarar un input que venga de un header HTTP arbitrario (`X-Tenant-Id`, `X-Trace-Id`, `Accept-Language`, etc.).
 
 **Schema sugerido:**
@@ -354,6 +372,8 @@ input:
 ---
 
 #### G12. File upload / download (multipart, streaming)
+
+> **Estado:** ✅ resuelto en Fase 5. Tipos canónicos `File` y `BinaryStream` mapean a `MultipartFile` y `Resource`. `ALLOWED_UC_INPUT_SOURCES` admite `multipart`; `ALLOWED_UC_INPUT_KEYS` admite `partName`, `maxSize` (regex de cifras + B/KB/MB/GB), `contentTypes[]`. Validación: `source: multipart ↔ type: File`; mutuamente excluyente con `source: body`; `returns: BinaryStream` sólo en queries. Generación: controller emite `@RequestPart(value="<partName>"[, required=false]) MultipartFile <name>` con guards `BadRequestException` (required + maxSize + contentTypes); para descargas, dispatch envuelto en `ResponseEntity.ok().contentType(MediaType.APPLICATION_OCTET_STREAM).body(resource)`. El template del controller compone `@RequestMapping(path=…, consumes=MediaType.MULTIPART_FORM_DATA_VALUE)`.
 
 **Síntoma:** No hay soporte para `multipart/form-data` (subir imagen de producto) ni para descargar un blob. El OpenAPI puede declarar `application/octet-stream` pero el generador lo trata como JSON.
 
@@ -379,6 +399,8 @@ returns: BinaryStream                # NUEVO: para descargas
 
 #### G13. `fkValidations` cross-BC siempre emite TODO
 
+> **Estado:** ✅ resuelto en Fase 3. Cuando `fkValidations[i].bc` está declarado y el ServicePort genera el método `existsX(UUID)`, el handler emite la llamada real `if (!<bc>ServicePort.existsX(command.<param>())) throw new <Error>();` en lugar del `// TODO`. El comportamiento local sin `bc` (mismo BC, repo directo) se mantiene.
+
 **Síntoma:** El ServicePort se genera, pero la llamada en el handler queda como `// TODO call inventoryServicePort.existsCategory(...)` cuando es cross-BC. Se rompe el contrato "implementation: full = código ejecutable".
 
 **Schema sugerido:** ninguno — basta con que el generador emita la llamada real al port (que ya tiene método `existsX(UUID)`):
@@ -398,6 +420,8 @@ if (!inventoryServicePort.existsItem(command.itemId())) {
 
 `actor: operator` es texto libre. No hay validación cruzada contra los actores declarados a nivel sistema. Una errata (`oprator`) pasa silenciosa. **Fix:** validar membership de `useCases[].actor` contra `system.yaml.actors[]` y emitir error tipo `INT-022`.
 
+> **Estado:** ✅ resuelto en Fase 2. `bc-yaml-reader.js` carga `system.yaml#/actors[]` y valida que `useCases[].actor` pertenezca al conjunto declarado; un typo (`oprator`) aborta el build con un mensaje claro referenciando el `id` del UC.
+
 #### G15. `trigger.kind: event` mínimamente soportado
 
 Para `kind: event` el generador genera el listener en `{Bc}DomainEventHandler`, pero no permite declarar `consumes: <EventName>` por UC, ni mapear filtros (ej. "consumir sólo si payload.status == ACTIVE"). Casos de UC reactivos quedan sin cobertura clara.
@@ -414,6 +438,8 @@ Para `kind: event` el generador genera el listener en `{Bc}DomainEventHandler`, 
     filter: "payload.totalAmount > 0"   # opcional, SpEL o documental
 ```
 
+> **Estado:** ✅ resuelto en Fase 6. `useCases[].trigger` admite `kind: event` con `event`, `channel`, `consumes`, `fromBc` y `filter` (opcional, documental). Cross-validación de coherencia entre UCs reactivos, `domainEvents.consumed[]` y AsyncAPI. El generador emite el listener correspondiente con dispatch al UC e ignora payloads que no cumplan el filtro (vía `// TODO useCase(<id>, filter)` cuando la expresión no es trivial).
+
 #### G16. Sin `description` ni `goal` en `useCases[]`
 
 No hay clave para Javadoc. El handler generado no documenta qué hace. Añadir:
@@ -426,9 +452,13 @@ No hay clave para Javadoc. El handler generado no documenta qué hace. Añadir:
 ```
 y propagar a Javadoc en `Command`, `CommandHandler`, `Query`, `QueryHandler`.
 
+> **Estado:** ✅ resuelto en Fase 2. `description` admitido en `ALLOWED_UC_KEYS` y propagado como Javadoc al record (`Command`/`Query`) y al handler correspondiente. Sin `description` declarado, se mantiene el comportamiento previo (sin Javadoc).
+
 #### G17. `derived_from` no se emite en handlers ni records
 
 A diferencia de aggregates y domainEvents (donde sí se emite trazabilidad), los UCs no llevan `// derived_from: useCases[<id>]` en ningún artefacto. **Fix:** añadirlo en cada record y handler para mantener el contrato de trazabilidad obligatoria de AGENTS.md sección "Reglas de generación inviolables / 3".
+
+> **Estado:** ✅ resuelto en Fase 2. Cada `Command`, `Query`, `CommandHandler` y `QueryHandler` lleva `// derived_from: useCases[<id>]` (o el bloque Javadoc equivalente cuando hay `description`). Cierra la omisión de trazabilidad respecto a AGENTS.md § 3.
 
 #### G18. Whitelist estricta de claves no aplicada ✅ RESUELTO (Fase 1, parcial)
 
@@ -440,6 +470,15 @@ A diferencia de aggregates y domainEvents (donde sí se emite trazabilidad), los
 #### G19. `Command` y `Query` records no llevan ID estable / correlación
 
 No hay forma de propagar `correlationId` desde el controller al handler de forma estándar. La correlación existe a nivel de eventos (Fase 1 domainEvents) pero no para UCs HTTP. **Fix:** generar todos los Commands con un campo opcional `EventMetadata metadata` opcional o un `CommandContext` aparte.
+
+> **Estado:** ✅ resuelto en Fase 7 por una vía más simple y menos invasiva que la propuesta original. En lugar de añadir un campo `metadata` al record de cada command/query, el generador emite un filtro HTTP global `shared/infrastructure/web/CorrelationFilter.java` (`OncePerRequestFilter`, `Order = HIGHEST_PRECEDENCE+10`) que:
+>
+> 1. Lee el header `X-Correlation-Id` (case-insensitive); si viene vacío o ausente genera un `UUID v4`.
+> 2. Hace push del valor a `CorrelationContext` (ThreadLocal + MDC) — el mismo contexto que ya leían los listeners de Rabbit/Kafka y el `DomainEventHandler` para poblar `EventMetadata.correlationId` en eventos salientes.
+> 3. Echo el header en la respuesta para que el cliente pueda registrarlo.
+> 4. Garantiza `CorrelationContext.clear()` en `finally` (no fuga entre threads del pool).
+>
+> Activación condicionada a `system.yaml#/sagas` no vacío (mismo gate que ya emitía `CorrelationContext.java`); si no hay sagas, no se emite — baseline byte-clean preservada. La correlación se propaga end-to-end sin tocar el contrato de los records ni del `UseCaseMediator`. Ver [docs/useCases-new-features.md § 4](../docs/useCases-new-features.md#4-correlationid-end-to-end-http--handler--eventos-g19).
 
 #### G20. Validaciones cross-field no expresables
 
@@ -453,6 +492,15 @@ No hay forma de propagar `correlationId` desde el controller al handler de forma
       errorCode: PRODUCT_PUBLISH_INCONSISTENCY
 ```
 emitido como un `@AssertTrue` con método derivado, o como guard en el handler con `// TODO` si no es trivial.
+
+> **Estado:** ✅ resuelto en Fase 7. El schema admite `useCases[].validations[]: { id, expression, errorCode, description? }` con whitelist estricta, `id` único por UC y cross-validación obligatoria de `errorCode` contra `errors[]`. La emisión es **conservadora**: el generador NO traduce `expression` a Java (eso requeriría parsear un mini-lenguaje y resolver tipos sobre el record, lo que viola el principio de no-inferencia de [AGENTS.md § 1](../AGENTS.md)). En su lugar, ambos templates `UcCommandHandler.java.ejs` y `UcQueryHandler.java.ejs` emiten al inicio de `handle(...)`:
+>
+> ```java
+> // [G20] cross-field validations — derived_from useCases[<id>].validations[]
+> // TODO useCase(<id>, validations[<vid>]): enforce expression `<expr>` and throw the exception bound to errorCode "<code>" on violation. // <description>
+> ```
+>
+> El bloque se emite tanto si `implementation: scaffold` como si es `full`. La traducción literal a Java queda para Fase 3, pero el rastro queda anclado en el código. Ver [docs/useCases-new-features.md § 5](../docs/useCases-new-features.md#5-validaciones-cross-field-declarativas-g20).
 
 #### G21. Caché de queries
 
@@ -486,6 +534,8 @@ El handler siempre lleva `@LogExceptions`. No hay forma de declarar nivel (debug
 
 `returns: Optional[ProductSummary]` no se reconoce; los queries siempre asumen "encontrado o lanza". Algunos endpoints REST devuelven `404` natural si no existe, otros devuelven `200` con cuerpo nulo. **Fix:** soportar wrappers explícitos `Optional[X]`, `Void`, además de los ya soportados `Page[X]`, `List[X]`.
 
+> **Estado:** ✅ resuelto en Fase 2. `Optional[X]` reconocido en `extractInnerReturnTypeName` / `isOptionalReturnType` / `buildQueryReturnType` y mapeado a `Optional<X>` en el handler; el controller emite `ResponseEntity<X>` con dispatch `.map(ResponseEntity::ok).orElseGet(() -> ResponseEntity.notFound().build())` y suprime `@ResponseStatus` (la entity gobierna 200/404). `Void` (explícito) normaliza a `null` en `bc-yaml-reader.normalizeVoidReturns()`, equivalente al comportamiento default sin `returns`.
+
 ---
 
 ## 3. Resumen y priorización
@@ -495,23 +545,23 @@ El handler siempre lleva `@LogExceptions`. No hay forma de declarar nivel (debug
 | P0 | G1 errorMapping → HTTP status | S | Hace que el código generado deje de devolver `500` por errores de negocio | ✅ Fase 1 |
 | P0 | G4 commands con `returns` | S | Cierra brecha controller↔OpenAPI (POST devuelve 201 + body) | ✅ Fase 1 |
 | P0 | G18 whitelist estricta de claves UC + errors | XS | Higiene básica de schema, mismo patrón ya aplicado a otros bloques | ✅ Fase 1 |
-| P0 | G14 validar `actor` contra `system.yaml.actors` | XS | Detecta erratas en `actor` | ⏳ Pendiente |
-| P1 | G2 idempotency | M | Crítico para pagos y POST repetibles | ⏳ Pendiente |
-| P1 | G3 authorization (RBAC + ownership) | M | Seguridad declarativa | ⏳ Pendiente |
-| P1 | G5 defaults + tipado fuerte en query params | S | Elimina `String→enum` manual y `if != null` en handlers | ⏳ Pendiente |
-| P1 | G7 pagination/sorting declarativos | S | Reemplaza la heurística mágica `page/size` | ⏳ Pendiente |
-| P1 | G13 cierre de cadena cross-BC FK | XS | Elimina TODOs en handlers `full` | ⏳ Pendiente |
-| P2 | G6 multi-aggregate local | L | Habilita transacciones locales legítimas | ⏳ Pendiente |
-| P2 | G9 bulk | M | Necesario para imports | ⏳ Pendiente |
-| P2 | G10 async/job tracking | L | Operaciones largas | ⏳ Pendiente |
-| P2 | G11 source: header | XS | Tenant-id, trace-id, language | ⏳ Pendiente |
-| P2 | G12 multipart upload/download | M | Imágenes, exports | ⏳ Pendiente |
-| P2 | G16/G17 description + derived_from | XS | Trazabilidad AGENTS.md compliant | ⏳ Pendiente |
-| P3 | G8 filtros range/search/in | M | Listados ricos | ⏳ Pendiente |
-| P3 | G15 trigger.kind: event enriquecido | S | UCs reactivos | ⏳ Pendiente |
-| P3 | G19 correlationId end-to-end | S | Tracing completo HTTP→evento | ⏳ Pendiente |
-| P3 | G20 validaciones cross-field | M | Reglas de coherencia | ⏳ Pendiente |
-| P3 | G21–G24 cache, rate-limit, log levels, Optional/Void returns | S c/u | Refinamientos | ⏳ Pendiente |
+| P0 | G14 validar `actor` contra `system.yaml.actors` | XS | Detecta erratas en `actor` | ✅ Fase 2 |
+| P1 | G2 idempotency | M | Crítico para pagos y POST repetibles | ✅ Fase 4 |
+| P1 | G3 authorization (RBAC + ownership) | M | Seguridad declarativa | ✅ Fase 4 |
+| P1 | G5 defaults + tipado fuerte en query params | S | Elimina `String→enum` manual y `if != null` en handlers | ✅ Fase 3 |
+| P1 | G7 pagination/sorting declarativos | S | Reemplaza la heurística mágica `page/size` | ✅ Fase 3 |
+| P1 | G13 cierre de cadena cross-BC FK | XS | Elimina TODOs en handlers `full` | ✅ Fase 3 |
+| P2 | G6 multi-aggregate local | L | Habilita transacciones locales legítimas | ✅ Fase 5 |
+| P2 | G9 bulk | M | Necesario para imports | ✅ Fase 5 |
+| P2 | G10 async/job tracking | L | Operaciones largas | ✅ Fase 5 |
+| P2 | G11 source: header | XS | Tenant-id, trace-id, language | ✅ Fase 3 |
+| P2 | G12 multipart upload/download | M | Imágenes, exports | ✅ Fase 5 |
+| P2 | G16/G17 description + derived_from | XS | Trazabilidad AGENTS.md compliant | ✅ Fase 2 |
+| P3 | G8 filtros range/search/in | M | Listados ricos | ✅ Fase 6 |
+| P3 | G15 trigger.kind: event enriquecido | S | UCs reactivos | ✅ Fase 6 |
+| P3 | G19 correlationId end-to-end | S | Tracing completo HTTP→evento | ✅ Fase 7 |
+| P3 | G20 validaciones cross-field | M | Reglas de coherencia | ✅ Fase 7 |
+| P3 | G21–G23 cache, rate-limit, log levels | S c/u | Refinamientos | ⏳ Pendiente |
 
 ---
 

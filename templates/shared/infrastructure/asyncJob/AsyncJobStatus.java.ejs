@@ -1,0 +1,16 @@
+package <%= packageName %>.shared.infrastructure.asyncJob;
+
+/**
+ * Lifecycle states for an async job row (G10).
+ *
+ * - PENDING: row inserted, worker has not yet picked it up.
+ * - RUNNING: worker has acquired the job and is processing.
+ * - SUCCEEDED: worker finished without exception; result column populated.
+ * - FAILED: worker raised an exception; result column carries the message.
+ */
+public enum AsyncJobStatus {
+    PENDING,
+    RUNNING,
+    SUCCEEDED,
+    FAILED
+}

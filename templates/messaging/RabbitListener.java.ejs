@@ -95,6 +95,16 @@ public class <%= listenerClassName %> {
         <%- f.javaType %> <%= f.name %> = objectMapper.convertValue(event.data().get("<%= f.name %>"), <%- f.javaType %>.class);
 <%   } %>
 <% }); %>
+<% if (typeof filterExpr !== 'undefined' && filterExpr) { %>
+        // [G15] derived_from: useCases[<%= useCase %>].trigger.filter
+        // Skip-ack messages that don't match the declarative filter so they
+        // exit the queue cleanly without retry / DLQ.
+        if (!(<%- filterExpr %>)) {
+            log.debug("Filter rejected event eventName=<%= eventName %>, deliveryTag={}", deliveryTag);
+            channel.basicAck(deliveryTag, false);
+            return;
+        }
+<% } %>
         try {
             useCaseMediator.dispatch(new <%= commandClassName %>(
 <% const _cmdFields = commandFields || fields || []; %>

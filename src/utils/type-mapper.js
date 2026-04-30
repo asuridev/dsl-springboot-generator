@@ -29,6 +29,8 @@ const PROHIBITED_TYPES = new Set([
 const STRING_N_RE = /^String\((\d+)\)$/;
 // Matches List[T]
 const LIST_T_RE = /^List\[(.+)\]$/;
+// [G8] Matches Range[T] (numeric/temporal range filter)
+const RANGE_T_RE = /^Range\[(.+)\]$/;
 
 /**
  * Map a YAML canonical type string to Java metadata.
@@ -71,6 +73,36 @@ function mapType(type, prop = {}) {
       javaType: `List<${inner.javaType}>`,
       importHint: 'java.util.List',
       validationAnnotations: [],
+    };
+  }
+
+  // [G8] Range[T] — declarative numeric/temporal range filter.
+  // Maps to the shared record Range<T>(min, max). The inner type drives the
+  // generic parameter and its import hint is propagated so callers can add
+  // both imports (the shared Range record + the inner type, e.g. BigDecimal).
+  const rangeMatch = RANGE_T_RE.exec(type);
+  if (rangeMatch) {
+    const inner = mapType(rangeMatch[1]);
+    return {
+      javaType: `Range<${inner.javaType}>`,
+      // The Range<T> record lives in shared/application/dtos. Callers that
+      // build import lists need both this hint and the inner type's hint.
+      importHint: null,
+      innerImportHint: inner.importHint || null,
+      validationAnnotations: [],
+      isRange: true,
+    };
+  }
+
+  // [G8] SearchText — declarative full-text-ish filter input.
+  // Carried as a String at the wire level; the aggregate fields[] declared on
+  // the input drive the Specification builder in the repository.
+  if (type === 'SearchText') {
+    return {
+      javaType: 'String',
+      importHint: null,
+      validationAnnotations: [],
+      isSearchText: true,
     };
   }
 
@@ -178,6 +210,25 @@ function mapType(type, prop = {}) {
       return {
         javaType: 'Pageable',
         importHint: 'org.springframework.data.domain.Pageable',
+        validationAnnotations: [],
+      };
+
+    // [G12] Multipart upload — represented as Spring's MultipartFile.
+    // Only valid on inputs with source: multipart (validated upstream).
+    case 'File':
+      return {
+        javaType: 'MultipartFile',
+        importHint: 'org.springframework.web.multipart.MultipartFile',
+        validationAnnotations: [],
+      };
+
+    // [G12] Binary download — represented as Spring's Resource.
+    // Only valid in useCases[].returns; controller wraps it in
+    // ResponseEntity<Resource> with application/octet-stream.
+    case 'BinaryStream':
+      return {
+        javaType: 'Resource',
+        importHint: 'org.springframework.core.io.Resource',
         validationAnnotations: [],
       };
 

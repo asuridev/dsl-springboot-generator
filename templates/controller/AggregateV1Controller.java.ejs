@@ -19,16 +19,21 @@ public class <%= controllerName %> {
         this.useCaseMediator = useCaseMediator;
     }
 <% operations.forEach(function(op) {
-    const pathArg = op.mappingPath ? '"' + op.mappingPath + '"' : '';
+    const pathArgs = [];
+    if (op.mappingPath) pathArgs.push('"' + op.mappingPath + '"');
+    if (op.consumes) pathArgs.push('consumes = ' + op.consumes);
+    const pathArg = pathArgs.join(', ');
 %>
 
     /**
      * <%= op.summary %>
      */
     @<%- op.httpAnnotation %>(<%- pathArg %>)
-    @ResponseStatus(<%= op.httpStatus %>)
-    <% if (op.isInternal) { %>@Operation(hidden = true)<% } else { %>@Operation(summary = "<%= op.summary %>")<% } %>
-    public <%- op.returnType %> <%= op.methodName %>(<%- op.methodParams %>) {
+<% if (!(op.returnType && op.returnType.indexOf('ResponseEntity<') === 0)) { %>    @ResponseStatus(<%= op.httpStatus %>)
+<% } %>    <% if (op.isInternal) { %>@Operation(hidden = true)<% } else { %>@Operation(summary = "<%= op.summary %>")<% } %>
+<% if (op.preAuthorize) { %>    @PreAuthorize("<%- op.preAuthorize %>")
+<% } %><% if (op.idempotency) { %>    @Idempotent(header = "<%- op.idempotency.header %>", ttl = "<%- op.idempotency.ttl %>")
+<% } %>    public <%- op.returnType %> <%= op.methodName %>(<%- op.methodParams %>) {
         log.info("<%- op.logMessage %>"<%- op.logArgs %>);
         <%- op.dispatchStatement %>
     }

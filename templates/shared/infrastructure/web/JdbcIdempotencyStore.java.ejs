@@ -1,0 +1,60 @@
+package <%= packageName %>.shared.infrastructure.web;
+
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Optional;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Database-backed {@link IdempotencyStore} implementation. Persistence is
+ * delegated to {@link IdempotencyRequestJpaRepository}; uniqueness on the
+ * request key is enforced by the underlying primary-key constraint, which
+ * makes {@link #saveIfAbsent} naturally atomic.
+ *
+ * Enabled when at least one use case declares {@code idempotency.storage:
+ * database}. The bean is unconditional in the generated project — selection
+ * between this and a redis-backed implementation is left to Spring profiles
+ * or explicit qualifiers.
+ *
+ * derived_from: useCases[*].idempotency.storage = database
+ */
+@Component
+public class JdbcIdempotencyStore implements IdempotencyStore {
+
+    private final IdempotencyRequestJpaRepository repository;
+
+    public JdbcIdempotencyStore(IdempotencyRequestJpaRepository repository) {
+        this.repository = repository;
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<StoredResponse> find(String key) {
+        return repository.findById(key)
+            .filter(row -> row.getExpiresAt().isAfter(Instant.now()))
+            .map(row -> new StoredResponse(row.getResponseStatus(), row.getResponseBody(), row.getResponseContentType()));
+    }
+
+    @Override
+    @Transactional
+    public boolean saveIfAbsent(String key, String requestHash, StoredResponse response, Duration ttl) {
+        if (repository.existsById(key)) return false;
+        IdempotencyRequestJpa entity = IdempotencyRequestJpa.builder()
+            .key(key)
+            .requestHash(requestHash)
+            .responseStatus(response.status())
+            .responseBody(response.body())
+            .responseContentType(response.contentType())
+            .expiresAt(Instant.now().plus(ttl))
+            .build();
+        try {
+            repository.save(entity);
+            return true;
+        } catch (DataIntegrityViolationException duplicate) {
+            // Lost the race — another caller won.
+            return false;
+        }
+    }
+}

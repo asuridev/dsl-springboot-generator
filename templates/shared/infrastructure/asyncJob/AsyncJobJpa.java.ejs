@@ -1,0 +1,59 @@
+package <%= packageName %>.shared.infrastructure.asyncJob;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.Id;
+import jakarta.persistence.Lob;
+import jakarta.persistence.Table;
+import java.time.Instant;
+import java.util.UUID;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+/**
+ * JPA row backing the async job tracking table (G10).
+ *
+ * Persisted by command handlers declaring `async.mode: jobTracking`.
+ * The worker (declared by the operator under `// TODO useCase(<id>, async)`)
+ * is responsible for transitioning {@code status} from PENDING → RUNNING →
+ * SUCCEEDED|FAILED and populating {@code result}.
+ */
+@Entity
+@Table(name = "async_job")
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class AsyncJobJpa {
+
+    @Id
+    @Column(name = "id", nullable = false)
+    private UUID id;
+
+    @Column(name = "type", length = 128, nullable = false)
+    private String type;
+
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", length = 16, nullable = false)
+    private AsyncJobStatus status;
+
+    @Lob
+    @Column(name = "payload")
+    private byte[] payload;
+
+    @Lob
+    @Column(name = "result")
+    private byte[] result;
+
+    @Column(name = "created_at", nullable = false)
+    private Instant createdAt;
+
+    @Column(name = "updated_at", nullable = false)
+    private Instant updatedAt;
+}

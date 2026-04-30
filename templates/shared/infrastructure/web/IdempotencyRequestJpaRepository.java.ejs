@@ -1,0 +1,13 @@
+package <%= packageName %>.shared.infrastructure.web;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+/**
+ * Spring Data repository for {@link IdempotencyRequestJpa}.
+ *
+ * derived_from: useCases[*].idempotency.storage = database
+ */
+@Repository
+public interface IdempotencyRequestJpaRepository extends JpaRepository<IdempotencyRequestJpa, String> {
+}

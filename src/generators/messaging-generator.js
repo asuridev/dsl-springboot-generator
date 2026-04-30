@@ -374,6 +374,9 @@ async function generateRabbitListener(consumedEvent, packageName, moduleName, li
       consumerIdempotencyEnabled,
       sagasEnabled,
       sagaSteps,
+      // [G15] inline Java boolean expression. When non-null the listener
+      // skip-acks any message that fails the predicate before dispatching.
+      filterExpr: consumedEvent.filterExpr || null,
     }
   );
 }
@@ -654,6 +657,8 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
         queueKey,
         payload:       ev.payload,
         commandPayload,
+        // [G15] optional Java boolean expression evaluated on deserialized fields.
+        filterExpr:    uc.trigger.filter || null,
       };
     }
 
@@ -708,6 +713,8 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
       queueKey,
       payload:       commandPayload,
       commandPayload,
+      // [G15] optional Java boolean expression evaluated on deserialized fields.
+      filterExpr:    uc.trigger.filter || null,
     };
   });
 

@@ -89,7 +89,15 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   const outboxEnabled       = !!reliability.outbox;
   const idempotencyEnabled  = !!reliability.consumerIdempotency;
   const persistentProjectionsPresent = hasAnyPersistentProjection(allBcYamls);
-  const flywayEnabled       = outboxEnabled || idempotencyEnabled || persistentProjectionsPresent;
+  // [G2] Request idempotency requires Flyway to provision idempotency_request.
+  const requestIdempotencyPresent = (allBcYamls || []).some((bc) =>
+    (bc && bc.useCases || []).some((uc) => uc && uc.idempotency)
+  );
+  // [G10] Async/job-tracking requires Flyway to provision async_job.
+  const asyncJobPresent = (allBcYamls || []).some((bc) =>
+    (bc && bc.useCases || []).some((uc) => uc && uc.async && uc.async.mode === 'jobTracking')
+  );
+  const flywayEnabled       = outboxEnabled || idempotencyEnabled || persistentProjectionsPresent || requestIdempotencyPresent || asyncJobPresent;
 
   // ── Resilience + OAuth2 flags (Phase 5) ──────────────────────────────
   // derived_from: system.yaml#/integrations[*]/resilience + .../auth
@@ -317,6 +325,37 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
     { packageName }
   );
 
+  // ── Shared: BulkResult (G9) ───────────────────────────────────────────────
+  // Rendered only when at least one UC declares `bulk:` — keeps the scaffold
+  // byte-clean for projects that never use bulk wrappers.
+  const bulkPresent = (allBcYamls || []).some((bc) =>
+    (bc && bc.useCases || []).some((uc) => uc && uc.bulk)
+  );
+  if (bulkPresent) {
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'shared', 'application', 'dtos', 'BulkResult.java.ejs'),
+      path.join(sharedDtosDir, 'BulkResult.java'),
+      { packageName }
+    );
+  }
+
+  // ── Shared: Range<T> (G8) ─────────────────────────────────────────────────
+  // Rendered only when at least one UC input declares type "Range[T]". Stays
+  // out of projects that never use range filters.
+  const rangePresent = (allBcYamls || []).some((bc) =>
+    (bc && bc.useCases || []).some((uc) =>
+      Array.isArray(uc && uc.input) &&
+      uc.input.some((inp) => typeof inp.type === 'string' && /^Range\[.+\]$/.test(inp.type))
+    )
+  );
+  if (rangePresent) {
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'shared', 'application', 'dtos', 'Range.java.ejs'),
+      path.join(sharedDtosDir, 'Range.java'),
+      { packageName }
+    );
+  }
+
   // ── Shared: UseCase configuration (container / mediator / auto-register) ──
 
   const useCaseConfigDir = path.join(
@@ -344,6 +383,19 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'shared', 'configurations', 'securityConfig', 'SecurityConfig.java.ejs'),
     path.join(securityConfigDir, 'SecurityConfig.java'),
+    { packageName }
+  );
+
+  // ── Shared: SecurityContextUtil (G3) ──────────────────────────────────────
+  // Static helper consumed by handlers when uc.authorization.ownership is
+  // declared. Always rendered — cost is one tiny class and it is referenced
+  // only when authorization rules require it.
+  const securityUtilDir = path.join(
+    javaMainDir, 'shared', 'infrastructure', 'security'
+  );
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'shared', 'infrastructure', 'security', 'SecurityContextUtil.java.ejs'),
+    path.join(securityUtilDir, 'SecurityContextUtil.java'),
     { packageName }
   );
 

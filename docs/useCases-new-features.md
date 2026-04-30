@@ -11,7 +11,9 @@ Este documento describe las extensiones del schema YAML de Bounded Context intro
 1. [`returns` en commands — POST que devuelve el recurso creado (G4)](#1-returns-en-commands--post-que-devuelve-el-recurso-creado-g4)
 2. [`errors[]` con whitelist estricta y `httpStatus` enumerado (G1 + G18)](#2-errors-con-whitelist-estricta-y-httpstatus-enumerado-g1--g18)
 3. [Trazabilidad `derived_from` en errores de dominio (G1 cont.)](#3-trazabilidad-derived_from-en-errores-de-dominio-g1-cont)
-4. [Limitaciones (lo que sigue NO soportado)](#4-limitaciones-lo-que-sigue-no-soportado)
+4. [`correlationId` end-to-end HTTP → handler → eventos (G19)](#4-correlationid-end-to-end-http--handler--eventos-g19)
+5. [Validaciones cross-field declarativas (G20)](#5-validaciones-cross-field-declarativas-g20)
+6. [Limitaciones (lo que sigue NO soportado)](#6-limitaciones-lo-que-sigue-no-soportado)
 
 ---
 
@@ -238,7 +240,152 @@ Esto cierra una omisión histórica: los aggregates, value objects y domain even
 
 ---
 
-## 4. Limitaciones (lo que sigue NO soportado)
+## 4. `correlationId` end-to-end HTTP → handler → eventos (G19)
+
+Antes, el `correlationId` sólo aparecía en los `EventEnvelope` salientes de mensajería (sagas, listeners). Las peticiones HTTP entrantes no abrían ningún contexto de correlación, así que cualquier evento publicado por un command/query iniciado vía REST se emitía sin `correlationId` y se rompía la trazabilidad de extremo a extremo.
+
+A partir de Fase 7, el generador emite un **filtro HTTP de entrada** que abre el `CorrelationContext` (ThreadLocal + MDC) para cada petición. El valor se propaga a `MDC.get("correlationId")`, donde:
+
+- los logs de aplicación lo emiten automáticamente,
+- los `DomainEventHandler` lo leen al construir `EventMetadata.create(...)` para los eventos que el UC publica,
+- los listeners de mensajería (Rabbit/Kafka) ya existentes cierran el ciclo cuando el evento cruza un BC.
+
+### Activación
+
+El filtro se genera **automáticamente** cuando hay sagas declaradas en `system.yaml#/sagas` (es decir, cuando ya se está generando `CorrelationContext.java`). No requiere ningún hint nuevo en `{bc}.yaml`. Si no hay sagas, no se emite — la baseline byte-clean se preserva.
+
+### Contrato HTTP
+
+| Aspecto                          | Comportamiento                                                                |
+| -------------------------------- | ----------------------------------------------------------------------------- |
+| Header de entrada                | `X-Correlation-Id` (case-insensitive)                                         |
+| Si el header viene vacío/ausente | Se genera un `UUID v4` automáticamente                                        |
+| Header de salida                 | `X-Correlation-Id` echo en la respuesta para que el cliente pueda registrarlo |
+| Orden del filtro                 | `Ordered.HIGHEST_PRECEDENCE + 10` (antes de logging, idempotency, auth)       |
+| Limpieza                         | `CorrelationContext.clear()` en `finally` — no fuga entre threads del pool    |
+
+### Código generado — `CorrelationFilter.java`
+
+```java
+package co.com.asuarez.shared.infrastructure.web;
+
+@Component
+@Order(Ordered.HIGHEST_PRECEDENCE + 10)
+public class CorrelationFilter extends OncePerRequestFilter {
+
+    public static final String HEADER = "X-Correlation-Id";
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain chain) throws ServletException, IOException {
+        String correlationId = request.getHeader(HEADER);
+        if (correlationId == null || correlationId.isBlank()) {
+            correlationId = UUID.randomUUID().toString();
+        }
+        try {
+            CorrelationContext.set(correlationId);
+            response.setHeader(HEADER, correlationId);
+            chain.doFilter(request, response);
+        } finally {
+            CorrelationContext.clear();
+        }
+    }
+}
+```
+
+> Output: `shared/infrastructure/web/CorrelationFilter.java`. Se genera junto a `shared/infrastructure/correlation/CorrelationContext.java` por el `saga-generator`.
+
+### Cuándo NO usarlo
+
+Es transparente para el desarrollador: si las sagas están declaradas, todo command/query iniciado vía HTTP tiene correlación end-to-end automáticamente. No hay nada que apagar; si el cliente envía `X-Correlation-Id`, se respeta.
+
+---
+
+## 5. Validaciones cross-field declarativas (G20)
+
+Las validaciones a nivel de campo (`@NotBlank`, `@Size`, `@Pattern`, etc.) ya se emiten desde el schema de `input[]`. Pero **las validaciones que cruzan dos o más campos del mismo command/query** (ej. "el SKU no puede coincidir con el nombre", "la fecha de fin debe ser posterior a la de inicio") no podían declararse en el YAML — quedaban como reglas implícitas que la Fase 3 debía descubrir leyendo `flows.md`.
+
+A partir de Fase 7, cada UC puede declarar `validations[]` para enumerar estas guardas de forma trazable. El generador **no traduce la expresión a Java** — emite un `// TODO` literal en el handler, fiel al principio de no-inferencia de [AGENTS.md](../AGENTS.md). Pero la expresión, su `id` y el `errorCode` ligado quedan documentados en el código y trazables desde el YAML.
+
+### YAML
+
+```yaml
+useCases:
+  - id: UC-PRD-001
+    name: CreateProduct
+    type: command
+    aggregate: Product
+    method: create
+    input:
+      - { name: name, type: String(200), required: true, source: body }
+      - { name: sku,  type: String(100), required: true, source: body }
+      # …
+    rules: [PRD-RULE-002, PRD-RULE-003]
+    validations:                                                        # ← nuevo
+      - id: skuVsName
+        expression: "!command.sku().equalsIgnoreCase(command.name())"
+        errorCode: PRODUCT_SKU_INVALID
+        description: SKU must not match the product name (sanity check).
+      - id: priceWithinRange
+        expression: "command.price().amount().compareTo(BigDecimal.ZERO) > 0"
+        errorCode: PRODUCT_PRICE_INVALID
+    implementation: scaffold
+```
+
+### Schema admitido en cada entrada de `validations[]`
+
+| Clave         | Tipo   | Obligatoria | Notas                                                                       |
+| ------------- | ------ | ----------- | --------------------------------------------------------------------------- |
+| `id`          | string | ✅          | Identificador único dentro del UC; se usa en el `// TODO` y para diagnóstico |
+| `expression`  | string | ✅          | Expresión literal — el generador NO la traduce a Java                       |
+| `errorCode`   | string | ✅          | Debe existir en `errors[]` (cross-validación estricta)                      |
+| `description` | string | ❌          | Se emite como comentario adicional en el `// TODO`                          |
+
+> Cualquier otra clave aborta el build. `id` debe ser único por UC. Si `errorCode` no existe en `errors[]`, el build falla con un mensaje claro.
+
+### Código generado — `CreateProductCommandHandler.java`
+
+```java
+@Override
+@Transactional
+@LogExceptions
+public void handle(CreateProductCommand command) {
+    // [G20] cross-field validations — derived_from useCases[UC-PRD-001].validations[]
+    // TODO useCase(UC-PRD-001, validations[skuVsName]): enforce expression `!command.sku().equalsIgnoreCase(command.name())` and throw the exception bound to errorCode "PRODUCT_SKU_INVALID" on violation. // SKU must not match the product name (sanity check).
+    // TODO useCase(UC-PRD-001, validations[priceWithinRange]): enforce expression `command.price().amount().compareTo(BigDecimal.ZERO) > 0` and throw the exception bound to errorCode "PRODUCT_PRICE_INVALID" on violation.
+
+    // TODO: implement business logic — ver catalog-flows.md
+    throw new UnsupportedOperationException("Not implemented yet");
+}
+```
+
+> Mismo patrón en `UcQueryHandler` cuando un query declara `validations[]`. La emisión del bloque es independiente de `implementation`: aparece tanto si es `scaffold` como si es `full`.
+
+### Por qué literal y no traducido a Java
+
+Traducir `expression` a Java exigiría parsear un mini-lenguaje y resolver tipos sobre el record del command — eso es **inferencia de dominio** y viola [AGENTS.md § 1](../AGENTS.md). El compromiso explícito es:
+
+1. **El YAML declara la intención** — qué condición debe cumplirse y a qué error mapea.
+2. **El generador documenta y referencia la intención** — `// TODO useCase(<id>, validations[<vid>])` deja un punto de implementación rastreable y testeable.
+3. **La Fase 3 (IA o humano) traduce la expresión a código Java** usando `command.<getter>()`, `Objects`, etc.
+
+Esto deja la regla declarada en un único lugar (el YAML) y el código generado siempre coherente con el diseño.
+
+### Cuándo usarlo
+
+- Reglas que cruzan dos o más campos del mismo command/query (`a != b`, `start < end`, `if x then y must be present`).
+- Reglas que dependen del shape del input pero no son responsabilidad del aggregate (las reglas de aggregate van en `domainRules`).
+
+### Cuándo NO usarlo
+
+- Validaciones por campo individual — usa la sección `input[].required`/`type:` para que el generador emita `@NotBlank`, `@Size`, `@Min`, etc.
+- Reglas de invariante del aggregate — usa `domainRules` del aggregate.
+- Reglas que requieren consultar el repositorio (unicidad, FK existence) — usa `domainRules` con `type: uniqueness` o `fkValidations[]`.
+
+---
+
+## 6. Limitaciones (lo que sigue NO soportado)
 
 Estos gaps están identificados en [analisis/useCases-analisis.md](../analisis/useCases-analisis.md) pero **NO** están cubiertos en Fase 1. Si el YAML los declara, el generador emite `// TODO useCase(<id>, <aspecto>)` y nunca infiere.
 
@@ -257,8 +404,6 @@ Estos gaps están identificados en [analisis/useCases-analisis.md](../analisis/u
 | G15 | `trigger.kind: event` enriquecido               | Fase 4        |
 | G16 | `description` para Javadoc                      | Fase 3        |
 | G17 | `derived_from` en records y handlers            | Fase 3        |
-| G19 | `correlationId` end-to-end HTTP→evento          | Fase 5        |
-| G20 | Validaciones cross-field declarativas           | Fase 5        |
 | G21 | Caché de queries                                | Fase 6        |
 | G22 | Rate limiting                                   | Fase 6        |
 | G23 | Niveles de logging por UC                       | Fase 6        |

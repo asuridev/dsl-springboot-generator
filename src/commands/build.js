@@ -14,10 +14,13 @@ const { generateValueObjects } = require('../generators/value-object-generator')
 const { generateAggregates } = require('../generators/aggregate-generator');
 const { generateJpaEntities } = require('../generators/jpa-entity-generator');
 const { generateRepositories } = require('../generators/repository-generator');
+const { generateSpecifications } = require('../generators/specifications-generator');
 const { generateApplicationLayer, generateProjections } = require('../generators/application-generator');
 const { generateOutboundHttpAdapters } = require('../generators/outbound-http-generator');
 const { generateExternalAdapters } = require('../generators/external-adapter-generator');
 const { generateOutboxArtifacts } = require('../generators/outbox-generator');
+const { generateRequestIdempotencyArtifacts } = require('../generators/request-idempotency-generator');
+const { generateAsyncJobArtifacts } = require('../generators/async-job-generator');
 const { generateProjectionUpdaters } = require('../generators/projection-updater-generator');
 const { generateSagaArtifacts } = require('../generators/saga-generator');
 const { generateControllerLayer } = require('../generators/controller-generator');
@@ -293,6 +296,7 @@ async function buildCommand(options = {}) {
     for (const bcYaml of allBcYamls) {
       await generateJpaEntities(bcYaml, resolvedConfig, outputDir);
       await generateRepositories(bcYaml, resolvedConfig, outputDir);
+      await generateSpecifications(bcYaml, resolvedConfig, outputDir);
     }
     infraSpinner.succeed(`Infrastructure layer generated for ${allBcYamls.length} bounded context(s)`);
 
@@ -365,6 +369,40 @@ async function buildCommand(options = {}) {
       throw err;
     }
     const reliabilityFlags = (system.infrastructure && system.infrastructure.reliability) || {};
+
+    // ── 8d-bis. Request idempotency (G2) ──────────────────────────────────────
+    // derived_from: useCases[*].idempotency
+    const requestIdempotencySpinner = ora('Generating request-idempotency artifacts…').start();
+    try {
+      const result = await generateRequestIdempotencyArtifacts(allBcYamls, resolvedConfig, outputDir);
+      if (result.enabled) {
+        requestIdempotencySpinner.succeed(
+          `Request-idempotency artifacts generated: ${result.useCaseIds.length} use case(s) (${result.useCaseIds.join(', ')})`
+        );
+      } else {
+        requestIdempotencySpinner.info('No use case declares idempotency — skipping request-idempotency artifacts');
+      }
+    } catch (err) {
+      requestIdempotencySpinner.fail(`Request-idempotency artifact generation failed: ${err.message}`);
+      throw err;
+    }
+
+    // ── 8d-ter. Async job tracking (G10) ──────────────────────────────
+    // derived_from: useCases[*].async.mode = jobTracking
+    const asyncJobSpinner = ora('Generating async-job-tracking artifacts…').start();
+    try {
+      const result = await generateAsyncJobArtifacts(allBcYamls, resolvedConfig, outputDir);
+      if (result.enabled) {
+        asyncJobSpinner.succeed(
+          `Async-job artifacts generated: ${result.useCaseIds.length} use case(s) (${result.useCaseIds.join(', ')})`
+        );
+      } else {
+        asyncJobSpinner.info('No use case declares async — skipping async-job artifacts');
+      }
+    } catch (err) {
+      asyncJobSpinner.fail(`Async-job artifact generation failed: ${err.message}`);
+      throw err;
+    }
 
     // ── 8e. Persistent projection updaters (Phase 3) ───────────────────
     const projectionSpinner = ora('Generating persistent projection updaters…').start();

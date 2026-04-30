@@ -1,0 +1,16 @@
+package <%= packageName %>.shared.application.dtos;
+
+import java.util.UUID;
+
+/**
+ * Reference to an asynchronously-executed job (G10).
+ *
+ * Returned by command handlers that declare `async.mode: jobTracking`. The caller
+ * receives the {@code jobId} immediately (controller responds 202 Accepted) and
+ * polls the status endpoint declared in the YAML to observe progress and the
+ * final result.
+ *
+ * @param jobId UUID of the persisted async_job row
+ */
+public record JobReference(UUID jobId) {
+}

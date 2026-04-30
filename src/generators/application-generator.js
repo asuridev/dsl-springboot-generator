@@ -242,8 +242,14 @@ function isSingleStringVo(voType, bcYaml) {
  */
 function extractInnerReturnTypeName(returns) {
   if (!returns || typeof returns !== 'string') return null;
-  const m = /^(?:Page|List)\[(.+)\]$/.exec(returns);
+  const m = /^(?:Page|List|Optional)\[(.+)\]$/.exec(returns);
   return m ? m[1] : returns;
+}
+
+// [G24] An Optional[X] return type makes the handler return Optional<X> and
+// flips the controller to ResponseEntity<X> with 200/404 mapping.
+function isOptionalReturnType(returnsStr) {
+  return typeof returnsStr === 'string' && /^Optional\[/.test(returnsStr);
 }
 
 function findProjection(name, bcYaml) {
@@ -313,6 +319,20 @@ function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Se
     const innerJavaType = javaTypeForDto(listDtoMatch[1], packageName, moduleName, imports, voNames, bcYaml);
     return `List<${innerJavaType}>`;
   }
+  // [G8] Range[T] — declarative range filter. Carried as Range<T> from the
+  // shared module; the inner type is resolved recursively so its imports are
+  // collected (e.g. Range[Money] needs both Range and Money imports).
+  const rangeDtoMatch = /^Range\[(.+)\]$/.exec(type);
+  if (rangeDtoMatch) {
+    imports.add(`${packageName}.shared.application.dtos.Range`);
+    const innerJavaType = javaTypeForDto(rangeDtoMatch[1], packageName, moduleName, imports, voNames, bcYaml);
+    return `Range<${innerJavaType}>`;
+  }
+  // [G8] SearchText — wire-level String. The Specification builder consumes
+  // it field-by-field per the input's fields[] declaration.
+  if (type === 'SearchText') {
+    return 'String';
+  }
   if (type === 'Uuid') {
     imports.add('java.util.UUID');
     return 'UUID';
@@ -336,6 +356,16 @@ function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Se
   if (type === 'Json' || type === 'JSON') {
     imports.add('com.fasterxml.jackson.databind.JsonNode');
     return 'JsonNode';
+  }
+  // [G12] Multipart upload — Spring's MultipartFile carried through the command record.
+  if (type === 'File') {
+    imports.add('org.springframework.web.multipart.MultipartFile');
+    return 'MultipartFile';
+  }
+  // [G12] Binary download — Spring's Resource produced by the query handler.
+  if (type === 'BinaryStream') {
+    imports.add('org.springframework.core.io.Resource');
+    return 'Resource';
   }
   if (type === 'Text' || type === 'Email' || type === 'Url') return 'String';
   if (type === 'Boolean') return 'Boolean';
@@ -521,6 +551,16 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
     // Fields sourced from authContext are injected in the handler, not in the command record
     if (input.source === 'authContext') continue;
 
+    // [G12] Multipart inputs travel as MultipartFile in the command record. Bean
+    // Validation annotations (@NotNull/@Size) do not behave well across
+    // multipart boundaries — the controller emits explicit guards instead
+    // (size and contentTypes).
+    if (input.source === 'multipart') {
+      imports.add('org.springframework.web.multipart.MultipartFile');
+      fields.push({ type: 'MultipartFile', name: input.name, annotations: [] });
+      continue;
+    }
+
     const rawType = input.type;
     const isOptional = input.required === false;
 
@@ -615,14 +655,38 @@ function isPagedReturnType(returnsStr) {
 
 // ─── Query fields ─────────────────────────────────────────────────────────────
 
-function buildQueryFields(uc, agg, repoMethods) {
+function buildQueryFields(uc, agg, repoMethods, bcYaml = null, packageName = null, moduleName = null) {
   const fields = [];
   const imports = new Set();
   const propMap = buildAggPropertyMap(agg);
+  const enumNames = new Set((bcYaml?.enums || []).map((e) => e.name));
 
   for (const input of (uc.input || [])) {
     const type = input.type;
     const isOptional = input.required === false;
+
+    // [G8] Range[T] — declarative range filter; carried as Range<T> in the Query record.
+    const rangeMatch = /^Range\[(.+)\]$/.exec(type);
+    if (rangeMatch) {
+      const inner = mapType(rangeMatch[1]);
+      if (packageName) imports.add(`${packageName}.shared.application.dtos.Range`);
+      if (inner.importHint) imports.add(inner.importHint);
+      const requiredAnnotations = isOptional ? [] : (() => {
+        imports.add(`${JAKARTA}.NotNull`);
+        return ['@NotNull'];
+      })();
+      fields.push({ type: `Range<${inner.javaType}>`, name: input.name, annotations: requiredAnnotations });
+      continue;
+    }
+    // [G8] SearchText — wire-level String; aggregate fields[] consumed by Specs builder.
+    if (type === 'SearchText') {
+      const requiredAnnotations = isOptional ? [] : (() => {
+        imports.add(`${JAKARTA}.NotBlank`);
+        return ['@NotBlank'];
+      })();
+      fields.push({ type: 'String', name: input.name, annotations: requiredAnnotations });
+      continue;
+    }
 
     if (type === 'Integer' && (input.name === 'page' || input.name === 'size')) {
       // Pagination primitives — no validation annotations
@@ -634,8 +698,19 @@ function buildQueryFields(uc, agg, repoMethods) {
         return ['@NotBlank'];
       })();
       fields.push({ type: 'String', name: input.name, annotations: requiredAnnotations });
+    } else if (enumNames.has(type)) {
+      // [G5] Strong-typed enum query field — Spring binds the enum directly,
+      // eliminating the need for Enum.valueOf in the handler.
+      if (packageName && moduleName) {
+        imports.add(`${packageName}.${moduleName}.domain.enums.${type}`);
+      }
+      const requiredAnnotations = isOptional ? [] : (() => {
+        imports.add(`${JAKARTA}.NotNull`);
+        return ['@NotNull'];
+      })();
+      fields.push({ type, name: input.name, annotations: requiredAnnotations });
     } else {
-      // String / Enum / other filter params
+      // String / other filter params
       const propDef = propMap.get(input.name);
       const requiredAnnotations = isOptional ? [] : (() => {
         imports.add(`${JAKARTA}.NotBlank`);
@@ -650,6 +725,18 @@ function buildQueryFields(uc, agg, repoMethods) {
     }
   }
 
+  // [G7] Declarative pagination — when uc.pagination is declared, ensure the Query
+  // record exposes int page, int size, String sortBy, String sortDirection. Existing
+  // page/size inputs are honoured (already added above); sortBy/sortDirection are
+  // synthesised so the YAML does not need to declare them explicitly.
+  if (uc.pagination) {
+    const existing = new Set(fields.map((f) => f.name));
+    if (!existing.has('page')) fields.push({ type: 'int', name: 'page', annotations: [] });
+    if (!existing.has('size')) fields.push({ type: 'int', name: 'size', annotations: [] });
+    if (!existing.has('sortBy')) fields.push({ type: 'String', name: 'sortBy', annotations: [] });
+    if (!existing.has('sortDirection')) fields.push({ type: 'String', name: 'sortDirection', annotations: [] });
+  }
+
   return { fields, imports: [...imports] };
 }
 
@@ -658,6 +745,9 @@ function buildQueryFields(uc, agg, repoMethods) {
 function buildQueryReturnType(uc, agg, repoMethods) {
   const raw = uc.returns;
   if (!raw) return `${agg.name}ResponseDto`;
+
+  // [G12] BinaryStream → Resource (Spring core io).
+  if (raw === 'BinaryStream') return 'Resource';
 
   // Normalize OpenAPI schema name → Java class name for aggregate ResponseDtos
   // e.g. "CategoryResponse" → "CategoryResponseDto", "ProductResponse" → "ProductResponseDto"
@@ -670,6 +760,9 @@ function buildQueryReturnType(uc, agg, repoMethods) {
   // List[SomeDto] → List<SomeDto>
   const listMatch = /^List\[(.+)\]$/.exec(raw);
   if (listMatch) return `List<${normalize(listMatch[1])}>`;
+  // [G24] Optional[SomeDto] → Optional<SomeDto>
+  const optMatch = /^Optional\[(.+)\]$/.exec(raw);
+  if (optMatch) return `Optional<${normalize(optMatch[1])}>`;
   // Bare DTO name (e.g. ProductResponse → ProductResponseDto)
   return normalize(raw);
 }
@@ -689,6 +782,32 @@ function isSubEntityQuery(uc, agg) {
 }
 
 // ─── Command handler body ─────────────────────────────────────────────────────
+
+/**
+ * [G3] Appends an ownership guard to the lines[] when uc.authorization.ownership
+ * is declared. The guard compares the loaded aggregate's `field` against the JWT
+ * claim resolved via SecurityContextUtil, and throws ForbiddenException when the
+ * caller is neither the owner nor a member of allowRoleBypass[].
+ *
+ * Mutates `lines` and `extraImports` in place. No-op when no ownership block is
+ * declared.
+ */
+function appendOwnershipGuard(lines, extraImports, uc, aggVarName, packageName) {
+  const ownership = uc && uc.authorization && uc.authorization.ownership;
+  if (!ownership) return;
+  const { field, claim } = ownership;
+  const bypass = ownership.allowRoleBypass || [];
+  extraImports.add(`${packageName}.shared.infrastructure.security.SecurityContextUtil`);
+  extraImports.add(`${packageName}.shared.domain.customExceptions.ForbiddenException`);
+  extraImports.add('java.util.Objects');
+  const bypassExpr = bypass.length > 0
+    ? ` && !SecurityContextUtil.hasAnyRole(${bypass.map((r) => `"${r.replace(/^ROLE_/, '')}"`).join(', ')})`
+    : '';
+  lines.push(`        // [G3] Ownership guard — derived_from: useCases[${uc.id}].authorization`);
+  lines.push(`        if (!Objects.equals(String.valueOf(${aggVarName}.${field}()), SecurityContextUtil.currentUserClaim("${claim}"))${bypassExpr}) {`);
+  lines.push(`            throw new ForbiddenException();`);
+  lines.push(`        }`);
+}
 
 function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcYaml) {
   const lines = [];
@@ -715,18 +834,32 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
     );
   }
 
-  // FK validations — only for local repos; cross-BC ports are scaffold-only (// TODO)
+  // [G3] Ownership guard — runs after the aggregate is loaded.
+  appendOwnershipGuard(lines, extraImports, uc, aggVarName, packageName);
+
+  // FK validations — local repos check via findById; cross-BC ports check via existsX (G13).
   for (const fk of uc.fkValidations || []) {
-    if (!hasLocalReadModel(fk, bcYaml || { bc: moduleName, aggregates: [] })) continue;
     const fkErrorCode = fk.error || fk.notFoundError; // support both schemas
     const fkErrorEntry = fkErrorCode ? errorMap[fkErrorCode] : null;
     const fkErrorType = fkErrorEntry ? fkErrorEntry.errorType : 'NotFoundException';
     const fkParam = fk.param || fk.field; // support both schemas
-    const fkRepoFieldName = `${toCamelCase(fk.aggregate)}Repository`;
-    extraImports.add(`${packageName}.${moduleName}.domain.errors.${fkErrorType}`);
-    lines.push(
-      `        if (${fkRepoFieldName}.findById(UUID.fromString(command.${fkParam}())).isEmpty()) throw new ${fkErrorType}();`
-    );
+    const fkAggregate = fk.aggregate || fk.references;
+    if (!fkAggregate) continue;
+    if (hasLocalReadModel(fk, bcYaml || { bc: moduleName, aggregates: [] })) {
+      const fkRepoFieldName = `${toCamelCase(fkAggregate)}Repository`;
+      extraImports.add(`${packageName}.${moduleName}.domain.errors.${fkErrorType}`);
+      lines.push(
+        `        if (${fkRepoFieldName}.findById(UUID.fromString(command.${fkParam}())).isEmpty()) throw new ${fkErrorType}();`
+      );
+    } else if (fk.bc) {
+      // [G13] Cross-BC FK without local read model — invoke ServicePort.existsX(UUID).
+      const portFieldName = `${toCamelCase(fk.bc)}ServicePort`;
+      const methodName = `exists${fkAggregate}`;
+      extraImports.add(`${packageName}.${moduleName}.domain.errors.${fkErrorType}`);
+      lines.push(
+        `        if (!${portFieldName}.${methodName}(UUID.fromString(command.${fkParam}()))) throw new ${fkErrorType}();`
+      );
+    }
   }
 
   // Resolve domainMethod params to build the call args
@@ -851,7 +984,7 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
 
 // ─── Query handler body ───────────────────────────────────────────────────────
 
-function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, moduleName, projection = null) {
+function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, moduleName, projection = null, bcYaml = null) {
   const lines = [];
   const extraImports = new Set();
 
@@ -874,22 +1007,41 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
   const returnTypeStr = uc.returns || `${agg.name}ResponseDto`;
   const isPaged = isPagedReturnType(returnTypeStr);
   const isList = !isPaged && /^List\[/.test(returnTypeStr);
+  const isOptional = !isPaged && !isList && isOptionalReturnType(returnTypeStr);
 
   if (loadAggInput) {
     // Path A: single entity by ID
+    const hasOwnership = !!(uc.authorization && uc.authorization.ownership);
+    if (isOptional && !hasOwnership) {
+      // [G24] Optional[X] semantics: do not throw when missing — let the
+      // controller translate the empty Optional into a 404 response.
+      extraImports.add('java.util.Optional');
+      lines.push(
+        `        return ${repoFieldName}.findById(UUID.fromString(query.${loadAggInput.name}())).map(${mapperFieldName}::${mapperSingleMethod});`
+      );
+      return { body: lines.join('\n'), extraImports: [...extraImports].sort() };
+    }
     const errorEntry = hasNotFoundError ? errorMap[notFoundErrors[0]] : null;
     const errorType = errorEntry ? errorEntry.errorType : null;
     if (errorType) {
       extraImports.add(`${packageName}.${moduleName}.domain.errors.${errorType}`);
       lines.push(
-        `        ${agg.name} entity = ${repoFieldName}.findById(UUID.fromString(query.${loadAggInput.name}())).orElseThrow(${errorType}::new);`
+        `        ${agg.name} ${aggVarName} = ${repoFieldName}.findById(UUID.fromString(query.${loadAggInput.name}())).orElseThrow(${errorType}::new);`
       );
     } else {
       lines.push(
-        `        ${agg.name} entity = ${repoFieldName}.findById(UUID.fromString(query.${loadAggInput.name}())).orElseThrow();`
+        `        ${agg.name} ${aggVarName} = ${repoFieldName}.findById(UUID.fromString(query.${loadAggInput.name}())).orElseThrow();`
       );
     }
-    lines.push(`        return ${mapperFieldName}.${mapperSingleMethod}(entity);`);
+    // [G3] Ownership guard after load.
+    appendOwnershipGuard(lines, extraImports, uc, aggVarName, packageName);
+    if (isOptional) {
+      // Ownership-protected Optional[X]: load+guard force orElseThrow path; wrap result in Optional.of.
+      extraImports.add('java.util.Optional');
+      lines.push(`        return Optional.of(${mapperFieldName}.${mapperSingleMethod}(${aggVarName}));`);
+    } else {
+      lines.push(`        return ${mapperFieldName}.${mapperSingleMethod}(${aggVarName});`);
+    }
     return { body: lines.join('\n'), extraImports: [...extraImports].sort() };
   }
 
@@ -954,7 +1106,7 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
     extraImports.add('org.springframework.data.domain.PageRequest');
     extraImports.add(`${packageName}.shared.application.dtos.PagedResponse`);
 
-    const callArgs = buildPagedCallArgs(methodParams, agg, packageName, moduleName, extraImports);
+    const callArgs = buildPagedCallArgs(methodParams, agg, packageName, moduleName, extraImports, uc, bcYaml);
     lines.push(
       `        Page<${agg.name}> page = ${repoFieldName}.${repoMethodName}(${callArgs});`
     );
@@ -963,9 +1115,17 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
     );
   } else {
     // Single entity via non-loadAggregate path (findBy{Field})
+    const callArgs = buildListCallArgs(methodParams, extraImports);
+    if (isOptional) {
+      // [G24] Optional[X]: do not throw — let the controller produce 200/404.
+      extraImports.add('java.util.Optional');
+      lines.push(
+        `        return ${repoFieldName}.${repoMethodName}(${callArgs}).map(${mapperFieldName}::${mapperSingleMethod});`
+      );
+      return { body: lines.join('\n'), extraImports: [...extraImports].sort() };
+    }
     const errorEntry = hasNotFoundError ? errorMap[notFoundErrors[0]] : null;
     const errorType = errorEntry ? errorEntry.errorType : null;
-    const callArgs = buildListCallArgs(methodParams, extraImports);
     if (errorType) {
       extraImports.add(`${packageName}.${moduleName}.domain.errors.${errorType}`);
       lines.push(
@@ -995,11 +1155,24 @@ function buildListCallArgs(methodParams, imports) {
   return args.join(', ');
 }
 
-function buildPagedCallArgs(methodParams, agg, packageName, moduleName, imports) {
+function buildPagedCallArgs(methodParams, agg, packageName, moduleName, imports, uc = null, bcYaml = null) {
   const args = [];
+  // [G5] Inputs declared with enum type are bound by Spring directly to the enum field
+  // on the Query record — no Enum.valueOf needed in handler.
+  const enumNamesSet = new Set((bcYaml?.enums || []).map((e) => e.name));
+  const ucInputByName = new Map(((uc && uc.input) || []).map((i) => [i.name, i]));
+  // [G7] When uc.pagination is declared, PageRequest is built with explicit Sort.
+  const hasPagination = !!(uc && uc.pagination);
   for (const param of methodParams) {
     if (param.type === 'PageRequest' || param.type === 'Pageable') {
-      args.push('PageRequest.of(query.page(), query.size())');
+      if (hasPagination) {
+        imports.add('org.springframework.data.domain.Sort');
+        args.push(
+          'PageRequest.of(query.page(), query.size(), Sort.by(Sort.Direction.fromString(query.sortDirection()), query.sortBy()))'
+        );
+      } else {
+        args.push('PageRequest.of(query.page(), query.size())');
+      }
     } else if (param.type === 'Integer' && (param.name === 'page' || param.name === 'size')) {
       args.push(`query.${param.name}()`);
     } else if (param.type === 'Uuid') {
@@ -1013,7 +1186,12 @@ function buildPagedCallArgs(methodParams, agg, packageName, moduleName, imports)
       const enumMatch = /^Enum<(.+)>$/.exec(param.type);
       const enumName = enumMatch ? enumMatch[1] : param.type;
       imports.add(`${packageName}.${moduleName}.domain.enums.${enumName}`);
-      if (!param.required) {
+      const ucInp = ucInputByName.get(param.name);
+      const isStrongTyped = ucInp && enumNamesSet.has(ucInp.type);
+      if (isStrongTyped) {
+        // query.X() already returns the enum
+        args.push(`query.${param.name}()`);
+      } else if (!param.required) {
         args.push(
           `query.${param.name}() != null ? ${enumName}.valueOf(query.${param.name}()) : null`
         );
@@ -1256,7 +1434,12 @@ async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap
     if (returnType.startsWith('List<')) {
       cmdImports.push('java.util.List');
     }
-    cmdImports.push(`${packageName}.${moduleName}.application.dtos.${baseDto}`);
+    // [G9/G10] BulkResult and JobReference live in shared.application.dtos.
+    if (baseDto === 'BulkResult' || baseDto === 'JobReference') {
+      cmdImports.push(`${packageName}.shared.application.dtos.${baseDto}`);
+    } else {
+      cmdImports.push(`${packageName}.${moduleName}.application.dtos.${baseDto}`);
+    }
   }
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'UcCommand.java.ejs'),
@@ -1343,13 +1526,67 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
     if (returnType.startsWith('List<')) {
       extraImports.push('java.util.List');
     }
-    extraImports.push(`${packageName}.${moduleName}.application.dtos.${baseDto}`);
+    // [G9/G10] BulkResult and JobReference live in shared.application.dtos.
+    if (baseDto === 'BulkResult' || baseDto === 'JobReference') {
+      extraImports.push(`${packageName}.shared.application.dtos.${baseDto}`);
+    } else {
+      extraImports.push(`${packageName}.${moduleName}.application.dtos.${baseDto}`);
+    }
     // For implementation: full + returns the auto-generated body has no return stmt;
     // emit a TODO so the developer knows to map the result. The scaffold branch
     // already throws UnsupportedOperationException so no fix is needed there.
     if (uc.implementation === 'full' && body) {
       body = body + `\n        // TODO useCase(${uc.id}, returns): map result to ${returnType}\n        return null;`;
     }
+  }
+
+  // [G10] Async jobTracking handlers persist a PENDING async_job row and return
+  // JobReference(jobId). The handler depends on AsyncJobRepository, which lives
+  // in shared.infrastructure.asyncJob — modelled as a synthetic fkPort entry so
+  // the template renders the import + constructor parameter correctly.
+  if (uc.async && uc.async.mode === 'jobTracking') {
+    if (!fkPorts.some((p) => p.portFieldName === 'asyncJobRepository')) {
+      fkPorts.push({
+        portName: 'AsyncJobRepository',
+        portFieldName: 'asyncJobRepository',
+        importPath: `${packageName}.shared.infrastructure.asyncJob.AsyncJobRepository`,
+        isNew: false,
+      });
+    }
+    extraImports.push(`${packageName}.shared.infrastructure.asyncJob.AsyncJobJpa`);
+    extraImports.push(`${packageName}.shared.infrastructure.asyncJob.AsyncJobStatus`);
+    extraImports.push('java.time.Instant');
+    extraImports.push('java.util.UUID');
+    // Replace whatever body was computed: jobTracking is fundamentally a
+    // scaffold (the worker is out of scope) — persist PENDING and return.
+    body =
+      `        // [G10] Persist a PENDING job row; the actual work is performed by\n` +
+      `        // a worker (out of scope for the generator).\n` +
+      `        UUID jobId = UUID.randomUUID();\n` +
+      `        Instant now = Instant.now();\n` +
+      `        AsyncJobJpa job = AsyncJobJpa.builder()\n` +
+      `                .id(jobId)\n` +
+      `                .type("${ucClassName}")\n` +
+      `                .status(AsyncJobStatus.PENDING)\n` +
+      `                .createdAt(now)\n` +
+      `                .updatedAt(now)\n` +
+      `                .build();\n` +
+      `        asyncJobRepository.save(job);\n` +
+      `        // TODO useCase(${uc.id}, async): implement worker that picks up\n` +
+      `        //      PENDING async_job rows of type="${ucClassName}", transitions\n` +
+      `        //      them to RUNNING/SUCCEEDED/FAILED and writes the result.\n` +
+      `        return new JobReference(jobId);`;
+  }
+
+  // [G10] Async fireAndForget handlers dispatch and return immediately. The
+  // worker is out of scope; emit a TODO so the developer wires up @Async or a
+  // message-based offload as appropriate.
+  if (uc.async && uc.async.mode === 'fireAndForget') {
+    body =
+      `        // TODO useCase(${uc.id}, async): offload the work to an @Async\n` +
+      `        //      method, a Spring @Scheduled job, or a message-broker\n` +
+      `        //      consumer. The controller responds 202 Accepted as soon as\n` +
+      `        //      this method returns.`;
   }
 
   await renderAndWrite(
@@ -1370,18 +1607,20 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
       mapperName: '',
       mapperFieldName: '',
       authContextFields,
-      implementation: uc.implementation || 'scaffold',
+      implementation: (uc.async ? 'full' : (uc.implementation || 'scaffold')),
       body,
       imports: extraImports,
       returnType,
+      // [G20] declarative cross-field validations (TODO comments only)
+      validations: Array.isArray(uc.validations) ? uc.validations : [],
     }
   );
 }
 
-async function generateQuery(uc, agg, moduleName, packageName, bcDir, repoMethods) {
+async function generateQuery(uc, agg, moduleName, packageName, bcDir, repoMethods, bcYaml = null) {
   const ucClassName = toPascalCase(uc.name);
   const returnType = buildQueryReturnType(uc, agg, repoMethods);
-  const { fields, imports: fieldImports } = buildQueryFields(uc, agg, repoMethods);
+  const { fields, imports: fieldImports } = buildQueryFields(uc, agg, repoMethods, bcYaml, packageName, moduleName);
   const baseImports = buildQueryImports(returnType, packageName, moduleName, agg);
   const imports = [...new Set([...baseImports, ...fieldImports])].sort();
 
@@ -1403,6 +1642,11 @@ async function generateQuery(uc, agg, moduleName, packageName, bcDir, repoMethod
 
 function buildQueryImports(returnType, packageName, moduleName, agg) {
   const imports = [];
+  // [G12] BinaryStream → Resource — lives in spring-core, not in BC dtos.
+  if (returnType === 'Resource') {
+    imports.push('org.springframework.core.io.Resource');
+    return imports;
+  }
   // Extract the inner DTO class name (handles PagedResponse<X> and List<X>)
   const innerMatch = /(?:PagedResponse|List)<(.+?)>/.exec(returnType);
   const dtoClassName = innerMatch ? innerMatch[1] : returnType;
@@ -1617,7 +1861,7 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
 
   // Detect projection-based custom return: <Projection>, List<Projection>, PagedResponse<Projection>
   const returnTypeForCheck = customReturnType || buildQueryReturnType(uc, agg, repoMethods);
-  const innerDtoForCheck = (/(?:PagedResponse|List)<(.+?)>/.exec(returnTypeForCheck) || [null, returnTypeForCheck])[1];
+  const innerDtoForCheck = (/(?:PagedResponse|List|Optional)<(.+?)>/.exec(returnTypeForCheck) || [null, returnTypeForCheck])[1];
   const isAggResponseDto = innerDtoForCheck === `${agg.name}ResponseDto`;
   const projection = !isAggResponseDto && bcYaml ? findProjection(innerDtoForCheck, bcYaml) : null;
   const isDerivableProjection = projection ? isProjectionDerivable(projection, agg) : false;
@@ -1638,7 +1882,11 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
     }
   } else {
     // Standard path: import the actual DTO class (derived from returnType, not always aggregate ResponseDto)
-    const innerDtoMatch = /(?:PagedResponse|List)<(.+?)>/.exec(returnType);
+    // [G12] BinaryStream → Resource lives in spring-core, skip BC dtos import.
+    if (returnType === 'Resource') {
+      extraImports.push('org.springframework.core.io.Resource');
+    } else {
+    const innerDtoMatch = /(?:PagedResponse|List|Optional)<(.+?)>/.exec(returnType);
     const dtoClassName = innerDtoMatch ? innerDtoMatch[1] : returnType;
     extraImports.push(`${packageName}.${moduleName}.application.dtos.${dtoClassName}`);
     if (returnType.startsWith('PagedResponse')) {
@@ -1647,11 +1895,15 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
     if (returnType.startsWith('List<')) {
       extraImports.push('java.util.List');
     }
+    if (returnType.startsWith('Optional<')) {
+      extraImports.push('java.util.Optional');
+    }
     if (effectiveImpl === 'full') {
-      const result = buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, moduleName, projection);
+      const result = buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, moduleName, projection, bcYaml);
       body = result.body;
       extraImports = [...extraImports, ...result.extraImports];
       extraImports = [...new Set(extraImports)].sort();
+    }
     }
   }
 
@@ -1673,6 +1925,8 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
       implementation: effectiveImpl,
       body,
       imports: extraImports,
+      // [G20] declarative cross-field validations (TODO comments only)
+      validations: Array.isArray(uc.validations) ? uc.validations : [],
     }
   );
 }
@@ -1764,6 +2018,145 @@ async function generateProjections(bcYaml, config, outputDir) {
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
+
+// [G6] Multi-aggregate same-BC saga handler.
+// When a UC declares `aggregates: [A, B, ...]` + `steps: [...]`, the handler:
+//   • Injects the repository for every declared aggregate (primary + others as fkRepos).
+//   • Wraps step execution with @Transactional (Spring rolls back DB writes on any
+//     uncaught RuntimeException — the default).
+//   • Emits each step.method invocation as a `// TODO useCase(<id>, step:<n>): ...`
+//     placeholder because mapping command fields → method args is not derivable
+//     from the YAML alone (aligns with the existing scaffold philosophy).
+//   • For steps that declare `onFailure.compensate`, emits a try/catch that
+//     iterates compensation steps in reverse insertion order before re-throwing.
+// Cross-BC orchestration is NOT supported here — those go through system.yaml#/sagas.
+async function generateMultiAggregateCommandHandler(uc, moduleName, packageName, bcDir, bcYaml) {
+  const ucClassName = toPascalCase(uc.name);
+  const primaryAggName = uc.aggregates[0];
+  const repoName = `${primaryAggName}Repository`;
+  const repoFieldName = `${toCamelCase(primaryAggName)}Repository`;
+
+  // Additional repositories for the remaining aggregates (in declared order).
+  const fkRepos = uc.aggregates.slice(1).map((aggName) => ({
+    repoName: `${aggName}Repository`,
+    repoFieldName: `${toCamelCase(aggName)}Repository`,
+  }));
+
+  // authContext properties are inherited from the primary aggregate (matching
+  // the convention used by the standard command handler).
+  const primaryAgg = (bcYaml.aggregates || []).find((a) => a.name === primaryAggName);
+  const authContextFields = (primaryAgg.properties || [])
+    .filter((p) => p.source === 'authContext')
+    .map((p) => ({ name: p.name, javaType: p.type === 'Uuid' ? 'UUID' : p.type }));
+
+  // Build step body: declare a slot for the loaded aggregate root per step,
+  // emit a TODO for arg mapping, and invoke the domain method. Compensation is
+  // wired in a try/catch around the entire step sequence.
+  const lines = [];
+  lines.push(`        // [G6] Multi-aggregate orchestration — same BC, single transaction.`);
+  lines.push(`        // Spring rolls back the JPA transaction on uncaught RuntimeException;`);
+  lines.push(`        // application-level compensation runs in the catch block before re-throw.`);
+  if (authContextFields.length > 0) {
+    for (const f of authContextFields) {
+      lines.push(`        // TODO (authContext): inject ${f.javaType} ${f.name} from SecurityContextHolder.getContext().getAuthentication()`);
+    }
+  }
+  lines.push(`        try {`);
+  uc.steps.forEach((step, idx) => {
+    const aggVar = toCamelCase(step.aggregate);
+    const aggRepoField = `${aggVar}Repository`;
+    lines.push(`            // step ${idx + 1}/${uc.steps.length} — ${step.aggregate}.${step.method}`);
+    lines.push(`            // TODO useCase(${uc.id}, step:${idx + 1}): load the ${step.aggregate} aggregate root from ${aggRepoField}, map command fields to method args, invoke ${aggVar}.${step.method}(...) and persist.`);
+  });
+  lines.push(`        } catch (RuntimeException ex) {`);
+  // Compensation: walk steps in reverse, emit only those with onFailure.compensate.
+  const compensableSteps = uc.steps
+    .map((s, i) => ({ s, i }))
+    .filter(({ s }) => s.onFailure && s.onFailure.compensate)
+    .reverse();
+  if (compensableSteps.length === 0) {
+    lines.push(`            // No step declares onFailure.compensate — rely on @Transactional rollback.`);
+  } else {
+    lines.push(`            // Compensation order (reverse of execution):`);
+    for (const { s, i } of compensableSteps) {
+      const comp = s.onFailure.compensate;
+      const compAggVar = toCamelCase(comp.aggregate);
+      lines.push(`            // TODO useCase(${uc.id}, compensate step:${i + 1}): load the ${comp.aggregate} aggregate root and invoke ${compAggVar}.${comp.method}(...) to undo step ${i + 1}.`);
+    }
+  }
+  lines.push(`            throw ex;`);
+  lines.push(`        }`);
+  const body = lines.join('\n');
+
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'application', 'UcCommandHandler.java.ejs'),
+    path.join(bcDir, 'application', 'usecases', `${ucClassName}CommandHandler.java`),
+    {
+      packageName,
+      moduleName,
+      useCaseName: ucClassName,
+      useCaseId: uc.id,
+      description: uc.description || '',
+      aggregateName: primaryAggName,
+      repoName,
+      repoFieldName,
+      fkRepos,
+      fkPorts: [],
+      needsMapper: false,
+      mapperName: '',
+      mapperFieldName: '',
+      authContextFields: [],
+      // 'full' so the template emits our body instead of the scaffold throw.
+      implementation: 'full',
+      body,
+      imports: [],
+      returnType: null,
+      // [G20] cross-field validations (saga orchestrator UC)
+      validations: Array.isArray(uc.validations) ? uc.validations : [],
+    }
+  );
+}
+
+// [G9] Bulk command wrapper (record + handler).
+// Renders a one-field command record `BulkXxxCommand(@Valid @Size(max=N) List<ItemTypeCommand> items)`
+// and a handler that iterates the list, dispatching one item-command per entry through
+// the UseCaseMediator and accumulating successes / per-item DomainException failures
+// into a shared BulkResult record. Pure wrapper — not tied to any aggregate.
+async function generateBulkCommand(uc, moduleName, packageName, bcDir) {
+  const ucClassName = toPascalCase(uc.name);
+  const itemTypeName = toPascalCase(uc.bulk.itemType);
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'application', 'UcBulkCommand.java.ejs'),
+    path.join(bcDir, 'application', 'commands', `${ucClassName}Command.java`),
+    {
+      packageName,
+      moduleName,
+      useCaseName: ucClassName,
+      useCaseId: uc.id,
+      description: uc.description || '',
+      itemTypeName,
+      maxItems: uc.bulk.maxItems || null,
+    }
+  );
+}
+
+async function generateBulkCommandHandler(uc, moduleName, packageName, bcDir) {
+  const ucClassName = toPascalCase(uc.name);
+  const itemTypeName = toPascalCase(uc.bulk.itemType);
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'application', 'UcBulkCommandHandler.java.ejs'),
+    path.join(bcDir, 'application', 'usecases', `${ucClassName}CommandHandler.java`),
+    {
+      packageName,
+      moduleName,
+      useCaseName: ucClassName,
+      useCaseId: uc.id,
+      description: uc.description || '',
+      itemTypeName,
+      onItemError: uc.bulk.onItemError || 'continue',
+    }
+  );
+}
 
 async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDoc = null, publicApiDoc = null) {
   const { packageName, systemName } = config;
@@ -1879,7 +2272,7 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
           for (const imp of imports) queryImports.add(imp);
         } else {
           // No request body (e.g. GET /{id}): derive fields from the repositoryMethod signature
-          const { fields: qf, imports: qfImports } = buildQueryFields(uc, agg, repoMethods);
+          const { fields: qf, imports: qfImports } = buildQueryFields(uc, agg, repoMethods, bcYaml, packageName, moduleName);
           queryFields = qf;
           for (const imp of qfImports) queryImports.add(imp);
         }
@@ -1941,12 +2334,32 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
           bcYaml
         );
       } else if (uc.type === 'command') {
-        const voRequestsNeeded = await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml);
-        await generateCommandHandler(uc, agg, moduleName, packageName, bcDir, errorMap, bcYaml, repoMethods);
-        for (const voName of voRequestsNeeded) {
-          if (!generatedVoRequests.has(voName)) {
-            generatedVoRequests.add(voName);
-            await generateVoRequestRecord(voName, bcYaml, packageName, moduleName, bcDir);
+        if (uc.bulk) {
+          // [G9] Bulk command wrapper — render dedicated record + handler that
+          // delegate to the item-level command via the UseCaseMediator.
+          await generateBulkCommand(uc, moduleName, packageName, bcDir);
+          await generateBulkCommandHandler(uc, moduleName, packageName, bcDir);
+        } else if (Array.isArray(uc.aggregates) && uc.aggregates.length >= 2) {
+          // [G6] Multi-aggregate same-BC saga — standard Command record (fields
+          // come from uc.input[]), but a dedicated handler that injects every
+          // aggregate's repository and emits the steps[] orchestration with
+          // application-level compensation.
+          const voRequestsNeeded = await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml);
+          await generateMultiAggregateCommandHandler(uc, moduleName, packageName, bcDir, bcYaml);
+          for (const voName of voRequestsNeeded) {
+            if (!generatedVoRequests.has(voName)) {
+              generatedVoRequests.add(voName);
+              await generateVoRequestRecord(voName, bcYaml, packageName, moduleName, bcDir);
+            }
+          }
+        } else {
+          const voRequestsNeeded = await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml);
+          await generateCommandHandler(uc, agg, moduleName, packageName, bcDir, errorMap, bcYaml, repoMethods);
+          for (const voName of voRequestsNeeded) {
+            if (!generatedVoRequests.has(voName)) {
+              generatedVoRequests.add(voName);
+              await generateVoRequestRecord(voName, bcYaml, packageName, moduleName, bcDir);
+            }
           }
         }
       } else if (uc.type === 'query') {
@@ -1979,7 +2392,7 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
             await generatePublicApiResponseDtos(schemasToGenerate, publicComponents, packageName, moduleName, bcDir, bcYaml);
           }
         }
-        await generateQuery(uc, agg, moduleName, packageName, bcDir, repoMethods);
+        await generateQuery(uc, agg, moduleName, packageName, bcDir, repoMethods, bcYaml);
         await generateQueryHandler(uc, agg, moduleName, packageName, bcDir, errorMap, repoMethods, null, bcYaml);
       }
     }

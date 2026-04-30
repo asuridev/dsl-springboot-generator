@@ -1,0 +1,18 @@
+package <%= packageName %>.shared.application.dtos;
+
+import java.util.List;
+
+/**
+ * Generic result for bulk command operations (G9).
+ *
+ * The handler iterates the input items and accumulates outcomes:
+ * - successCount: number of items dispatched without raising a domain exception
+ * - errors[]: per-item failures with the original index, an error code (the
+ *   exception's simple class name) and the message thrown by the domain.
+ *
+ * derived_from: feature[bulk-command-wrapper]
+ */
+public record BulkResult(int successCount, List<BulkError> errors) {
+
+    public record BulkError(int index, String code, String message) { }
+}

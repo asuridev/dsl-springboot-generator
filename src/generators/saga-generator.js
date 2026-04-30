@@ -52,6 +52,7 @@ async function generateSagaArtifacts(sagas, config, outputDir) {
 
   const annotationsDir = path.join(javaRoot, 'shared', 'domain', 'annotations');
   const correlationDir = path.join(javaRoot, 'shared', 'infrastructure', 'correlation');
+  const webDir         = path.join(javaRoot, 'shared', 'infrastructure', 'web');
   const sagasDir       = path.join(javaRoot, 'shared', 'application', 'sagas');
 
   // 1. SagaStep annotation (singleton)
@@ -65,6 +66,15 @@ async function generateSagaArtifacts(sagas, config, outputDir) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'shared', 'infrastructure', 'correlation', 'CorrelationContext.java.ejs'),
     path.join(correlationDir, 'CorrelationContext.java'),
+    { packageName }
+  );
+
+  // [G19] CorrelationFilter — HTTP entry-point that opens the correlation
+  // context for every request, completing the end-to-end propagation chain
+  // (HTTP → use cases → domain events → outbound messaging).
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'shared', 'infrastructure', 'web', 'CorrelationFilter.java.ejs'),
+    path.join(webDir, 'CorrelationFilter.java'),
     { packageName }
   );
 

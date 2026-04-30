@@ -1,0 +1,14 @@
+package <%= packageName %>.shared.infrastructure.asyncJob;
+
+import java.util.UUID;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+/**
+ * Spring Data repository for {@link AsyncJobJpa} (G10).
+ *
+ * Used by command handlers that declare `async.mode: jobTracking` to insert
+ * a PENDING row, and by the status query handler (operationId declared in
+ * `async.statusEndpoint`) to look up the current state.
+ */
+public interface AsyncJobRepository extends JpaRepository<AsyncJobJpa, UUID> {
+}

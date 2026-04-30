@@ -1,0 +1,17 @@
+-- ─── Request idempotency ───────────────────────────────────────────────────
+-- derived_from: useCases[*].idempotency.storage = database
+--
+-- Stores responses returned for an Idempotency-Key (or other configured
+-- header) so retries within the TTL window replay the original outcome.
+
+CREATE TABLE IF NOT EXISTS idempotency_request (
+    key                   VARCHAR(255)  NOT NULL PRIMARY KEY,
+    request_hash          VARCHAR(128)  NOT NULL,
+    response_status       INTEGER       NOT NULL,
+    response_body         BYTEA,
+    response_content_type VARCHAR(128),
+    expires_at            TIMESTAMP     NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_idempotency_request_expires_at
+    ON idempotency_request (expires_at);

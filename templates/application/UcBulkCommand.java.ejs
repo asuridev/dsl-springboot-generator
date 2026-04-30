@@ -1,0 +1,19 @@
+package <%= packageName %>.<%= moduleName %>.application.commands;
+
+import <%= packageName %>.shared.application.dtos.BulkResult;
+import <%= packageName %>.shared.domain.interfaces.ReturningCommand;
+import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotEmpty;
+<% if (maxItems) { %>import jakarta.validation.constraints.Size;
+<% } %>import java.util.List;
+
+<% if (description && description.trim()) { %>/**
+<% description.split(/\n/).forEach(function(line) { %> * <%- line %>
+<% }); %> *
+ * derived_from: useCases[<%= useCaseId %>] (bulk wrapper of <%= itemTypeName %>Command)
+ */
+<% } else { %>// derived_from: useCases[<%= useCaseId %>] (bulk wrapper of <%= itemTypeName %>Command)
+<% } %>public record <%= useCaseName %>Command(
+    @Valid @NotEmpty<%= maxItems ? ' @Size(max = ' + maxItems + ')' : '' %> List<<%= itemTypeName %>Command> items
+) implements ReturningCommand<BulkResult> {
+}

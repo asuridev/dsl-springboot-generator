@@ -1,0 +1,50 @@
+package <%= packageName %>.<%= moduleName %>.application.usecases;
+
+import <%= packageName %>.<%= moduleName %>.application.commands.<%= useCaseName %>Command;
+import <%= packageName %>.<%= moduleName %>.application.commands.<%= itemTypeName %>Command;
+import <%= packageName %>.shared.application.dtos.BulkResult;
+import <%= packageName %>.shared.domain.annotations.ApplicationComponent;
+import <%= packageName %>.shared.domain.annotations.LogExceptions;
+import <%= packageName %>.shared.domain.customExceptions.DomainException;
+import <%= packageName %>.shared.domain.interfaces.ReturningCommandHandler;
+import <%= packageName %>.shared.infrastructure.configurations.useCaseConfig.UseCaseMediator;
+import org.springframework.context.annotation.Lazy;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.util.ArrayList;
+import java.util.List;
+
+<% if (description && description.trim()) { %>/**
+<% description.split(/\n/).forEach(function(line) { %> * <%- line %>
+<% }); %> *
+ * derived_from: useCases[<%= useCaseId %>] (bulk wrapper of <%= itemTypeName %>Command)
+ */
+<% } else { %>// derived_from: useCases[<%= useCaseId %>] (bulk wrapper of <%= itemTypeName %>Command)
+<% } %>@ApplicationComponent
+public class <%= useCaseName %>CommandHandler implements ReturningCommandHandler<<%= useCaseName %>Command, BulkResult> {
+
+    private final UseCaseMediator useCaseMediator;
+
+    public <%= useCaseName %>CommandHandler(@Lazy UseCaseMediator useCaseMediator) {
+        this.useCaseMediator = useCaseMediator;
+    }
+
+    @Override
+    @Transactional
+    @LogExceptions
+    public BulkResult handle(<%= useCaseName %>Command command) {
+        List<<%= itemTypeName %>Command> items = command.items();
+        List<BulkResult.BulkError> errors = new ArrayList<>();
+        int successCount = 0;
+        for (int i = 0; i < items.size(); i++) {
+            try {
+                useCaseMediator.dispatch(items.get(i));
+                successCount++;
+            } catch (DomainException ex) {
+                errors.add(new BulkResult.BulkError(i, ex.getClass().getSimpleName(), ex.getMessage()));
+<% if (onItemError === 'abort') { %>                break;
+<% } %>            }
+        }
+        return new BulkResult(successCount, errors);
+    }
+}

@@ -1,0 +1,61 @@
+package <%= packageName %>.<%= bc %>.infrastructure.persistence.specs;
+
+<% imports.forEach(function(imp) { -%>
+import <%= imp %>;
+<% }); -%>
+
+/**
+ * [G8] JPA Specification builders for <%= aggregateName %> filters.
+ *
+ * Each builder returns a {@link Specification} that can be combined via
+ * {@code Specification.and(...)} / {@code Specification.or(...)} to compose
+ * the final query passed to a {@code JpaSpecificationExecutor} repository.
+ *
+ * derived_from: useCases[<%= ucIds.join(', ') %>]
+ */
+public final class <%= aggregateName %>Specs {
+
+    private <%= aggregateName %>Specs() {
+        // utility class — no instances
+    }
+
+<% rangeMethods.forEach(function(m) { -%>
+    /**
+     * Filters by inclusive range on the <%= aggregateName %> aggregate.
+     * derived_from: useCases input "<%= m.inputName %>"
+     */
+    public static Specification<<%= jpaEntityName %>> <%= m.methodName %>(Range<<%= m.innerJavaType %>> range) {
+        return (root, query, cb) -> {
+            if (range == null || (range.min() == null && range.max() == null)) {
+                return cb.conjunction();
+            }
+            // TODO: map "<%= m.inputName %>" to the JPA attribute path on <%= jpaEntityName %>
+            // (e.g. root.get("<field>") for primitives, root.get("<field>Amount") for Money VOs).
+            // Build predicates from range.min() (cb.greaterThanOrEqualTo) and range.max()
+            // (cb.lessThanOrEqualTo), skipping null bounds. Combine with cb.and(...).
+            return cb.conjunction();
+        };
+    }
+
+<% }); -%>
+<% searchMethods.forEach(function(m) { -%>
+    /**
+     * Case-insensitive substring search across <%= m.fields.join(', ') %>.
+     * derived_from: useCases input "<%= m.inputName %>"
+     */
+    public static Specification<<%= jpaEntityName %>> <%= m.methodName %>(String text) {
+        return (root, query, cb) -> {
+            if (text == null || text.isBlank()) {
+                return cb.conjunction();
+            }
+            String like = "%" + text.toLowerCase() + "%";
+            return cb.or(
+<% m.fields.forEach(function(f, idx) { -%>
+                cb.like(cb.lower(root.get("<%= f %>")), like)<%= idx === m.fields.length - 1 ? '' : ',' %>
+<% }); -%>
+            );
+        };
+    }
+
+<% }); -%>
+}
