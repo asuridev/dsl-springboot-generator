@@ -979,6 +979,12 @@ function validate(doc, opts = {}) {
 
     // domainMethods[].emits must reference a published event (S22: accept string or list)
     for (const dm of agg.domainMethods || []) {
+      // S23: the 'create' domainMethod must return the aggregate name (not void).
+      // Without it the generator cannot emit the public static factory method and
+      // produces a private constructor with no accessible creation path.
+      if (dm.name === 'create' && dm.returns !== agg.name) {
+        fail(`domainMethod "create" in aggregate "${agg.name}" must have returns: ${agg.name} (got "${dm.returns || 'void'}"). The generator uses this to emit the public static factory method.`);
+      }
       const dmEmitsList = Array.isArray(dm.emits)
         ? dm.emits
         : (dm.emits && dm.emits !== 'null' && dm.emits !== null ? [dm.emits] : []);
