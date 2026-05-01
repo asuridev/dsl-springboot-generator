@@ -46,17 +46,17 @@ integrations:
 
       # resiliencia local (override del default en system.yaml)
       resilience:
-        circuitBreaker:
-          enabled: true
-          failureRateThreshold: 50
-          waitDurationInOpenState: PT30S
+        circuitBreaker:                       # presencia → @CircuitBreaker en el adaptador
+          failureRateThreshold: 50            # % de fallos para abrir el circuito
+          waitDurationInOpenState: 30s        # string con unidad (no ISO-8601)
           slidingWindowSize: 10
-        retry:
+          minimumNumberOfCalls: 5
+          permittedNumberOfCallsInHalfOpenState: 3
+        retries:                              # PLURAL — presencia + maxAttempts > 1 → @Retry
           maxAttempts: 3
-          waitDuration: PT1S
-          backoff: exponential
-        timeout:
-          duration: PT5S
+          waitDuration: 500ms                 # string con unidad (no ISO-8601)
+        connectTimeoutMs: 5000               # timeout de conexión en ms — campo plano
+        timeoutMs: 15000                     # timeout de lectura en ms — campo plano
 
       # autenticación local (override del default en system.yaml)
       auth:
@@ -79,41 +79,93 @@ integrations:
 
 #### 1.1.1 Bloque `resilience` (outbound)
 
+> Este bloque usa el **mismo schema** que `system.yaml#/integrations[].resilience`.
+> El resolver lee `bc.yaml` primero y, si está ausente, cae al `system.yaml`. Los campos
+> son idénticos en ambos niveles.
+
 ```yaml
 resilience:
-  circuitBreaker:
-    enabled: true                    # activa el circuit breaker (default: true)
-    failureRateThreshold: 50         # % de fallos para abrir el circuito (default: 50)
-    waitDurationInOpenState: PT30S   # cuánto esperar antes de pasar a HALF_OPEN (ISO-8601)
-    slidingWindowSize: 10            # nº de llamadas para calcular la tasa de fallos
-  retry:
-    maxAttempts: 3                   # nº máximo de reintentos
-    waitDuration: PT1S               # tiempo de espera entre reintentos (ISO-8601)
-    backoff: exponential             # exponential o fixed
-  timeout:
-    duration: PT5S                   # timeout de la llamada (ISO-8601)
+  circuitBreaker:                      # presencia del objeto → @CircuitBreaker en el adaptador
+    failureRateThreshold: 50           # % de fallos para abrir el circuito
+    waitDurationInOpenState: 30s       # string con unidad: "30s", "60s" (NO ISO-8601)
+    slidingWindowSize: 10              # nº de llamadas en la ventana deslizante
+    minimumNumberOfCalls: 5            # mínimo antes de calcular failure rate
+    permittedNumberOfCallsInHalfOpenState: 3
+  retries:                             # PLURAL — presencia + maxAttempts > 1 → @Retry
+    maxAttempts: 3
+    waitDuration: 500ms                # string con unidad: "500ms", "1s" (NO ISO-8601)
+  connectTimeoutMs: 5000               # connect timeout en ms — campo PLANO (no anidado)
+  timeoutMs: 15000                     # read timeout en ms — campo PLANO (no anidado)
 ```
 
-**Código Java generado** — configuración Resilience4j:
-```java
-// application.yml generado:
+> Todos los sub-campos de `circuitBreaker` y `retries` son **opcionales**. La presencia
+> del objeto (aunque vacío) es suficiente para que el generador emita la anotación.
+> `connectTimeoutMs` y `timeoutMs` van directamente en `Request.Options` del `FeignConfig`,
+> no como anotaciones `@TimeLimiter`. No existe `timeout.duration`, `retry.backoff` ni
+> `circuitBreaker.enabled` — esos campos son ignorados.
+
+| Campo | Tipo | Efecto en el generador |
+|---|---|---|
+| `circuitBreaker` | objeto | Presencia → `@CircuitBreaker(name="{target}")` + método fallback con `// TODO`. Sub-campos → bloque `instances.{target}` en `resilience.yaml`. |
+| `circuitBreaker.failureRateThreshold` | integer 1-100 | Emitido en `instances.{target}` de `resilience.yaml`. |
+| `circuitBreaker.waitDurationInOpenState` | string con unidad (`"30s"`) | Emitido en `instances.{target}`. |
+| `circuitBreaker.slidingWindowSize` | integer | Emitido en `instances.{target}`. |
+| `circuitBreaker.minimumNumberOfCalls` | integer | Emitido en `instances.{target}`. |
+| `circuitBreaker.permittedNumberOfCallsInHalfOpenState` | integer | Emitido en `instances.{target}`. |
+| `retries.maxAttempts` | integer | > 1 → `@Retry(name="{target}")`. Emitido en `instances.{target}`. |
+| `retries.waitDuration` | string con unidad (`"500ms"`) | Emitido en `instances.{target}`. |
+| `connectTimeoutMs` | integer (ms) | `Request.Options` connect timeout en `FeignConfig`. Default: 5000. |
+| `timeoutMs` | integer (ms) | `Request.Options` read timeout en `FeignConfig`. Default BC→BC: 15000. |
+
+**Artefactos generados — `resilience.yaml`** (instancia con sub-campos declarados):
+```yaml
+# config/parameters/{env}/resilience.yaml
 resilience4j:
   circuitbreaker:
-    instances:
-      catalog:
+    configs:
+      default:
+        registerHealthIndicator: true
+        slidingWindowType: COUNT_BASED
+        slidingWindowSize: 20
+        minimumNumberOfCalls: 10
         failureRateThreshold: 50
-        waitDurationInOpenState: PT30S
+        waitDurationInOpenState: 30s
+        permittedNumberOfCallsInHalfOpenState: 3
+        automaticTransitionFromOpenToHalfOpenEnabled: true
+    instances:
+      catalog:                        # ← nombre del target (to:)
+        baseConfig: default
+        failureRateThreshold: 50      # solo los sub-campos declarados en el YAML
+        waitDurationInOpenState: 30s
         slidingWindowSize: 10
   retry:
-    instances:
-      catalog:
+    configs:
+      default:
         maxAttempts: 3
-        waitDuration: PT1S
-        enableExponentialBackoff: true
-  timelimiter:
+        waitDuration: 500ms
+        retryExceptions:
+          - feign.RetryableException
+          - java.io.IOException
     instances:
       catalog:
-        timeoutDuration: PT5S
+        baseConfig: default
+        maxAttempts: 3
+        waitDuration: 500ms
+```
+
+**Artefactos generados — `FeignConfig`** (`connectTimeoutMs` y `timeoutMs`):
+```java
+// CatalogFeignConfig.java
+public class CatalogFeignConfig {
+    @Bean
+    public Request.Options feignOptions() {
+        return new Request.Options(
+            5000L, TimeUnit.MILLISECONDS,    // ← resilience.connectTimeoutMs (default: 5000)
+            15000L, TimeUnit.MILLISECONDS,   // ← resilience.timeoutMs        (default: 15000)
+            true
+        );
+    }
+}
 ```
 
 #### 1.1.2 Bloque `auth` (outbound)
@@ -122,18 +174,27 @@ resilience4j:
 auth:
   type: oauth2-cc           # client credentials flow
   tokenEndpoint: https://auth.internal/oauth/token
-  credentialKey: catalog-client-secret   # nombre del secreto en el gestor de secretos
+  credentialKey: catalog-client-secret   # Spring Security registration id (INT-015 lo valida)
 
-  # Para autenticación con API Key fija:
+  # Para API Key:
   # type: api-key
-  # headerName: X-Api-Key
-  # credentialKey: catalog-api-key-secret
+  # header: X-Api-Key                     # nombre del header (default: X-Api-Key)
+  # valueProperty: integration.catalog.api-key  # clave de la property Spring con el valor
+
+  # Para Bearer token estático:
+  # type: bearer
+  # valueProperty: integration.catalog.bearer-token
+
+  # Para JWT inter-servicio (declarativo — no genera interceptor):
+  # type: internal-jwt
 ```
 
 | `type` | Descripción | Campos adicionales requeridos |
 |---|---|---|
 | `oauth2-cc` | Client Credentials Flow — obtiene un token Bearer antes de cada llamada (con caché). | `tokenEndpoint`, `credentialKey` |
-| `api-key` | Envía una clave estática en un header HTTP. | `headerName`, `credentialKey` |
+| `api-key` | Envía una clave estática en un header HTTP. | `header` (default: `X-Api-Key`), `valueProperty` |
+| `bearer` | Token Bearer estático en `Authorization: Bearer <token>`. | `valueProperty` |
+| `internal-jwt` | Declarativo — no genera interceptor. Requiere interceptor global manual. | — |
 | `none` | Sin autenticación (default). | — |
 
 #### Código Java generado (cliente Feign + adaptador ACL)
@@ -155,8 +216,7 @@ public class CatalogHttpAdapter implements CatalogPort {
 
     @Override
     @CircuitBreaker(name = "catalog", fallbackMethod = "getCatalogProductByIdFallback")
-    @Retry(name = "catalog")
-    @TimeLimiter(name = "catalog")
+    @Retry(name = "catalog")   // solo si retries.maxAttempts > 1
     public Optional<CatalogProductModel> getCatalogProductById(UUID productId) {
         try {
             CatalogProductDto dto = feignClient.getCatalogProductById(productId.toString());
@@ -645,16 +705,14 @@ integrations:
           description: Validates category is active.
       resilience:
         circuitBreaker:
-          enabled: true
           failureRateThreshold: 60
-          waitDurationInOpenState: PT60S
+          waitDurationInOpenState: 60s
           slidingWindowSize: 20
-        retry:
+        retries:
           maxAttempts: 3
-          waitDuration: PT500MS
-          backoff: exponential
-        timeout:
-          duration: PT3S
+          waitDuration: 500ms
+        connectTimeoutMs: 5000
+        timeoutMs: 3000
       auth:
         type: oauth2-cc
         tokenEndpoint: https://auth.internal/oauth/token
