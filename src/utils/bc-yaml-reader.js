@@ -1380,6 +1380,7 @@ function validateRepositories(doc) {
         }
         if (aggregate) {
           const aggFieldNames = new Set([
+            ...((aggregate.properties || []).map((a) => a.name)),
             ...((aggregate.attributes || []).map((a) => a.name)),
             ...((aggregate.fields || []).map((a) => a.name)),
             'createdAt', 'updatedAt', 'deletedAt', 'id',
@@ -1398,6 +1399,7 @@ function validateRepositories(doc) {
         }
         if (aggregate) {
           const aggFieldNames = new Set([
+            ...((aggregate.properties || []).map((a) => a.name)),
             ...((aggregate.attributes || []).map((a) => a.name)),
             ...((aggregate.fields || []).map((a) => a.name)),
             'createdAt', 'updatedAt', 'deletedAt', 'id',
