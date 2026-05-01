@@ -483,7 +483,17 @@ function buildSearchQuery(methodName, jpaEntityName, aggregate) {
  * Returns: 'skip' | 'derived' | 'custom'
  */
 function classifyMethod(method) {
-  if (method.derivedFrom === 'implicit') return 'skip';
+  if (method.derivedFrom === 'implicit') {
+    // findBy[A-Z]* methods (except findById) are Spring Data derived queries —
+    // they are NOT inherited from JpaRepository and MUST be declared in the JPA
+    // interface even when tagged derivedFrom: implicit. Let them fall through to
+    // the normal derived/custom classification below.
+    if (/^findBy[A-Z]/.test(method.name) && method.name !== 'findById') {
+      // fall through
+    } else {
+      return 'skip';
+    }
+  }
   if (method.name === 'findById' || method.name === 'save') return 'skip';
   // 'delete(id)' is inherited from JpaRepository as deleteById — do not redeclare
   if (method.name === 'delete' && (method.params || []).length === 1) return 'skip';
@@ -1445,20 +1455,31 @@ async function generateRepositories(bcYaml, config, outputDir) {
     // `findBy{Field}` so the rule is enforceable. When neither is declared and
     // auto-derivation is allowed, inject a `findBy{Field}: Aggregate?` method
     // and tag it with the rule id as derivedFrom. Opt-out: autoDerive: false.
+    //
+    // R25-SKIP: if the field belongs to a child entity (not the root aggregate
+    // properties), Spring Data cannot derive findBy{field} on the parent JPA
+    // entity. Uniqueness for child-entity fields is enforced at the DB level via
+    // the constraintName — no repository method is needed or possible.
     if (repoEntry.autoDerive !== false) {
       const aggRules = (aggregate.domainRules || []).filter(
         (r) => r && r.type === 'uniqueness' && typeof r.field === 'string' && r.field.trim() !== ''
       );
       for (const rule of aggRules) {
         const field = rule.field;
+        // Skip if the field lives on a child entity, not the root aggregate.
+        const rootProp = (aggregate.properties || []).find((p) => p.name === field);
+        const isChildEntityField = !rootProp && (aggregate.entities || []).some(
+          (e) => (e.properties || []).some((p) => p.name === field)
+        );
+        if (isChildEntityField) continue;
+
         const cap = field.charAt(0).toUpperCase() + field.slice(1);
         const findName = `findBy${cap}`;
         const existsName = `existsBy${cap}`;
         const declared = normalizedMethods.some((m) => m.name === findName || m.name === existsName);
         if (declared) continue;
-        // Locate the field's declared YAML type on the aggregate properties.
-        const prop = (aggregate.properties || []).find((p) => p.name === field);
-        const paramType = prop && prop.type ? prop.type : 'String';
+        // Locate the field's declared YAML type on the aggregate root properties.
+        const paramType = rootProp && rootProp.type ? rootProp.type : 'String';
         normalizedMethods.push({
           name: findName,
           params: [{ name: field, type: paramType, required: true }],

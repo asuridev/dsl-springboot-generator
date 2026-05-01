@@ -768,14 +768,15 @@ function validate(doc, opts = {}) {
         }
       }
       // Phase 3: when type=uniqueness, the optional `field` hint must reference
-      // a real property of the aggregate root. With it, the generator can emit
-      // an executable `findBy<Field>().isPresent() → throw` guard in the
-      // command handler. Without it, the rule still validates and an enriched
-      // TODO is emitted (no inference).
+      // a real property of the aggregate root OR any of its child entities.
+      // With it, the generator can emit an executable guard in the command handler.
+      // Without it, the rule still validates and an enriched TODO is emitted.
       if (rule.type === 'uniqueness' && rule.field) {
-        const propNames = (agg.properties || []).map((p) => p.name);
-        if (!propNames.includes(rule.field)) {
-          fail(`domainRule "${rule.id}" (uniqueness): "field" "${rule.field}" does not match any property of aggregate "${agg.name}". Allowed: ${propNames.join(', ')}.`);
+        const rootPropNames = (agg.properties || []).map((p) => p.name);
+        const entityPropNames = (agg.entities || []).flatMap((e) => (e.properties || []).map((p) => p.name));
+        const allPropNames = [...new Set([...rootPropNames, ...entityPropNames])];
+        if (!allPropNames.includes(rule.field)) {
+          fail(`domainRule "${rule.id}" (uniqueness): "field" "${rule.field}" does not match any property of aggregate "${agg.name}" (root or child entities). Allowed: ${allPropNames.join(', ')}.`);
         }
       }
       // [Phase 3, Gap E6] constraintName is only meaningful for uniqueness.

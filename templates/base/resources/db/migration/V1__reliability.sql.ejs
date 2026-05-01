@@ -4,7 +4,7 @@
 
 <% if (outboxEnabled) { %>
 CREATE TABLE IF NOT EXISTS outbox_event (
-    id           VARCHAR(36)  NOT NULL,
+    id           UUID         NOT NULL,
     destination  VARCHAR(255) NOT NULL,
     routing_key  VARCHAR(255),
     event_type   VARCHAR(512) NOT NULL,
