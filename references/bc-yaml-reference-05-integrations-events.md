@@ -71,8 +71,8 @@ integrations:
 |---|---|---|---|
 | `name` | kebab-case | ✅ | Nombre del BC destino o sistema externo. Debe coincidir con un BC declarado en `system.yaml#/boundedContexts` o con un sistema externo en `system.yaml#/externalSystems`. |
 | `protocol` | `http` | ✅ | Solo HTTP disponible en esta versión. |
-| `operations` | lista | ✅ | Operaciones que este BC consume del destino. Se vinculan con operaciones declaradas en `{target}-internal-api.yaml`. |
-| `operations[].name` | camelCase | ✅ | Nombre de la operación. Debe coincidir con un `operationId` del `{target}-internal-api.yaml`. |
+| `operations` | lista | ✅ | Operaciones que este BC consume del destino. La validación depende del tipo de destino. |
+| `operations[].name` | camelCase | ✅ | **BC interno (INT-003):** debe coincidir con un `operationId` en `{target}-internal-api.yaml`. **Sistema externo (INT-009):** debe coincidir con un `name` en `system.yaml#/externalSystems[name={target}].operations[]`. |
 | `operations[].description` | texto | no | Solo referencia. |
 | `resilience` | objeto | no | Configuración de resiliencia local (override del default en `system.yaml`). Ver §1.1.1. |
 | `auth` | objeto | no | Configuración de autenticación local (override del default en `system.yaml`). Ver §1.1.2. |

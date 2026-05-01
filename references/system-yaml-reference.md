@@ -157,6 +157,35 @@ externalSystems:
       type: oauth2-cc
       tokenEndpoint: https://auth.payment-gateway.example.com/oauth/token
       credentialKey: payment-gateway
+    baseUrlProperty: integration.payment-gateway.base-url  # default: integration.{name}.base-url
+    operations:
+      - name: chargeCard
+        method: POST
+        path: /v1/charges
+        request:
+          fields:
+            - name: cardToken
+              type: String
+            - name: amount
+              type: Decimal
+        response:
+          fields:
+            - name: chargeId
+              type: String
+            - name: status
+              type: String
+        domain:
+          returnType: ChargeResult
+          fields:
+            - name: id
+              type: UUID
+              source: chargeId       # campo del responseDto de origen
+            - name: status
+              type: String
+              source: status
+      - name: refundCharge
+        method: POST
+        path: /v1/charges/{chargeId}/refund  # path variable → extraído como @PathVariable
 
   - name: sms-provider
     description: SMS delivery service for customer notifications.
@@ -176,11 +205,109 @@ externalSystems:
 | `type` | enum | no | Clasificación del sistema externo. Solo referencia. |
 | `resilience` | objeto | no | Configuración de resiliencia para llamadas hacia este sistema. Consultar §4.3. |
 | `auth` | objeto | no | Configuración de autenticación saliente. Consultar §4.4. |
+| `baseUrlProperty` | string | no | Clave de la property Spring Boot con la URL base. Default: `integration.{name}.base-url`. |
+| `operations` | lista | no | Operaciones expuestas por este sistema. Si ausente o vacía, el generador salta la generación del adaptador ACL (INT-008 warn). Ver §3.1. |
 
 ### Valores válidos de `type`
 
 `payment-gateway` · `notification-provider` · `identity-provider` · `erp` · `logistics`
 · `tax-authority` · `crm` · `analytics` · `storage` · `other`
+
+### 3.1 Sub-sección `operations[]`
+
+Cada entrada describe una operación HTTP expuesta por el sistema externo. El generador produce
+un método en `{Ext}ClientPort`, `{Ext}RestClient` y `{Ext}AclAdapter` por cada operación.
+
+#### Propiedades de `operations[]`
+
+| Propiedad | Tipo | Requerido | Descripción |
+|---|---|---|---|
+| `name` | camelCase | ✅ | Nombre del método generado. Validado por INT-008/INT-009. |
+| `description` | string | no | Solo referencia. |
+| `method` | `GET` \| `POST` \| `PUT` \| `PATCH` \| `DELETE` | no | HTTP verb. Default: `GET`. |
+| `path` | string | no | Path HTTP. Soporta path variables `{varName}` — se extraen como `@PathVariable`. Default: `/{name}`. |
+| `request` | objeto | no | Body de la petición. Solo efectivo si `method` es `POST`, `PUT` o `PATCH`. |
+| `request.fields[]` | lista | no | Campos del body. Generan Java record `{OpName}RequestDto`. |
+| `request.fields[].name` | camelCase | ✅ | Nombre del campo. |
+| `request.fields[].type` | `String` \| `Integer` \| `Long` \| `Boolean` \| `Decimal` \| `Instant` \| `UUID` | ✅ | Tipo wire-format. `UUID` → `String` en DTO de infra. `Decimal` → `BigDecimal`. |
+| `request.fields[].optional` | boolean | no | Si `true`, campo opcional en el DTO. Default: `false`. |
+| `response` | objeto | no | Body de la respuesta. |
+| `response.fields[]` | lista | no | Campos de la respuesta. Generan `{OpName}ResponseDto`. |
+| `response.fields[].name` | camelCase | ✅ | Nombre del campo. |
+| `response.fields[].type` | ver tipos arriba | ✅ | Tipo wire-format. |
+| `response.fields[].optional` | boolean | no | Si `true`, campo opcional en el DTO. Default: `false`. |
+| `domain` | objeto | no | Modelo de dominio al que se traduce la respuesta (ACL). Solo aplica si `response.fields` está declarado. |
+| `domain.returnType` | PascalCase | ✅ (si `domain` declarado) | Nombre del Java record generado en `domain/models/{extPackage}/`. |
+| `domain.fields[]` | lista | no | Campos del domain record. |
+| `domain.fields[].name` | camelCase | ✅ | Nombre del campo. |
+| `domain.fields[].type` | ver tipos + nombre de VO/record | ✅ | `UUID` → `java.util.UUID`. Otros valores se usan como nombre de tipo directo. |
+| `domain.fields[].source` | camelCase | no | Campo del `{OpName}ResponseDto` de origen. Genera comentario `// source: dto.{source}`. |
+| `domain.fields[].derivedFrom` | string | no | Expresión de derivación. Genera comentario `// derived_from: {expr}`. |
+
+#### Tipos wire-format
+
+> **Estos tipos son independientes de los tipos canónicos del `{bc}.yaml`.**
+> Los tipos canónicos (`Uuid`, `Money`, `Email`, `String(100)`, `List[T]`, `Range[T]`, etc.)
+> aplican a propiedades de entidades, value objects y agregados internos — procesados por
+> `type-mapper.js`. Los tipos wire-format aplican **solo** a `operations[].request|response.fields[].type`
+> y representan lo que el contrato HTTP externo realmente envía/recibe: primitivos JSON.
+> No tiene sentido declarar `Money` o `Email` en un campo de un sistema externo porque
+> ese contrato no está bajo tu control. El enriquecimiento hacia tipos de dominio se modela
+> en `domain.fields[]`, donde sí se acepta nombre libre de VO o record propio.
+
+| YAML `type` | Java en RequestDto / ResponseDto | Java en domain record |
+|---|---|---|
+| `String` | `String` | `String` |
+| `Integer` | `Integer` | `Integer` |
+| `Long` | `Long` | `Long` |
+| `Boolean` | `Boolean` | `boolean` |
+| `Decimal` | `BigDecimal` | `BigDecimal` |
+| `Instant` | `Instant` | `Instant` |
+| `UUID` | `String` (wire: llega como string) | `java.util.UUID` |
+| nombre libre | `String` (fallback) | nombre libre (VO o record) |
+
+> **`domain` opcional:** si no se declara `domain`, el `{Ext}AclAdapter` llama directamente
+> al RestClient y el `AclMapper` se genera con métodos `// TODO` para que el equipo
+> complete la traducción ACL.
+
+### Cómo se refleja `externalSystems` en el `{bc}.yaml`
+
+Un sistema externo se referencia en `{bc}.yaml` **exactamente igual** que un BC interno,
+dentro de `integrations.outbound[]`. La estructura YAML es idéntica; lo que cambia son
+las validaciones que se activan.
+
+Para que el BC `payments` llame al `payment-gateway`:
+
+**`payments.yaml`:**
+```yaml
+integrations:
+  outbound:
+    - name: payment-gateway    # ← mismo nombre que externalSystems[].name
+      protocol: http
+      operations:
+        - name: chargeCard     # ← INT-009: debe coincidir con externalSystems[payment-gateway].operations[].name
+        - name: refundCharge
+      # auth y resilience: omitidos — ya están declarados en system.yaml externalSystems[]
+```
+
+**Diferencias respecto a un BC interno:**
+
+| Aspecto | BC interno (`customer-supplier`) | Sistema externo (`acl`) |
+|---|---|---|
+| Validación de operaciones | INT-003: contra `{target}-internal-api.yaml` | INT-009: contra `externalSystems[name].operations[]` |
+| Feign client generado | `{Target}FeignClient` | `{Target}RestClient` |
+| `inbound` en el destino | requerido en el `{target}.yaml` | no existe (el externo no tiene `{bc}.yaml`) |
+| `auth`/`resilience` | desde `system.yaml integrations[]` | desde `system.yaml externalSystems[]` |
+
+> **INT-004 (bloqueante):** si `system.yaml integrations[from=X, to=Y, pattern=acl]` existe,
+> `Y` debe estar declarado en `externalSystems[]`.
+>
+> **INT-008 (warn):** si `externalSystems[name=Y].operations` está vacío o ausente, el
+> generador salta la generación del adaptador para ese contrato.
+>
+> **`auth` y `resilience` en `outbound`:** si `externalSystems[]` ya los declara, el
+> `{bc}.yaml outbound[]` **no debe** repetirlos. Solo declarar en `{bc}.yaml` cuando
+> `externalSystems[]` los omite.
 
 ### Código Java generado
 
@@ -304,6 +431,17 @@ El BC `from` llama al BC `to` vía REST síncrono. El generador produce:
 > vive en el BC receptor (`{to}.yaml`), donde el handler del use case es invocado al recibir
 > esa llamada HTTP.
 
+> **Fuente de los campos request/response:** el generador (`outbound-http-generator.js`) **no
+> lee campos de ningún YAML propio** para construir los DTOs e interfaces de esta integración.
+> Lee directamente los schemas de `components.schemas` del archivo
+> `arch/{to}/{to}-internal-api.yaml` (OpenAPI 3.x) y construye a partir de ahí:
+> los infra DTOs (`{Schema}Dto.java` — records), los modelos de dominio (`{Schema}.java` — records),
+> y las expresiones de mapping en el `{ToBc}AclMapper`. Los tipos se derivan del
+> `type`/`format` de OpenAPI (`string` → `String`, `number/double` → `double`, etc.) —
+> **no** de los tipos canónicos del `{bc}.yaml`. Si un schema del internal-api coincide con
+> el nombre de un Value Object del BC consumidor, el generador reutiliza ese VO en lugar de
+> generar un record nuevo.
+
 - En el BC `from`: un **Feign client** (`{ToBc}FeignClient.java`) — interfaz con infra DTOs, nombre Feign `"{to}-service"`
 - En el BC `from`: la **interfaz de puerto de salida** (`{ToBc}ServicePort.java`)
 - En el BC `from`: el **adaptador de implementación** (`{ToBc}FeignAdapter.java`) — delega al client y mapea via `{ToBc}AclMapper`
@@ -409,10 +547,20 @@ public class SmsProviderAclAdapter implements SmsProviderClientPort {
 
 ### 4.3 Bloque `resilience`
 
-Configura el comportamiento de resiliencia para llamadas HTTP salientes. Disponible en
-`integrations[].resilience` y `externalSystems[].resilience`.
+Configura el comportamiento de resiliencia para llamadas HTTP salientes.
 
-**Precedencia:** `bc.yaml#/integrations/outbound[name=X].resilience` > `system.yaml`
+| Tipo de integración | Dónde declarar `resilience` en `system.yaml` |
+|---|---|
+| `pattern: customer-supplier, channel: http` (BC→BC) | `integrations[from=X, to=Y, channel=http].resilience` |
+| `pattern: acl, channel: http` (sistema externo) | `externalSystems[name=Y].resilience` |
+
+> **`integrations[pattern=acl].resilience` no es leído por el resolver.** Para sistemas
+> externos, la resiliencia vive exclusivamente en `externalSystems[].resilience`
+> (o en el override de `{bc}.yaml outbound[].resilience`).
+
+**Precedencia por tipo:**
+- BC→BC: `bc.yaml outbound[name=target].resilience` > `system.yaml integrations[from=bc, to=target].resilience`
+- Externo: `bc.yaml outbound[name=target].resilience` > `system.yaml externalSystems[name=target].resilience`
 
 #### Estructura real que lee el generador
 
@@ -569,10 +717,20 @@ system.yaml — resilience:
 
 ### 4.4 Bloque `auth`
 
-Configura la autenticación saliente para integraciones HTTP. Disponible en
-`integrations[].auth` y `externalSystems[].auth`.
+Configura la autenticación saliente para integraciones HTTP.
 
-**Precedencia:** `bc.yaml#/integrations/outbound[name=X].auth` > `system.yaml`
+| Tipo de integración | Dónde declarar `auth` en `system.yaml` |
+|---|---|
+| `pattern: customer-supplier, channel: http` (BC→BC) | `integrations[from=X, to=Y, channel=http].auth` |
+| `pattern: acl, channel: http` (sistema externo) | `externalSystems[name=Y].auth` |
+
+> **`integrations[pattern=acl].auth` no es leído por el resolver.** Para sistemas
+> externos, la autenticación vive exclusivamente en `externalSystems[].auth`
+> (o en el override de `{bc}.yaml outbound[].auth`).
+
+**Precedencia por tipo:**
+- BC→BC: `bc.yaml outbound[name=target].auth` > `system.yaml integrations[from=bc, to=target].auth`
+- Externo: `bc.yaml outbound[name=target].auth` > `system.yaml externalSystems[name=target].auth`
 
 #### `type: oauth2-cc` — Client Credentials OAuth2
 
@@ -586,24 +744,17 @@ auth:
 | Propiedad | Tipo | Requerido | Descripción |
 |---|---|---|---|
 | `type` | `oauth2-cc` | ✅ | OAuth2 Client Credentials flow. |
-| `tokenEndpoint` | URL | ✅ (INT-015) | Endpoint de token del authorization server. |
+| `tokenEndpoint` | URL | ✅ (INT-015) | Endpoint de token del authorization server. Validado por INT-015 pero no inyectado en `application.yaml` por el generador. |
 | `credentialKey` | string | ✅ (INT-015) | Clave de Spring Security OAuth2 registration (`spring.security.oauth2.client.registration.{credentialKey}`). |
 
-**Código Java generado** — `application.yaml` (fragmento):
-```yaml
-spring:
-  security:
-    oauth2:
-      client:
-        registration:
-          payment-gateway:
-            authorization-grant-type: client_credentials
-            client-id: ${PAYMENT_GATEWAY_CLIENT_ID}
-            client-secret: ${PAYMENT_GATEWAY_CLIENT_SECRET}
-        provider:
-          payment-gateway:
-            token-uri: https://auth.payment-gateway.example.com/oauth/token
-```
+> **El generador NO produce el bloque `spring.security.oauth2.client` en `application.yaml`.**
+> `tokenEndpoint` y `credentialKey` son validados por INT-015 pero la configuración del
+> cliente OAuth2 debe añadirse manualmente. Ver GAP-AUTH-001 en `system-yaml-reference-auth.md`.
+
+**Lo que el generador SÍ produce para `oauth2-cc`:**
+1. `{Target}FeignConfig.java` — inyecta `OAuth2ClientCredentialsSupport` y emite `@Bean RequestInterceptor`
+2. `shared/infrastructure/auth/OAuth2ClientCredentialsSupport.java` — emitido **una sola vez** si alguna integración usa `oauth2-cc`
+3. `build.gradle` — añade `spring-boot-starter-oauth2-client` condicionalmente
 
 #### `type: api-key` — API Key via header
 
@@ -899,28 +1050,47 @@ sagas:
 
 ### Código Java generado
 
-El generador produce un **saga listener** por step y el **orquestador de saga** como
-clase anotada con `@Component`:
+El `saga-generator.js` produce **4 artefactos** cuando `system.sagas` es no-vacío:
+
+```
+shared/domain/annotations/
+└── SagaStep.java                   ← anotación custom para marcar handlers de saga
+
+shared/infrastructure/correlation/
+└── CorrelationContext.java         ← propagación de correlationId entre capas
+
+shared/infrastructure/web/
+└── CorrelationFilter.java          ← filtro HTTP que abre el contexto de correlación
+
+shared/application/sagas/
+└── {SagaName}Steps.java            ← constants holder (uno por saga)
+```
+
+**`{SagaName}Steps.java`** es una clase final con constantes — sin lógica, sin listeners,
+sin inyección de beans. Sirve para que otros componentes (handlers, tests, tracing) referencien
+nombres de eventos y BCs sin hard-codear strings:
 
 ```java
-// Listener del step 1 en BC inventory
-@Component
-public class OrderFulfillmentSagaStep1Listener {
+// OrderFulfillmentSagaSteps.java
+public final class OrderFulfillmentSagaSteps {
 
-    private final ReserveStockUseCase reserveStockUseCase;
+    private OrderFulfillmentSagaSteps() {}
 
-    @RabbitListener(queues = "saga.order-fulfillment.step1")
-    // o @KafkaListener(topics = "saga.order-fulfillment.step1")
-    public void handle(PaymentConfirmed event) {
-        try {
-            reserveStockUseCase.execute(/* command derivado del evento */);
-            // publica StockReserved
-        } catch (Exception e) {
-            // publica StockReservationFailed → activa compensación
-        }
-    }
+    public static final String NAME         = "OrderFulfillmentSaga";
+    public static final String TRIGGER_EVENT = "PaymentConfirmed";
+    public static final String TRIGGER_BC   = "payments";
+
+    public static final int    STEP_0_ORDER        = 0;
+    public static final String STEP_0_BC           = "orders";
+    public static final String STEP_0_TRIGGERED_BY = "PaymentConfirmed";
+    public static final String STEP_0_SUCCESS       = "OrderConfirmed";
 }
 ```
+
+> **Los listeners con `@RabbitListener`/`@KafkaListener` no son generados por el saga-generator.**
+> La lógica de cada paso vive en los event consumers y use case handlers de cada BC,
+> generados por `messaging-generator.js` a partir de `domainEvents.consumed[]` en el
+> YAML táctico de cada BC.
 
 ---
 
