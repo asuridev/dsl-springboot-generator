@@ -5,7 +5,7 @@ const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toPackagePath, getApplicationClassName } = require('../utils/naming');
 const { loadParameters } = require('../utils/config-manager');
 const { hasAnyPersistentProjection } = require('./projection-updater-generator');
-const { hasAnyResilience, hasAnyOAuth2Cc } = require('../utils/resilience-auth-resolver');
+const { hasAnyResilience, hasAnyOAuth2Cc, buildResilienceInstances } = require('../utils/resilience-auth-resolver');
 const { buildErrorMap } = require('./application-generator');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
@@ -177,6 +177,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   // ── Resilience + OAuth2 flags (Phase 5) ──────────────────────────────
   // derived_from: system.yaml#/integrations[*]/resilience + .../auth
   const resilienceEnabled    = hasAnyResilience(system, allBcYamls);
+  const resilienceInstances  = buildResilienceInstances(system, allBcYamls);
   const oauth2ClientEnabled  = hasAnyOAuth2Cc(system, allBcYamls);
 
   // Derive artifact id from system name (kebab-case)
@@ -291,7 +292,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
       await renderAndWrite(
         path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'resilience.yaml.ejs'),
         path.join(paramDir, 'resilience.yaml'),
-        {}
+        { resilienceInstances }
       );
     }
   }

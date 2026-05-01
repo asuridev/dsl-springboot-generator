@@ -107,6 +107,123 @@ function hasAnyResilience(system, allBcYamls) {
 }
 
 /**
+ * Builds the list of named Resilience4j instances that need an explicit
+ * per-instance block in resilience.yaml.
+ *
+ * An instance is included when its resolved resilience object contains at
+ * least one sub-field inside `circuitBreaker` or `retries` with a concrete
+ * value (beyond bare existence).
+ *
+ * Supported sub-fields (all optional):
+ *   circuitBreaker:
+ *     failureRateThreshold        integer 1-100
+ *     waitDurationInOpenState     string with unit (e.g. "60s")
+ *     slidingWindowSize           integer
+ *     minimumNumberOfCalls        integer
+ *     permittedNumberOfCallsInHalfOpenState  integer
+ *   retries:
+ *     maxAttempts                 integer
+ *     waitDuration                string with unit (e.g. "1000ms")
+ *
+ * Precedence for each target follows resolveResilienceForBcHttp /
+ * resolveResilienceForExternal (bc.yaml outbound overrides system.yaml).
+ *
+ * @param {object} system      — parsed system.yaml
+ * @param {Array}  allBcYamls  — all parsed bc.yaml objects
+ * @returns {Array<{name, circuitBreaker?, retries?}>}
+ */
+function buildResilienceInstances(system, allBcYamls) {
+  const CB_FIELDS  = ['failureRateThreshold', 'waitDurationInOpenState', 'slidingWindowSize',
+                      'minimumNumberOfCalls', 'permittedNumberOfCallsInHalfOpenState'];
+  const RET_FIELDS = ['maxAttempts', 'waitDuration'];
+
+  function extractCb(res) {
+    if (!res || !res.circuitBreaker || typeof res.circuitBreaker !== 'object') return null;
+    const out = {};
+    for (const f of CB_FIELDS) {
+      if (res.circuitBreaker[f] != null) out[f] = res.circuitBreaker[f];
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  }
+
+  function extractRetries(res) {
+    if (!res || !res.retries || typeof res.retries !== 'object') return null;
+    const out = {};
+    for (const f of RET_FIELDS) {
+      if (res.retries[f] != null) out[f] = res.retries[f];
+    }
+    return Object.keys(out).length > 0 ? out : null;
+  }
+
+  const seen = new Set();
+  const instances = [];
+
+  // Collect all unique (target, resolved-resilience) pairs.
+  // We need to iterate per-bc because resolveResilienceForBcHttp requires bcYaml.
+  // For external systems we use resolveResilienceForExternal per bc.
+  // To avoid duplicates we deduplicate by target name, keeping the first encounter
+  // (system.yaml order is the canonical order).
+
+  // 1. BC→BC integrations (customer-supplier, channel=http)
+  for (const integ of (system.integrations || [])) {
+    if (integ.channel !== 'http' || !integ.resilience) continue;
+    const name = integ.to;
+    if (seen.has(name)) continue;
+    // Use the bc.yaml outbound override if available (check all bc yamls)
+    const bcYaml = (allBcYamls || []).find((b) => b && b.bc === integ.from) || null;
+    const resolved = bcYaml
+      ? resolveResilienceForBcHttp(system, bcYaml, name)
+      : integ.resilience;
+    const cb  = extractCb(resolved);
+    const ret = extractRetries(resolved);
+    if (cb || ret) {
+      seen.add(name);
+      instances.push({ name, ...(cb  && { circuitBreaker: cb }),
+                               ...(ret && { retries: ret }) });
+    }
+  }
+
+  // 2. External system integrations (acl, channel=http)
+  for (const ext of (system.externalSystems || [])) {
+    if (!ext || !ext.resilience) continue;
+    const name = ext.name;
+    if (seen.has(name)) continue;
+    // Check if any bc.yaml has an outbound override for this external
+    let resolved = ext.resilience;
+    for (const bcYaml of (allBcYamls || [])) {
+      const ob = findBcOutbound(bcYaml, name);
+      if (ob && ob.resilience) { resolved = pickFirst(ob.resilience, ext.resilience); break; }
+    }
+    const cb  = extractCb(resolved);
+    const ret = extractRetries(resolved);
+    if (cb || ret) {
+      seen.add(name);
+      instances.push({ name, ...(cb  && { circuitBreaker: cb }),
+                               ...(ret && { retries: ret }) });
+    }
+  }
+
+  // 3. bc.yaml outbound overrides that declare resilience with sub-fields
+  //    but whose target isn't in system.yaml integrations/externalSystems
+  for (const bcYaml of (allBcYamls || [])) {
+    for (const ob of (((bcYaml && bcYaml.integrations) || {}).outbound || [])) {
+      if (!ob || !ob.resilience) continue;
+      const name = ob.name;
+      if (seen.has(name)) continue;
+      const cb  = extractCb(ob.resilience);
+      const ret = extractRetries(ob.resilience);
+      if (cb || ret) {
+        seen.add(name);
+        instances.push({ name, ...(cb  && { circuitBreaker: cb }),
+                                 ...(ret && { retries: ret }) });
+      }
+    }
+  }
+
+  return instances;
+}
+
+/**
  * @returns {boolean} true if any HTTP integration uses auth.type === 'oauth2-cc'.
  */
 function hasAnyOAuth2Cc(system, allBcYamls) {
@@ -128,4 +245,5 @@ module.exports = {
   resolveAuthForExternal,
   hasAnyResilience,
   hasAnyOAuth2Cc,
+  buildResilienceInstances,
 };
