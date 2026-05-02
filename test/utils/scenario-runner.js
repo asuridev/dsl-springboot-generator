@@ -105,6 +105,15 @@ async function runScenario({ name, scenarioDir, generatorRoot, accept, verbose }
         path.join(expectedDir, 'src', 'main', 'java')
       );
       errors.push(...diffErrors);
+
+      const expectedResourcesDir = path.join(expectedDir, 'src', 'main', 'resources');
+      if (await fs.pathExists(expectedResourcesDir)) {
+        const resourcesDiffErrors = await diffDirectories(
+          path.join(tmpDir, 'src', 'main', 'resources'),
+          expectedResourcesDir
+        );
+        errors.push(...resourcesDiffErrors);
+      }
     } else {
       console.log(`    ℹ  No expected/ directory — run with --accept to create golden files`);
     }
@@ -218,13 +227,24 @@ async function acceptScenario(tmpDir, scenarioExpectedDir) {
     throw new Error('Accept failed: no src/main/java/ directory in generated output');
   }
 
-  const targetDir = path.join(scenarioExpectedDir, 'src', 'main', 'java');
-  await fs.ensureDir(targetDir);
-  await fs.emptyDir(targetDir);
-  await fs.copy(srcJavaDir, targetDir);
+  const targetJavaDir = path.join(scenarioExpectedDir, 'src', 'main', 'java');
+  await fs.ensureDir(targetJavaDir);
+  await fs.emptyDir(targetJavaDir);
+  await fs.copy(srcJavaDir, targetJavaDir);
 
-  const files = await collectFiles(targetDir);
-  return files.length;
+  const srcResourcesDir = path.join(tmpDir, 'src', 'main', 'resources');
+  let resourcesCount = 0;
+  if (await fs.pathExists(srcResourcesDir)) {
+    const targetResourcesDir = path.join(scenarioExpectedDir, 'src', 'main', 'resources');
+    await fs.ensureDir(targetResourcesDir);
+    await fs.emptyDir(targetResourcesDir);
+    await fs.copy(srcResourcesDir, targetResourcesDir);
+    const resourceFiles = await collectFiles(targetResourcesDir);
+    resourcesCount = resourceFiles.length;
+  }
+
+  const javaFiles = await collectFiles(targetJavaDir);
+  return javaFiles.length + resourcesCount;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
