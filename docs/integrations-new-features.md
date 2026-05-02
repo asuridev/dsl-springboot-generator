@@ -12,6 +12,7 @@ Las fases se entregaron en orden:
 | 3 | Local Read Model (proyecciones persistentes) | JPA + Updater + Flyway |
 | 4 | Sagas coreografiadas | `@SagaStep`, `CorrelationContext`, `SagaSteps` |
 | 5 | Resiliencia HTTP + autenticación | `@CircuitBreaker`/`@Retry`, OAuth2/api-key |
+| 6 | Objetos complejos en sistemas externos | `schemas`, `List<X>`, INT-022/INT-023 |
 
 ---
 
@@ -570,6 +571,179 @@ projections:
 
 **Resultado:** tabla `customer_address_snapshot` con migración Flyway; `CustomerAddressSnapshotUpdater` consume el evento y hace upsert; las queries del BC `orders` pueden leer el snapshot sin llamada HTTP a `customers`.
 
+### Caso E — Sistema externo con objetos compuestos y array de objetos
+
+```yaml
+# system.yaml
+externalSystems:
+  - name: payment-gateway
+    auth:
+      type: oauth2-cc
+      tokenEndpoint: https://idp.example.com/oauth2/token
+      credentialKey: payment-gateway
+    schemas:
+      SplitDetail:
+        - name: merchantId
+          type: String
+        - name: amount
+          type: Decimal
+      ChargeResult:
+        - name: chargeId
+          type: String
+        - name: status
+          type: String
+        - name: splits
+          type: "List<SplitDetail>"
+    operations:
+      - name: chargeCard
+        method: POST
+        path: /v1/charges
+        request:
+          fields:
+            - name: cardToken
+              type: String
+            - name: amount
+              type: Decimal
+        response:
+          fields:
+            - name: result
+              type: ChargeResult
+        domain:
+          returnType: ChargeResult
+          fields:
+            - name: chargeId
+              type: String
+              source: chargeId
+            - name: status
+              type: String
+              source: status
+```
+
+**Resultado:** cuatro archivos generados en `infrastructure/adapters/paymentGateway/dtos/`:
+
+```java
+// SplitDetailDto.java
+public record SplitDetailDto(
+    String merchantId,
+    BigDecimal amount
+) {}
+
+// ChargeResultDto.java
+import java.util.List;
+public record ChargeResultDto(
+    String chargeId,
+    String status,
+    List<SplitDetailDto> splits
+) {}
+
+// ChargeCardRequestDto.java
+public record ChargeCardRequestDto(
+    String cardToken,
+    BigDecimal amount
+) {}
+
+// ChargeCardResponseDto.java
+import com.example.payments.infrastructure.adapters.paymentGateway.dtos.ChargeResultDto;
+public record ChargeCardResponseDto(
+    ChargeResultDto result
+) {}
+```
+
+El mapper ACL recibe un `// TODO` stub para que el desarrollador implemente la traducción
+del `ChargeCardResponseDto` al domain record `ChargeResult` de la capa de dominio.
+
+---
+
+---
+
+## Fase 6 — Objetos complejos en sistemas externos
+
+### 7.1 Qué problema resuelve
+
+Antes de la fase 6, los campos de `request` y `response` en `externalSystems[].operations[]`
+solo aceptaban tipos wire-format escalares (`String`, `Integer`, `Decimal`, etc.). Un campo
+con `type: ChargeResult` (un objeto compuesto) se mapeaba silenciosamente a `String` en el DTO
+generado, produciendo código incorrecto sin advertencia.
+
+La fase 6 introduce el bloque `schemas` en cada entrada de `externalSystems[]`. Los schemas
+permiten declarar tipos compuestos que son referenciables desde los campos de las operaciones
+mediante `type: SchemaName` o `type: "List<SchemaName>"` (convención OpenAPI-style).
+
+### 7.2 Schema añadido
+
+```yaml
+# system.yaml
+externalSystems:
+  - name: payment-gateway
+    schemas:                       # NUEVO — bloque opcional
+      SplitDetail:                 # PascalCase → genera SplitDetailDto.java
+        - name: merchantId
+          type: String
+        - name: amount
+          type: Decimal
+      ChargeResult:
+        - name: chargeId
+          type: String
+        - name: splits
+          type: "List<SplitDetail>"  # List<X> OpenAPI-style
+    operations:
+      - name: chargeCard
+        method: POST
+        path: /v1/charges
+        request:
+          fields:
+            - name: cardToken
+              type: String
+        response:
+          fields:
+            - name: result
+              type: ChargeResult     # ← referencia al schema
+```
+
+### 7.3 Convención `List<X>`
+
+Usar `type: "List<X>"` (entre comillas en YAML para evitar interpretación del `<`) donde X
+es un tipo escalar o un nombre de schema del mismo sistema externo.
+
+- `List<String>` → `List<String>`
+- `List<Decimal>` → `List<BigDecimal>`
+- `List<SplitDetail>` → `List<SplitDetailDto>`
+- `List<List<String>>` → `List<List<String>>` (resolucón recursiva; raro en APIs REST)
+
+### 7.4 Artefactos generados
+
+Por cada entrada en `schemas`, el generador produce un Java record inmutable en
+`infrastructure/adapters/{extPackage}/dtos/` **antes** de los DTOs de las operaciones,
+para que los imports estén disponibles:
+
+```
+infrastructure/adapters/paymentGateway/dtos/
+├── SplitDetailDto.java          ← record de escalares
+├── ChargeResultDto.java         ← record con List<SplitDetailDto> (+ import java.util.List)
+├── ChargeCardRequestDto.java    ← DTO de operación
+└── ChargeCardResponseDto.java   ← DTO de operación con nestedDtoImport automático
+```
+
+Cada DTO de operación recibe automáticamente los `import` necesarios para los tipos de
+schema que referencia (campo `nestedDtoImports` calculado por `extractNestedDtoImports`).
+
+### 7.5 Validaciones nuevas
+
+| Código | Nivel | Condición |
+|---|---|---|
+| INT-022 | error | Campo en `operations[].request\|response.fields[]` con tipo no escalar no declarado en `schemas`. |
+| INT-023 | error | Campo dentro de `schemas[X]` con tipo base no escalar ni declarado en `schemas` del mismo sistema externo. |
+
+Ambas reglas se ejecutan en `src/utils/integration-validator.js` dentro de
+`checkExternalSchemas()`, llamado desde `validateIntegrationCoherence()`.
+
+### 7.6 Retrocompatibilidad
+
+El bloque `schemas` es completamente opcional. Un `externalSystems[]` sin `schemas` se
+comporta exactamente igual que antes: los campos de operación solo aceptan escalares y
+el fallback para tipos no reconocidos ahora retorna `Object` (en vez de `String` silencioso)
+para hacer el error visible, junto con el diagnóstico INT-022.
+
 ---
 
 ## Tabla de compatibilidad
@@ -590,3 +764,4 @@ Todos los campos descritos son **opcionales**. Un proyecto que no declare ningun
 | Sagas coreografiadas | `system.sagas[].style: choreography` | sin sagas → no genera | ✅ |
 | Resiliencia HTTP | `*.resilience` | sin bloque → no genera | ✅ |
 | Auth HTTP | `*.auth.type: api-key \| bearer \| oauth2-cc` | `none` | ✅ |
+| Objetos complejos en ext | `externalSystems[].schemas` | sin schemas → solo escalares | ✅ |

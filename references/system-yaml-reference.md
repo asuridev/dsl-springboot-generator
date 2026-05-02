@@ -206,6 +206,7 @@ externalSystems:
 | `resilience` | objeto | no | Configuración de resiliencia para llamadas hacia este sistema. Consultar §4.3. |
 | `auth` | objeto | no | Configuración de autenticación saliente. Consultar §4.4. |
 | `baseUrlProperty` | string | no | Clave de la property Spring Boot con la URL base. Default: `integration.{name}.base-url`. |
+| `schemas` | mapa | no | Tipos compuestos reutilizables declarados como `schemaName: fields[]`. Referenciables desde `operations[].request|response.fields[].type` y desde otros schemas del mismo sistema externo. Ver §3.2. |
 | `operations` | lista | no | Operaciones expuestas por este sistema. Si ausente o vacía, el generador salta la generación del adaptador ACL (INT-008 warn). Ver §3.1. |
 
 ### Valores válidos de `type`
@@ -229,12 +230,12 @@ un método en `{Ext}ClientPort`, `{Ext}RestClient` y `{Ext}AclAdapter` por cada 
 | `request` | objeto | no | Body de la petición. Solo efectivo si `method` es `POST`, `PUT` o `PATCH`. |
 | `request.fields[]` | lista | no | Campos del body. Generan Java record `{OpName}RequestDto`. |
 | `request.fields[].name` | camelCase | ✅ | Nombre del campo. |
-| `request.fields[].type` | `String` \| `Integer` \| `Long` \| `Boolean` \| `Decimal` \| `Instant` \| `UUID` | ✅ | Tipo wire-format. `UUID` → `String` en DTO de infra. `Decimal` → `BigDecimal`. |
+| `request.fields[].type` | escalar \| nombre de schema \| `List<X>` | ✅ | Tipo wire-format. Escalares: `String`, `Integer`, `Long`, `Boolean`, `Decimal`, `Instant`, `UUID`. Nombre de schema declarado en `schemas`. `List<X>` donde X es escalar o nombre de schema. `UUID` → `String` en DTO de infra. `Decimal` → `BigDecimal`. |
 | `request.fields[].optional` | boolean | no | Si `true`, campo opcional en el DTO. Default: `false`. |
 | `response` | objeto | no | Body de la respuesta. |
 | `response.fields[]` | lista | no | Campos de la respuesta. Generan `{OpName}ResponseDto`. |
 | `response.fields[].name` | camelCase | ✅ | Nombre del campo. |
-| `response.fields[].type` | ver tipos arriba | ✅ | Tipo wire-format. |
+| `response.fields[].type` | escalar \| nombre de schema \| `List<X>` | ✅ | Mismo conjunto de tipos que `request.fields[].type`. |
 | `response.fields[].optional` | boolean | no | Si `true`, campo opcional en el DTO. Default: `false`. |
 | `domain` | objeto | no | Modelo de dominio al que se traduce la respuesta (ACL). Solo aplica si `response.fields` está declarado. |
 | `domain.returnType` | PascalCase | ✅ (si `domain` declarado) | Nombre del Java record generado en `domain/models/{extPackage}/`. |
@@ -264,13 +265,124 @@ un método en `{Ext}ClientPort`, `{Ext}RestClient` y `{Ext}AclAdapter` por cada 
 | `Decimal` | `BigDecimal` | `BigDecimal` |
 | `Instant` | `Instant` | `Instant` |
 | `UUID` | `String` (wire: llega como string) | `java.util.UUID` |
-| nombre libre | `String` (fallback) | nombre libre (VO o record) |
+| nombre de schema | `{SchemaName}Dto` (record generado en `adapters/{ext}/dtos/`) | nombre libre (VO o record) |
+| `List<escalar>` | `List<JavaType>` (con `import java.util.List`) | `List<JavaType>` |
+| `List<schema>` | `List<{SchemaName}Dto>` | `List<NombreLibre>` |
 
 > **`domain` opcional:** si no se declara `domain`, el `{Ext}AclAdapter` llama directamente
 > al RestClient y el `AclMapper` se genera con métodos `// TODO` para que el equipo
 > complete la traducción ACL.
 
-### Cómo se refleja `externalSystems` en el `{bc}.yaml`
+### 3.2 Sub-sección `schemas`
+
+Declara tipos compuestos (objetos) que pueden ser referenciados desde los campos de `request`
+y `response` de las operaciones del mismo sistema externo. Cada entrada del mapa genera un
+Java record `{SchemaName}Dto` en `infrastructure/adapters/{ext}/dtos/`.
+
+#### Motivación
+
+Las APIs externas reales suelen enviar y recibir objetos anidados. Sin `schemas`, los
+campos del contrato quedarían tipados como `Object` (fallback) o habría que aplanar
+artificialmente el contrato. Con `schemas`, el generador produce registros Java inmutables
+para cada tipo compuesto y los importa automáticamente en los DTOs de operación.
+
+#### Formato
+
+```yaml
+externalSystems:
+  - name: payment-gateway
+    schemas:
+      SplitDetail:               # ← nombre PascalCase; genera SplitDetailDto.java
+        - name: merchantId
+          type: String
+        - name: amount
+          type: Decimal
+        - name: optional
+          type: Boolean
+          optional: true
+      ChargeResult:              # ← puede referenciar otros schemas del mismo ext
+        - name: chargeId
+          type: String
+        - name: status
+          type: String
+        - name: splits            # array de SplitDetail
+          type: "List<SplitDetail>"
+    operations:
+      - name: chargeCard
+        method: POST
+        path: /v1/charges
+        request:
+          fields:
+            - name: cardToken
+              type: String
+            - name: amount
+              type: Decimal
+        response:
+          fields:
+            - name: result
+              type: ChargeResult  # ← referencia al schema declarado arriba
+```
+
+#### Propiedades de `schemas`
+
+| Propiedad | Tipo | Requerido | Descripción |
+|---|---|---|---|
+| `{SchemaName}` | lista de campos | ✅ | Nombre PascalCase. Genera `{SchemaName}Dto.java`. |
+| `{SchemaName}[].name` | camelCase | ✅ | Nombre del campo en el Java record. |
+| `{SchemaName}[].type` | escalar \| nombre de schema \| `List<X>` | ✅ | Mismos tipos wire-format que los campos de operación (ver §3.1). |
+| `{SchemaName}[].optional` | boolean | no | Si `true`, campo opcional. Default: `false`. |
+
+#### Artefactos generados
+
+Por cada entrada en `schemas` el generador produce **un archivo por schema**, antes de los
+DTOs de las operaciones (para que los imports estén disponibles):
+
+```
+infrastructure/adapters/{extPackage}/dtos/
+├── SplitDetailDto.java          ← record de campos escalares
+├── ChargeResultDto.java         ← record con campo List<SplitDetailDto>
+├── ChargeCardRequestDto.java    ← DTO de operación — solo escalares
+└── ChargeCardResponseDto.java   ← DTO de operación — importa ChargeResultDto
+```
+
+Java generado para el ejemplo anterior:
+
+```java
+// derived_from: system.yaml#/externalSystems/payment-gateway/schemas/SplitDetail
+public record SplitDetailDto(
+    String merchantId,
+    BigDecimal amount,
+    Boolean optional
+) {}
+
+// derived_from: system.yaml#/externalSystems/payment-gateway/schemas/ChargeResult
+public record ChargeResultDto(
+    String chargeId,
+    String status,
+    List<SplitDetailDto> splits
+) {}
+
+// derived_from: system.yaml#/externalSystems/payment-gateway/operations/chargeCard/response
+public record ChargeCardResponseDto(
+    ChargeResultDto result
+) {}
+```
+
+#### Validaciones
+
+| Código | Nivel | Descripción |
+|---|---|---|
+| INT-022 | error | Campo en `operations[].request\|response.fields[]` con tipo no escalar no declarado en `schemas`. |
+| INT-023 | error | Campo dentro de `schemas[schemaName]` con tipo base no escalar y no declarado en `schemas` del mismo sistema externo. |
+
+#### Restricciones
+
+- Los schemas son **locales** al sistema externo: un schema de `payment-gateway` no puede ser
+  referenciado desde `sms-provider`.
+- La convención `List<X>` acepta cualquier nivel de anidamiento (`List<List<X>>` es válido
+  sintácticamente), aunque las APIs REST rara vez lo requieren.
+- No se soportan referencias circulares entre schemas (A → B → A). INT-023 las detecta
+  como referencias a tipos no declarados si el nodo no fue procesado todavía.
 
 Un sistema externo se referencia en `{bc}.yaml` **exactamente igual** que un BC interno,
 dentro de `integrations.outbound[]`. La estructura YAML es idéntica; lo que cambia son

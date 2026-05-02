@@ -13,43 +13,82 @@ const EXT_TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates', 'infrast
 // ─── Wire-format type mapping for external APIs ──────────────────────────────
 //
 // External APIs declare types in `externalSystems[].operations[].request|response.fields[].type`.
-// Only the canonical wire-format types are accepted here (no VOs, no enums, no UUID-as-strict-type).
-// Anything richer must be modelled in the domain record under domain.fields[].
+// Scalar wire-format types are mapped directly. Types that match a key in the `schemas` map
+// of the same externalSystem entry are resolved to `{SchemaName}Dto`.
+// The OpenAPI-style List<X> convention is supported at any level (e.g. List<SplitDetail>).
+// Anything richer in the domain model must be declared in domain.fields[].
 //
-function mapWireType(type) {
+function mapWireType(type, schemas = {}) {
   if (!type) return 'Object';
+  // OpenAPI-style List<X> convention — resolved recursively
+  const listMatch = type.match(/^List<(.+)>$/);
+  if (listMatch) {
+    const inner = mapWireType(listMatch[1], schemas);
+    return `List<${inner}>`;
+  }
   switch (type) {
-    case 'String': return 'String';
+    case 'String':  return 'String';
     case 'Integer': return 'Integer';
-    case 'Long': return 'Long';
+    case 'Long':    return 'Long';
     case 'Boolean': return 'Boolean';
     case 'Decimal': return 'BigDecimal';
     case 'Instant': return 'Instant';
-    case 'UUID': return 'String'; // wire-format: keep as string
-    default: return 'String';
+    case 'UUID':    return 'String'; // wire-format: keep as string
+    default:
+      // Schema reference declared in externalSystems[].schemas → XDto
+      return schemas[type] ? `${type}Dto` : 'Object';
   }
 }
 
 function mapDomainType(type) {
   if (!type) return 'Object';
+  // OpenAPI-style List<X> convention — resolved recursively
+  const listMatch = type.match(/^List<(.+)>$/);
+  if (listMatch) {
+    const inner = mapDomainType(listMatch[1]);
+    return `List<${inner}>`;
+  }
   switch (type) {
-    case 'String': return 'String';
+    case 'String':  return 'String';
     case 'Integer': return 'Integer';
-    case 'Long': return 'Long';
+    case 'Long':    return 'Long';
     case 'Boolean': return 'boolean';
     case 'Decimal': return 'BigDecimal';
     case 'Instant': return 'Instant';
-    case 'UUID': return 'java.util.UUID';
+    case 'UUID':    return 'java.util.UUID';
     default: return type; // domain VO/record name
   }
 }
 
-function fieldsToJava(fields) {
+function fieldsToJava(fields, schemas = {}) {
   return (fields || []).map((f) => ({
     name: f.name,
-    javaType: mapWireType(f.type),
+    javaType: mapWireType(f.type, schemas),
     optional: !!f.optional,
   }));
+}
+
+// ─── Nested DTO import extractor ─────────────────────────────────────────────
+//
+// Scans a resolved javaFields array for any XDto tokens and builds the list
+// of fully-qualified imports so that operation DTOs can reference schema DTOs.
+//
+function extractNestedDtoImports(javaFields, packageName, moduleName, targetBcPackage) {
+  const imports = [];
+  const seen = new Set();
+  for (const f of javaFields) {
+    // Match every XDto token inside the javaType (handles List<XDto>, XDto, etc.)
+    const matches = [...(f.javaType || '').matchAll(/\b(\w+Dto)\b/g)];
+    for (const [, dtoName] of matches) {
+      if (!seen.has(dtoName)) {
+        seen.add(dtoName);
+        imports.push(
+          `${packageName}.${moduleName}.infrastructure.adapters.${targetBcPackage}.dtos.${dtoName}`
+        );
+      }
+    }
+  }
+  return imports;
 }
 
 function domainFieldsToJava(fields) {
@@ -70,7 +109,7 @@ function extractPathVariables(httpPath) {
 
 // ─── Per-operation builder ───────────────────────────────────────────────────
 
-function buildOperation(extName, opSpec, packageName, moduleName, targetBcPackage) {
+function buildOperation(extName, opSpec, packageName, moduleName, targetBcPackage, extSchemas = {}) {
   const opName = opSpec.name;
   const httpVerb = (opSpec.method || 'GET').toUpperCase();
   const httpPath = opSpec.path || `/${opName}`;
@@ -81,10 +120,10 @@ function buildOperation(extName, opSpec, packageName, moduleName, targetBcPackag
   const hasDomainReturn = hasResponse && !!(opSpec.domain && opSpec.domain.returnType);
 
   const requestDtoName = hasBody ? `${toPascalCase(opName)}RequestDto` : null;
-  const requestFields = hasBody ? fieldsToJava(opSpec.request.fields) : [];
+  const requestFields = hasBody ? fieldsToJava(opSpec.request.fields, extSchemas) : [];
 
   const infraDtoName = hasResponse ? `${toPascalCase(opName)}ResponseDto` : null;
-  const infraDtoFields = hasResponse ? fieldsToJava(opSpec.response.fields) : [];
+  const infraDtoFields = hasResponse ? fieldsToJava(opSpec.response.fields, extSchemas) : [];
 
   const domainType = hasDomainReturn ? toPascalCase(opSpec.domain.returnType) : null;
   const domainFields = hasDomainReturn ? domainFieldsToJava(opSpec.domain.fields) : [];
@@ -135,8 +174,10 @@ async function generateForExternal(bcYaml, ext, config, outputDir, system = {}) 
   const feignClientName = `${extName}-client`;
   const baseUrlProperty = ext.baseUrlProperty || `integration.${extName}.base-url`;
 
+  const extSchemas = ext.schemas || {};
+
   const operations = (ext.operations || []).map((op) =>
-    buildOperation(extName, op, packageName, moduleName, targetBcPackage)
+    buildOperation(extName, op, packageName, moduleName, targetBcPackage, extSchemas)
   );
 
   if (operations.length === 0) return 0;
@@ -147,14 +188,34 @@ async function generateForExternal(bcYaml, ext, config, outputDir, system = {}) 
   const adapterDir = path.join(bcDir, 'infrastructure', 'adapters', targetBcPackage);
   const adapterDtosDir = path.join(adapterDir, 'dtos');
 
-  // Build allInfraDtos for reusable OutboundResponseDto template
+  // Build allInfraDtos:
+  //   1. Schema DTOs (declared in ext.schemas) — must come first so that operation
+  //      DTOs can reference them via nestedDtoImports without forward-reference issues.
+  //   2. Operation request/response DTOs — may reference schema DTOs.
   const allInfraDtos = [];
+
+  // 1. Schema DTOs
+  for (const [schemaName, schemaFields] of Object.entries(extSchemas)) {
+    const javaFields = fieldsToJava(schemaFields, extSchemas);
+    allInfraDtos.push({
+      dtoName: `${schemaName}Dto`,
+      fields: javaFields,
+      nestedDtoImports: extractNestedDtoImports(javaFields, packageName, moduleName, targetBcPackage),
+      targetBcPackage,
+      targetBc: extName,
+      packageName,
+      moduleName,
+      derivedFromComment: derivedFrom(`system.yaml#/externalSystems/${extName}/schemas/${schemaName}`),
+    });
+  }
+
+  // 2. Operation request/response DTOs
   for (const op of operations) {
     if (op.requestDtoName) {
       allInfraDtos.push({
         dtoName: op.requestDtoName,
         fields: op.requestFields,
-        nestedDtoImports: [],
+        nestedDtoImports: extractNestedDtoImports(op.requestFields, packageName, moduleName, targetBcPackage),
         targetBcPackage,
         targetBc: extName,
         packageName,
@@ -166,7 +227,7 @@ async function generateForExternal(bcYaml, ext, config, outputDir, system = {}) 
       allInfraDtos.push({
         dtoName: op.infraDtoName,
         fields: op.infraDtoFields,
-        nestedDtoImports: [],
+        nestedDtoImports: extractNestedDtoImports(op.infraDtoFields, packageName, moduleName, targetBcPackage),
         targetBcPackage,
         targetBc: extName,
         packageName,

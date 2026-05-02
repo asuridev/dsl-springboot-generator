@@ -59,6 +59,18 @@ const { toKebabCase } = require('./naming');
  *   INT-021  Si un campo de `published[].payload[]` coincide en nombre con una
  *            propiedad de aggregate del BC productor marcada `hidden: true`, el
  *            evento debe declarar `allowHiddenLeak: true`; de lo contrario error.
+ *
+ * Reglas Fase 6 (objetos complejos en externalSystems — gaps G-EXT-1, G-EXT-2):
+ *
+ *   INT-022  Todo campo en `externalSystems[].operations[].request|response.fields[]`
+ *            cuyo `type` no sea un tipo wire-format escalar conocido (ni List<escalar>)
+ *            debe tener su tipo base declarado en `externalSystems[].schemas`.
+ *            Nivel: error. Evita que mapWireType produzca silenciosamente `Object`.
+ *   INT-023  Todo campo dentro de `externalSystems[].schemas[schemaName]` debe usar
+ *            tipos wire-format escalares conocidos, `List<X>` donde X es un escalar
+ *            o nombre de schema del mismo sistema externo, o un nombre de schema del
+ *            mismo sistema externo. Referencias circulares o indefinidas son error.
+ *            Nivel: error.
  */
 
 // ─── Tipos auxiliares ────────────────────────────────────────────────────────
@@ -489,7 +501,78 @@ function checkSagas(system, bcIndex, diagnostics) {
     }
   }
 }
+// ─── Reglas Fase 6 — externalSystems schemas ─────────────────────────────────────
 
+const WIRE_SCALAR_TYPES = new Set(['String', 'Integer', 'Long', 'Boolean', 'Decimal', 'Instant', 'UUID']);
+
+/**
+ * Extracts the innermost type from a List<X> chain, e.g. "List<List<Foo>>" → "Foo".
+ * Returns the type unchanged if it is not a List<X> wrapper.
+ */
+function unwrapListType(type) {
+  let t = type;
+  let listMatch;
+  // eslint-disable-next-line no-cond-assign
+  while ((listMatch = t && t.match(/^List<(.+)>$/))) {
+    t = listMatch[1];
+  }
+  return t || '';
+}
+
+/**
+ * INT-022 — Every non-scalar field type in operation request/response must be declared
+ *           in externalSystems[].schemas.
+ * INT-023 — Every field type inside schemas must be a scalar, List<scalar|schema>, or
+ *           another schema of the same externalSystem. No undefined references.
+ */
+function checkExternalSchemas(system, diagnostics) {
+  const exts = system.externalSystems || [];
+  for (let i = 0; i < exts.length; i++) {
+    const ext = exts[i];
+    const extName = ext.name || `[${i}]`;
+    const schemas = ext.schemas || {};
+    const schemaNames = new Set(Object.keys(schemas));
+    const baseLoc = `system.yaml#/externalSystems[name=${extName}]`;
+
+    // INT-023: validate fields inside each declared schema
+    for (const [schemaName, schemaFields] of Object.entries(schemas)) {
+      for (let j = 0; j < (schemaFields || []).length; j++) {
+        const f = schemaFields[j];
+        const innerType = unwrapListType(f.type || '');
+        if (!WIRE_SCALAR_TYPES.has(innerType) && !schemaNames.has(innerType)) {
+          diagnostics.push({
+            code: 'INT-023',
+            level: 'error',
+            message: `Schema "${schemaName}" in external system "${extName}": field "${f.name}" has type "${f.type}" whose base type "${innerType}" is not a wire-format scalar and is not declared in schemas of the same externalSystem.`,
+            location: `${baseLoc}/schemas/${schemaName}/fields[${j}]`,
+          });
+        }
+      }
+    }
+
+    // INT-022: validate field types in operation request/response
+    for (const op of ext.operations || []) {
+      const opName = op.name || '?';
+      const opLoc = `${baseLoc}/operations[name=${opName}]`;
+
+      for (const side of ['request', 'response']) {
+        const fields = (op[side] && op[side].fields) || [];
+        for (let j = 0; j < fields.length; j++) {
+          const f = fields[j];
+          const innerType = unwrapListType(f.type || '');
+          if (!WIRE_SCALAR_TYPES.has(innerType) && !schemaNames.has(innerType)) {
+            diagnostics.push({
+              code: 'INT-022',
+              level: 'error',
+              message: `Operation "${opName}" ${side}.fields["${f.name}"] in external system "${extName}" has type "${f.type}" whose base type "${innerType}" is not a wire-format scalar and is not declared in externalSystems["${extName}"].schemas. Declare the schema or use a scalar type.`,
+              location: `${opLoc}/${side}/fields[${j}]`,
+            });
+          }
+        }
+      }
+    }
+  }
+}
 // ─── API pública ────────────────────────────────────────────────────────────
 
 function checkOAuth2ClientCredentials(system, bcYamls, diagnostics) {
@@ -868,6 +951,7 @@ function validateIntegrationCoherence(system, bcYamls, archDir, asyncApiByBc) {
   checkPersistentProjections(bcYamls, bcIndex, diagnostics);
   checkSagas(system, bcIndex, diagnostics);
   checkOAuth2ClientCredentials(system, bcYamls, diagnostics);
+  checkExternalSchemas(system, diagnostics);
 
   if (asyncApiByBc && asyncApiByBc.size > 0) {
     checkAsyncApiContractCoherence(bcYamls, asyncApiByBc, diagnostics);
