@@ -1,0 +1,123 @@
+{
+  "src/main/java/com/test/payments/infrastructure/adapters/paymentGateway/dtos/SplitDetailDto.java": {
+    "_comment": "Schema con solo escalares. Verifica Decimal→BigDecimal y campo optional",
+    "contains": [
+      "public record SplitDetailDto(",
+      "String merchantId",
+      "BigDecimal amount",
+      "BigDecimal percentage",
+      "import java.math.BigDecimal"
+    ],
+    "notContains": [
+      "Object merchantId",
+      "Object amount",
+      "class SplitDetailDto"
+    ]
+  },
+
+  "src/main/java/com/test/payments/infrastructure/adapters/paymentGateway/dtos/ChargeResultDto.java": {
+    "_comment": "Schema con referencia a otro schema (SplitDetail) y List<SplitDetail> → List<SplitDetailDto>",
+    "contains": [
+      "public record ChargeResultDto(",
+      "String chargeId",
+      "String status",
+      "List<SplitDetailDto> splits",
+      "import java.util.List"
+    ],
+    "notContains": [
+      "List<Object>",
+      "Object splits",
+      "class ChargeResultDto"
+    ]
+  },
+
+  "src/main/java/com/test/payments/infrastructure/adapters/paymentGateway/dtos/ChargeCardRequestDto.java": {
+    "_comment": "DTO de request con escalares. Verifica Decimal→BigDecimal",
+    "contains": [
+      "public record ChargeCardRequestDto(",
+      "String cardToken",
+      "BigDecimal amount",
+      "import java.math.BigDecimal"
+    ],
+    "notContains": [
+      "Object cardToken",
+      "Object amount"
+    ]
+  },
+
+  "src/main/java/com/test/payments/infrastructure/adapters/paymentGateway/dtos/ChargeCardResponseDto.java": {
+    "_comment": "DTO de response con un schema como campo. Verifica resolución ChargeResult→ChargeResultDto",
+    "contains": [
+      "public record ChargeCardResponseDto(",
+      "ChargeResultDto result"
+    ],
+    "notContains": [
+      "Object result",
+      "String result"
+    ]
+  },
+
+  "src/main/java/com/test/payments/domain/models/paymentGateway/ChargeResult.java": {
+    "_comment": "Domain record generado por bloque domain:. Verifica campos y source hints",
+    "contains": [
+      "public record ChargeResult(",
+      "String chargeId",
+      "String paymentStatus",
+      "// source: dto.result"
+    ],
+    "notContains": [
+      "class ChargeResult",
+      "Object chargeId"
+    ]
+  },
+
+  "src/main/java/com/test/payments/infrastructure/adapters/paymentGateway/PaymentGatewayAclMapper.java": {
+    "_comment": "Mapper ACL. Verifica método toChargeResult con TODO scaffold",
+    "contains": [
+      "public class PaymentGatewayAclMapper",
+      "public ChargeResult toChargeResult(",
+      "// TODO: implement mapping",
+      "throw new UnsupportedOperationException"
+    ]
+  },
+
+  "src/main/java/com/test/payments/infrastructure/adapters/paymentGateway/PaymentGatewayRestConfig.java": {
+    "_comment": "Config Feign. Verifica interceptor api-key con header X-API-Key y timeouts declarados",
+    "contains": [
+      "class PaymentGatewayRestConfig",
+      "integration.payment-gateway.api-key",
+      "X-API-Key",
+      "5000L",
+      "30000L",
+      "TimeUnit.MILLISECONDS"
+    ]
+  },
+
+  "src/main/java/com/test/payments/infrastructure/adapters/paymentGateway/PaymentGatewayAclAdapter.java": {
+    "_comment": "Adaptador ACL. Verifica que implementa el puerto y delega al client+mapper",
+    "contains": [
+      "class PaymentGatewayAclAdapter",
+      "PaymentGatewayClientPort",
+      "PaymentGatewayRestClient",
+      "PaymentGatewayAclMapper"
+    ]
+  },
+
+  "src/main/java/com/test/payments/infrastructure/adapters/paymentGateway/PaymentGatewayRestClient.java": {
+    "_comment": "Feign client. Verifica @FeignClient, URL base, path variable en refundCharge",
+    "contains": [
+      "PaymentGatewayRestClient",
+      "integration.payment-gateway.base-url",
+      "PaymentGatewayRestConfig",
+      "/v1/charges/{chargeId}/refund",
+      "@PathVariable"
+    ]
+  },
+
+  "src/main/java/com/test/payments/application/ports/PaymentGatewayClientPort.java": {
+    "_comment": "Puerto de salida. Verifica que el puerto existe",
+    "contains": [
+      "PaymentGatewayClientPort"
+    ]
+  }
+}

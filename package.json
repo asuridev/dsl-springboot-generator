@@ -8,7 +8,10 @@
   },
   "scripts": {
     "start": "node bin/dsl-springboot.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node test/runner.js",
+    "test:scenario": "node test/runner.js --scenario",
+    "test:accept": "node test/runner.js --accept",
+    "test:verbose": "node test/runner.js --verbose"
   },
   "keywords": [
     "cli",

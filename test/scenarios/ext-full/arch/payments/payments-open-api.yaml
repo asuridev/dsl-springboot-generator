@@ -1,0 +1,6 @@
+openapi: "3.0.3"
+info:
+  title: Payments API
+  version: "1.0.0"
+  description: Minimal OpenAPI spec for test scenario — no public endpoints.
+paths: {}

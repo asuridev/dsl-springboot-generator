@@ -1,0 +1,4 @@
+{
+  "description": "Happy path: externalSystem with schemas (SplitDetail, ChargeResult), List<SchemaName>, domain block, api-key auth, circuitBreaker + retries resilience, and path variable.",
+  "expectFailure": false
+}

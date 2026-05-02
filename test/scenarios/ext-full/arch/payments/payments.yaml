@@ -1,0 +1,23 @@
+bc: payments
+version: "1.0.0"
+
+aggregates:
+  - name: Payment
+    root: Payment
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: status
+        type: String(50)
+
+integrations:
+  outbound:
+    - name: payment-gateway
+      type: externalSystem
+      protocol: http
+      operations:
+        - name: chargeCard
+        - name: refundCharge

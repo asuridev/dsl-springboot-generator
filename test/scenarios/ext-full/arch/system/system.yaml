@@ -1,0 +1,104 @@
+# ─── Test scenario: ext-full ──────────────────────────────────────────────────
+# Covers:
+#   - externalSystems.schemas with nested objects (SplitDetail, ChargeResult)
+#   - List<SchemaName> field type → List<SplitDetailDto> in Java
+#   - Schema reference in operations.response → ChargeResultDto
+#   - domain block with returnType + source hints → ChargeResult domain record
+#   - auth.type: api-key (X-API-Key header, valueProperty)
+#   - resilience: circuitBreaker + retries (→ @CircuitBreaker + @Retry on adapter)
+#   - path variable in operation path (/v1/charges/{chargeId}/refund)
+# ──────────────────────────────────────────────────────────────────────────────
+
+system:
+  name: test-system
+  description: Minimal test system for externalSystems generation validation.
+  domainType: core
+
+boundedContexts:
+  - name: payments
+    type: supporting
+    purpose: Handles payment processing via external gateway.
+    aggregates:
+      - name: Payment
+        root: Payment
+        entities: []
+
+externalSystems:
+
+  - name: payment-gateway
+    description: Third-party card payment processor with split-payment support.
+    type: payment-gateway
+    auth:
+      type: api-key
+      header: X-API-Key
+      valueProperty: integration.payment-gateway.api-key
+    resilience:
+      circuitBreaker:
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+        slidingWindowSize: 10
+        minimumNumberOfCalls: 5
+        permittedNumberOfCallsInHalfOpenState: 3
+      retries:
+        maxAttempts: 3
+        waitDuration: 500ms
+      connectTimeoutMs: 5000
+      timeoutMs: 30000
+    schemas:
+      SplitDetail:
+        - name: merchantId
+          type: String
+        - name: amount
+          type: Decimal
+        - name: percentage
+          type: Decimal
+          optional: true
+      ChargeResult:
+        - name: chargeId
+          type: String
+        - name: status
+          type: String
+        - name: splits
+          type: "List<SplitDetail>"
+    operations:
+      - name: chargeCard
+        method: POST
+        path: /v1/charges
+        request:
+          fields:
+            - name: cardToken
+              type: String
+            - name: amount
+              type: Decimal
+        response:
+          fields:
+            - name: result
+              type: ChargeResult
+        domain:
+          returnType: ChargeResult
+          fields:
+            - name: chargeId
+              type: String
+              source: result
+            - name: paymentStatus
+              type: String
+              source: result
+
+      - name: refundCharge
+        method: POST
+        path: /v1/charges/{chargeId}/refund
+
+integrations:
+  - from: payments
+    to: payment-gateway
+    pattern: acl
+    channel: http
+    contracts:
+      - chargeCard
+      - refundCharge
+    notes: ACL isolates domain from payment gateway model.
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc
