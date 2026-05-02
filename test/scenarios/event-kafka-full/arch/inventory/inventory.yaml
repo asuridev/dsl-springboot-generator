@@ -1,0 +1,33 @@
+bc: inventory
+version: "1.0.0"
+
+aggregates:
+  - name: InventoryItem
+    root: InventoryItem
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: productId
+        type: Uuid
+      - name: stock
+        type: Integer
+    domainMethods:
+      - name: "register(productId)"
+
+useCases:
+  - id: register-product-in-catalog
+    name: RegisterProductInCatalog
+    type: command
+    aggregate: InventoryItem
+    trigger:
+      kind: event
+      event: ProductActivated
+    method: register(productId)
+
+domainEvents:
+  consumed:
+    - name: ProductActivated
+      channel: catalog.product.activated

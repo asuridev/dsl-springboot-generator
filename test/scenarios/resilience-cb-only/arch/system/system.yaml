@@ -1,0 +1,51 @@
+system:
+  name: test-resilience-system
+  description: Minimal test system for resilience-cb-only scenario.
+  domainType: core
+
+boundedContexts:
+  - name: healthcheck
+    type: supporting
+    purpose: Monitors external service health.
+    aggregates:
+      - name: ServiceHealth
+        root: ServiceHealth
+        entities: []
+
+externalSystems:
+  - name: health-api
+    description: External health check endpoint.
+    type: health-api
+    resilience:
+      circuitBreaker:
+        failureRateThreshold: 50
+        waitDurationInOpenState: 10s
+        slidingWindowSize: 5
+        minimumNumberOfCalls: 3
+        permittedNumberOfCallsInHalfOpenState: 1
+    operations:
+      - name: checkHealth
+        method: GET
+        path: /health
+        response:
+          fields:
+            - name: status
+              type: String
+        domain:
+          returnType: HealthStatus
+          fields:
+            - name: status
+              type: String
+
+integrations:
+  - from: healthcheck
+    to: health-api
+    pattern: acl
+    channel: http
+    contracts:
+      - checkHealth
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

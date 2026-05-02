@@ -1,0 +1,27 @@
+{
+  "src/main/java/com/test/healthcheck/infrastructure/adapters/healthApi/HealthApiRestConfig.java": {
+    "_comment": "Timeouts explícitos declarados: 2000 connect, 8000 read. Sin auth interceptor.",
+    "contains": [
+      "class HealthApiRestConfig",
+      "2000L",
+      "8000L",
+      "TimeUnit.MILLISECONDS"
+    ],
+    "notContains": [
+      "5000L",
+      "30000L",
+      "RequestInterceptor",
+      "@Value"
+    ]
+  },
+
+  "src/main/java/com/test/healthcheck/infrastructure/adapters/healthApi/HealthApiAclAdapter.java": {
+    "_comment": "Solo timeouts → no resilience annotations. @CircuitBreaker y @Retry AUSENTES.",
+    "notContains": [
+      "@CircuitBreaker",
+      "@Retry",
+      "fallbackMethod",
+      "import io.github.resilience4j"
+    ]
+  }
+}

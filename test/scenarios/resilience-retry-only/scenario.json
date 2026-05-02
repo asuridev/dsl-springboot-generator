@@ -1,0 +1,4 @@
+{
+  "description": "Resilience: solo retries (maxAttempts:3). Sin circuitBreaker, sin timeouts explícitos. Verifica que @Retry se genera; @CircuitBreaker y fallback NO aparecen.",
+  "expectFailure": false
+}

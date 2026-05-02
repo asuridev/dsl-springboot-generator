@@ -1,0 +1,4 @@
+{
+  "description": "Happy path: event pattern with Kafka broker. catalog publishes ProductActivated (scope: integration), inventory consumes it via use case trigger.",
+  "expectFailure": false
+}

@@ -1,0 +1,47 @@
+system:
+  name: test-cs-system
+  description: Test system for customer-supplier HTTP integration with full resilience.
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Handles order placement and validation via catalog BC.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+  - name: catalog
+    type: supporting
+    purpose: Provides product catalog and pricing information.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+integrations:
+  - from: orders
+    to: catalog
+    pattern: customer-supplier
+    channel: http
+    contracts:
+      - validateProductsAndPrices
+      - getProductById
+    resilience:
+      circuitBreaker:
+        failureRateThreshold: 60
+        waitDurationInOpenState: 20s
+        slidingWindowSize: 8
+        minimumNumberOfCalls: 4
+        permittedNumberOfCallsInHalfOpenState: 2
+      retries:
+        maxAttempts: 2
+        waitDuration: 300ms
+      connectTimeoutMs: 3000
+      timeoutMs: 10000
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

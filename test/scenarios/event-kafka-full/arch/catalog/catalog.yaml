@@ -1,0 +1,35 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+      - name: price
+        type: Decimal(10,2)
+
+domainEvents:
+  published:
+    - name: ProductActivated
+      scope: integration
+      channel: catalog.product.activated
+      payload:
+        - name: productId
+          type: Uuid
+          source: aggregate
+          field: id
+        - name: productName
+          type: String
+          source: aggregate
+          field: name
+        - name: price
+          type: Decimal
+          source: aggregate
+          field: price

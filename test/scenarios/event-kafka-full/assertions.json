@@ -1,0 +1,54 @@
+{
+  "src/main/java/com/test/catalog/domain/events/ProductActivatedEvent.java": {
+    "_comment": "Domain event record con payload. Verifica campos y metadata.",
+    "contains": [
+      "ProductActivatedEvent",
+      "productId",
+      "productName",
+      "price"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/events/ProductActivatedIntegrationEvent.java": {
+    "_comment": "Integration event record: wire format para el broker",
+    "contains": [
+      "ProductActivatedIntegrationEvent",
+      "productId",
+      "productName",
+      "price"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/ports/MessageBroker.java": {
+    "_comment": "Puerto de publicación. Verifica método publish para ProductActivated",
+    "contains": [
+      "MessageBroker",
+      "ProductActivated"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/usecases/CatalogDomainEventHandler.java": {
+    "_comment": "Handler que puente Spring events → MessageBroker port. Verifica @TransactionalEventListener o @EventListener",
+    "contains": [
+      "CatalogDomainEventHandler",
+      "ProductActivatedEvent"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/adapters/kafkaMessageBroker/CatalogKafkaMessageBroker.java": {
+    "_comment": "Adaptador Kafka del port MessageBroker. Verifica KafkaTemplate",
+    "contains": [
+      "CatalogKafkaMessageBroker",
+      "ProductActivatedIntegrationEvent"
+    ]
+  },
+
+  "src/main/java/com/test/inventory/infrastructure/kafkaListener/ProductActivatedKafkaListener.java": {
+    "_comment": "Kafka consumer en inventory. Verifica @KafkaListener y despacho de comando",
+    "contains": [
+      "ProductActivatedKafkaListener",
+      "@KafkaListener",
+      "RegisterProductInCatalogCommand"
+    ]
+  }
+}

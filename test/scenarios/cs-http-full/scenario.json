@@ -1,0 +1,4 @@
+{
+  "description": "Happy path: customer-supplier + http with full resilience (circuitBreaker + retries + timeouts). No auth. Two operations (POST with body, GET with path variable).",
+  "expectFailure": false
+}

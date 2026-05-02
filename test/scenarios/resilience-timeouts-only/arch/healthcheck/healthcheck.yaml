@@ -1,0 +1,20 @@
+bc: healthcheck
+version: "1.0.0"
+
+aggregates:
+  - name: ServiceHealth
+    root: ServiceHealth
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+
+integrations:
+  outbound:
+    - name: health-api
+      type: externalSystem
+      protocol: http
+      operations:
+        - name: checkHealth

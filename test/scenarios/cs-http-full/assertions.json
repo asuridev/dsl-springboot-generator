@@ -1,0 +1,70 @@
+{
+  "src/main/java/com/test/orders/application/ports/CatalogServicePort.java": {
+    "_comment": "Puerto de salida customer-supplier. Verifica interface + ambos métodos declarados",
+    "contains": [
+      "CatalogServicePort",
+      "validateProductsAndPrices",
+      "getProductById"
+    ]
+  },
+
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/CatalogFeignClient.java": {
+    "_comment": "Feign client. Verifica @FeignClient con nombre, URL, config, y ambas operaciones con sus verbos",
+    "contains": [
+      "@FeignClient",
+      "name = \"catalog-service\"",
+      "${integration.catalog.base-url}",
+      "CatalogFeignConfig",
+      "validateProductsAndPrices",
+      "getProductById",
+      "@PathVariable"
+    ]
+  },
+
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/CatalogFeignConfig.java": {
+    "_comment": "Config Feign. Verifica timeouts declarados (3000 connect, 10000 read). Sin interceptor de auth (auth=null)",
+    "contains": [
+      "class CatalogFeignConfig",
+      "3000L",
+      "10000L",
+      "TimeUnit.MILLISECONDS"
+    ],
+    "notContains": [
+      "RequestInterceptor",
+      "apiKey",
+      "bearerToken",
+      "@Value"
+    ]
+  },
+
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/CatalogFeignAdapter.java": {
+    "_comment": "Adaptador Feign. Verifica resilience: @CircuitBreaker + @Retry + fallback. Sin auth interceptor.",
+    "contains": [
+      "implements CatalogServicePort",
+      "@CircuitBreaker(name = \"catalog\"",
+      "fallbackMethod = \"validateProductsAndPricesFallback\"",
+      "@Retry(name = \"catalog\")",
+      "validateProductsAndPricesFallback",
+      "UnsupportedOperationException",
+      "CatalogFeignClient feignClient",
+      "CatalogAclMapper aclMapper"
+    ],
+    "notContains": [
+      "import io.github.resilience4j.bulkhead"
+    ]
+  },
+
+  "src/main/java/com/test/orders/domain/models/catalog/ValidateProductsResult.java": {
+    "_comment": "Domain record generado desde ValidateProductsResult schema. Verifica que no tiene sufijo Response.",
+    "contains": [
+      "public record ValidateProductsResult("
+    ]
+  },
+
+  "src/main/java/com/test/orders/domain/models/catalog/ProductDetails.java": {
+    "_comment": "Domain record generado desde ProductDetails schema. Verifica record.",
+    "contains": [
+      "public record ProductDetails("
+    ]
+  }
+}

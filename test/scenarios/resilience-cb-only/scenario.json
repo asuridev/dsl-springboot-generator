@@ -1,0 +1,4 @@
+{
+  "description": "Resilience: solo circuitBreaker block. Sin retries, sin timeouts explícitos. Verifica que @CircuitBreaker y fallback se generan; @Retry NO aparece.",
+  "expectFailure": false
+}

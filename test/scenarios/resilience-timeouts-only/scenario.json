@@ -1,0 +1,4 @@
+{
+  "description": "Resilience: solo timeouts (connectTimeoutMs:2000, timeoutMs:8000). Sin circuitBreaker, sin retries. Verifica valores exactos en FeignConfig; @CircuitBreaker y @Retry AUSENTES.",
+  "expectFailure": false
+}

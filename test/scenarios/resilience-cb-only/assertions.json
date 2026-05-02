@@ -1,0 +1,30 @@
+{
+  "src/main/java/com/test/healthcheck/infrastructure/adapters/healthApi/HealthApiAclAdapter.java": {
+    "_comment": "Solo circuitBreaker declarado. Verifica: @CircuitBreaker + fallback presentes; @Retry AUSENTE.",
+    "contains": [
+      "@CircuitBreaker(name = \"health-api\"",
+      "fallbackMethod = \"checkHealthFallback\"",
+      "checkHealthFallback",
+      "UnsupportedOperationException",
+      "import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker"
+    ],
+    "notContains": [
+      "@Retry",
+      "import io.github.resilience4j.retry"
+    ]
+  },
+
+  "src/main/java/com/test/healthcheck/infrastructure/adapters/healthApi/HealthApiRestConfig.java": {
+    "_comment": "Sin timeouts declarados → usa defaults (5000 connect, 30000 read)",
+    "contains": [
+      "class HealthApiRestConfig",
+      "5000L",
+      "30000L",
+      "TimeUnit.MILLISECONDS"
+    ],
+    "notContains": [
+      "RequestInterceptor",
+      "@Value"
+    ]
+  }
+}

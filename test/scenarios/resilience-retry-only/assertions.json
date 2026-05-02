@@ -1,0 +1,29 @@
+{
+  "src/main/java/com/test/healthcheck/infrastructure/adapters/healthApi/HealthApiAclAdapter.java": {
+    "_comment": "Solo retries (maxAttempts:3 → 3>1=true → @Retry generado). @CircuitBreaker y fallback AUSENTES.",
+    "contains": [
+      "@Retry(name = \"health-api\")",
+      "import io.github.resilience4j.retry.annotation.Retry"
+    ],
+    "notContains": [
+      "@CircuitBreaker",
+      "fallbackMethod",
+      "checkHealthFallback",
+      "import io.github.resilience4j.circuitbreaker"
+    ]
+  },
+
+  "src/main/java/com/test/healthcheck/infrastructure/adapters/healthApi/HealthApiRestConfig.java": {
+    "_comment": "Sin timeouts declarados → defaults (5000 connect, 30000 read para external)",
+    "contains": [
+      "class HealthApiRestConfig",
+      "5000L",
+      "30000L",
+      "TimeUnit.MILLISECONDS"
+    ],
+    "notContains": [
+      "RequestInterceptor",
+      "@Value"
+    ]
+  }
+}

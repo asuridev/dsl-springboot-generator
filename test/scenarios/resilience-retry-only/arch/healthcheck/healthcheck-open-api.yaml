@@ -1,0 +1,6 @@
+openapi: "3.0.3"
+info:
+  title: Healthcheck API
+  version: "1.0.0"
+  description: Minimal public OpenAPI for resilience test scenario.
+paths: {}

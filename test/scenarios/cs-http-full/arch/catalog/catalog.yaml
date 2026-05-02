@@ -1,0 +1,22 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+      - name: price
+        type: Decimal(10,2)
+
+integrations:
+  inbound:
+    - operations:
+        - name: validateProductsAndPrices
+        - name: getProductById
