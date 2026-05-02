@@ -13,7 +13,34 @@ aggregates:
       - name: name
         type: String(200)
       - name: price
-        type: Decimal(10,2)
+        type: Decimal
+        precision: 10
+        scale: 2
+    domainMethods:
+      - name: "validate(productId)"
+      - name: "getById(productId)"
+
+useCases:
+  - id: validate-products-and-prices
+    name: ValidateProductsAndPrices
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: validateProductsAndPrices
+    method: "validate(productId)"
+    implementation: scaffold
+
+  - id: get-product-by-id
+    name: GetProductById
+    type: query
+    aggregate: Product
+    returns: Product
+    trigger:
+      kind: http
+      operationId: getProductById
+    method: "getById(productId)"
+    implementation: scaffold
 
 integrations:
   inbound:

@@ -13,7 +13,9 @@ aggregates:
       - name: name
         type: String(200)
       - name: price
-        type: Decimal(10,2)
+        type: Decimal
+        precision: 10
+        scale: 2
 
 domainEvents:
   published:
