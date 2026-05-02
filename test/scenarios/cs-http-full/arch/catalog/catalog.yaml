@@ -17,8 +17,14 @@ aggregates:
         precision: 10
         scale: 2
     domainMethods:
-      - name: "validate(productId)"
-      - name: "getById(productId)"
+      - name: validate
+        params:
+          - name: productId
+            type: Uuid
+      - name: getById
+        params:
+          - name: productId
+            type: Uuid
 
 useCases:
   - id: validate-products-and-prices
@@ -28,7 +34,7 @@ useCases:
     trigger:
       kind: http
       operationId: validateProductsAndPrices
-    method: "validate(productId)"
+    method: validate
     implementation: scaffold
 
   - id: get-product-by-id
@@ -39,7 +45,7 @@ useCases:
     trigger:
       kind: http
       operationId: getProductById
-    method: "getById(productId)"
+    method: getById
     implementation: scaffold
 
 integrations:

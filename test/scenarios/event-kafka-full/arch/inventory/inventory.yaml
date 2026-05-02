@@ -15,7 +15,10 @@ aggregates:
       - name: stock
         type: Integer
     domainMethods:
-      - name: "register(productId)"
+      - name: register
+        params:
+          - name: productId
+            type: Uuid
 
 useCases:
   - id: register-product-in-catalog
@@ -25,7 +28,7 @@ useCases:
     trigger:
       kind: event
       event: ProductActivated
-    method: register(productId)
+    method: register
 
 domainEvents:
   consumed:
