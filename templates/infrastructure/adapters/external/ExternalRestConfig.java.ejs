@@ -2,7 +2,7 @@ package <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetB
 
 import feign.Logger;
 import feign.Request;
-<%_ if (auth) { _%>
+<%_ if (auth && (auth.type === 'api-key' || auth.type === 'bearer' || auth.type === 'oauth2-cc' || auth.type === 'internal-jwt')) { _%>
 import feign.RequestInterceptor;
 <%_ } _%>
 <%_ if (auth && (auth.type === 'api-key' || auth.type === 'bearer')) { _%>
@@ -10,6 +10,13 @@ import org.springframework.beans.factory.annotation.Value;
 <%_ } _%>
 <%_ if (auth && auth.type === 'oauth2-cc') { _%>
 import <%- packageName %>.shared.infrastructure.auth.OAuth2ClientCredentialsSupport;
+<%_ } _%>
+<%_ if (auth && auth.type === 'internal-jwt') { _%>
+import <%- packageName %>.shared.infrastructure.auth.InternalJwtPropagator;
+<%_ } _%>
+<%_ if (auth && auth.type === 'mTLS') { _%>
+import <%- packageName %>.shared.infrastructure.auth.MutualTlsSupport;
+import feign.Client;
 <%_ } _%>
 import org.springframework.context.annotation.Bean;
 
@@ -70,6 +77,30 @@ public class <%- feignConfigClassName %> {
     @Bean
     public RequestInterceptor <%- targetBcPackage %>AuthInterceptor() {
         return oauth2Support.buildInterceptor("<%- auth.credentialKey %>");
+    }
+<%_ } else if (auth && auth.type === 'internal-jwt') { _%>
+
+    private final InternalJwtPropagator internalJwtPropagator;
+
+    public <%- feignConfigClassName %>(InternalJwtPropagator internalJwtPropagator) {
+        this.internalJwtPropagator = internalJwtPropagator;
+    }
+
+    @Bean
+    public RequestInterceptor <%- targetBcPackage %>AuthInterceptor() {
+        return internalJwtPropagator;
+    }
+<%_ } else if (auth && auth.type === 'mTLS') { _%>
+
+    private final MutualTlsSupport mutualTlsSupport;
+
+    public <%- feignConfigClassName %>(MutualTlsSupport mutualTlsSupport) {
+        this.mutualTlsSupport = mutualTlsSupport;
+    }
+
+    @Bean
+    public Client feignClient() {
+        return new Client.Default(mutualTlsSupport.buildSSLSocketFactory(), null);
     }
 <%_ } _%>
 

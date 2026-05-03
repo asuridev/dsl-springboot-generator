@@ -5,7 +5,8 @@ const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toPackagePath, getApplicationClassName } = require('../utils/naming');
 const { loadParameters } = require('../utils/config-manager');
 const { hasAnyPersistentProjection } = require('./projection-updater-generator');
-const { hasAnyResilience, hasAnyOAuth2Cc, buildResilienceInstances } = require('../utils/resilience-auth-resolver');
+const { hasAnyResilience, hasAnyOAuth2Cc, hasAnyInternalJwt, hasAnyMtls,
+        buildResilienceInstances, resolveAuthForBcHttp, resolveAuthForExternal } = require('../utils/resilience-auth-resolver');
 const { buildErrorMap } = require('./application-generator');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
@@ -33,6 +34,106 @@ function buildHttpIntegrations(system) {
       }
       return acc;
     }, []);
+}
+
+/**
+ * Collects secret property placeholders for api-key and bearer integrations.
+ * Returns one entry per (targetBc, type) pair — only for types that need a
+ * secret configured at runtime. Used by urls.yaml to emit commented placeholder lines.
+ *
+ * @param {object} system       — parsed system.yaml
+ * @param {Array}  allBcYamls   — all parsed bc.yaml objects
+ * @returns {Array<{targetBc: string, type: string, propertyKey: string, envVar: string}>}
+ */
+function buildAuthSecrets(system, allBcYamls) {
+  const seen = new Set();
+  const results = [];
+
+  const addIfSecret = (targetBc, auth) => {
+    if (!auth || seen.has(targetBc)) return;
+    if (auth.type !== 'api-key' && auth.type !== 'bearer') return;
+    seen.add(targetBc);
+    const base = targetBc.toUpperCase().replace(/-/g, '_');
+    if (auth.type === 'api-key') {
+      const propertyKey = auth.valueProperty || `integration.${targetBc}.api-key`;
+      results.push({ targetBc, type: 'api-key', propertyKey, envVar: `${base}_API_KEY` });
+    } else {
+      const propertyKey = auth.valueProperty || `integration.${targetBc}.bearer-token`;
+      results.push({ targetBc, type: 'bearer', propertyKey, envVar: `${base}_BEARER_TOKEN` });
+    }
+  };
+
+  // BC→BC HTTP integrations
+  for (const integ of (system.integrations || [])) {
+    if (integ.channel !== 'http') continue;
+    const bcYaml = (allBcYamls || []).find((b) => b && b.bc === integ.from) || null;
+    const auth = bcYaml
+      ? resolveAuthForBcHttp(system, bcYaml, integ.to)
+      : integ.auth;
+    addIfSecret(integ.to, auth);
+  }
+
+  // External system integrations
+  for (const ext of (system.externalSystems || [])) {
+    const bcYaml = (allBcYamls || []).find((b) =>
+      ((b.integrations || {}).outbound || []).some((ob) => ob.name === ext.name)
+    ) || null;
+    const auth = bcYaml
+      ? resolveAuthForExternal(system, bcYaml, ext.name)
+      : ext.auth;
+    addIfSecret(ext.name, auth);
+  }
+
+  return results;
+}
+
+/**
+ * Collects oauth2-cc integration metadata needed to generate oauth2.yaml
+ * (spring.security.oauth2.client.registration.{credentialKey} blocks).
+ * Returns one entry per unique credentialKey.
+ *
+ * @param {object} system       — parsed system.yaml
+ * @param {Array}  allBcYamls   — all parsed bc.yaml objects
+ * @returns {Array<{credentialKey: string, tokenEndpoint: string, clientIdEnvVar: string, clientSecretEnvVar: string}>}
+ */
+function buildOAuth2Integrations(system, allBcYamls) {
+  const seen = new Set();
+  const results = [];
+
+  const addIfOAuth2 = (targetBc, auth) => {
+    if (!auth || auth.type !== 'oauth2-cc') return;
+    const key = auth.credentialKey;
+    if (!key || seen.has(key)) return;
+    seen.add(key);
+    const base = key.toUpperCase().replace(/-/g, '_');
+    results.push({
+      credentialKey: key,
+      tokenEndpoint: auth.tokenEndpoint || '',
+      clientIdEnvVar: `${base}_CLIENT_ID`,
+      clientSecretEnvVar: `${base}_CLIENT_SECRET`,
+    });
+  };
+
+  for (const integ of (system.integrations || [])) {
+    if (integ.channel !== 'http') continue;
+    const bcYaml = (allBcYamls || []).find((b) => b && b.bc === integ.from) || null;
+    const auth = bcYaml
+      ? resolveAuthForBcHttp(system, bcYaml, integ.to)
+      : integ.auth;
+    addIfOAuth2(integ.to, auth);
+  }
+
+  for (const ext of (system.externalSystems || [])) {
+    const bcYaml = (allBcYamls || []).find((b) =>
+      ((b.integrations || {}).outbound || []).some((ob) => ob.name === ext.name)
+    ) || null;
+    const auth = bcYaml
+      ? resolveAuthForExternal(system, bcYaml, ext.name)
+      : ext.auth;
+    addIfOAuth2(ext.name, auth);
+  }
+
+  return results;
 }
 
 /**
@@ -180,6 +281,12 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   const resilienceInstances  = buildResilienceInstances(system, allBcYamls);
   const oauth2ClientEnabled  = hasAnyOAuth2Cc(system, allBcYamls);
 
+  // ── Auth secrets + OAuth2 registration metadata (GAP-AUTH-001/002) ───
+  const authSecrets         = buildAuthSecrets(system, allBcYamls);
+  const oauth2Integrations  = buildOAuth2Integrations(system, allBcYamls);
+  const internalJwtEnabled  = hasAnyInternalJwt(system, allBcYamls);
+  const mtlsEnabled         = hasAnyMtls(system, allBcYamls);
+
   // Derive artifact id from system name (kebab-case)
   const artifactId = systemName;
   // groupId: everything before the last dot in packageName, or packageName itself
@@ -245,7 +352,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'base', 'resources', `application-${env}.yaml.ejs`),
       path.join(resourcesDir, `application-${env}.yaml`),
-      { hasMessaging, hasHttpIntegrations, broker: brokerId, resilienceEnabled }
+      { hasMessaging, hasHttpIntegrations, broker: brokerId, resilienceEnabled, oauth2ClientEnabled, mtlsEnabled, env }
     );
   }
 
@@ -283,7 +390,25 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
       await renderAndWrite(
         path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'urls.yaml.ejs'),
         path.join(paramDir, 'urls.yaml'),
-        { httpIntegrations }
+        { httpIntegrations, authSecrets }
+      );
+    }
+
+    // oauth2.yaml (only when any integration uses oauth2-cc — GAP-AUTH-001)
+    if (oauth2ClientEnabled) {
+      await renderAndWrite(
+        path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'oauth2.yaml.ejs'),
+        path.join(paramDir, 'oauth2.yaml'),
+        { oauth2Integrations }
+      );
+    }
+
+    // mtls.yaml (only when any integration uses mTLS — GAP-AUTH-003)
+    if (mtlsEnabled) {
+      await renderAndWrite(
+        path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'mtls.yaml.ejs'),
+        path.join(paramDir, 'mtls.yaml'),
+        {}
       );
     }
 
@@ -504,6 +629,28 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'shared', 'infrastructure', 'auth', 'OAuth2ClientCredentialsSupport.java.ejs'),
       path.join(authDir, 'OAuth2ClientCredentialsSupport.java'),
+      { packageName }
+    );
+  }
+
+  // ── Shared: InternalJwtPropagator (GAP-AUTH-004) ──────────────────────────
+  // derived_from: system.yaml#/integrations[*]/auth (type: internal-jwt)
+  if (internalJwtEnabled) {
+    const authDir = path.join(javaMainDir, 'shared', 'infrastructure', 'auth');
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'shared', 'infrastructure', 'auth', 'InternalJwtPropagator.java.ejs'),
+      path.join(authDir, 'InternalJwtPropagator.java'),
+      { packageName }
+    );
+  }
+
+  // ── Shared: MutualTlsSupport (GAP-AUTH-003) ──────────────────────────────
+  // derived_from: system.yaml#/integrations[*]/auth (type: mTLS)
+  if (mtlsEnabled) {
+    const authDir = path.join(javaMainDir, 'shared', 'infrastructure', 'auth');
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'shared', 'infrastructure', 'auth', 'MutualTlsSupport.java.ejs'),
+      path.join(authDir, 'MutualTlsSupport.java'),
       { packageName }
     );
   }

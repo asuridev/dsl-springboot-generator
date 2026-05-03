@@ -575,6 +575,38 @@ function checkExternalSchemas(system, diagnostics) {
 }
 // ─── API pública ────────────────────────────────────────────────────────────
 
+// INT-024 — auth.type must be one of the recognised values.
+const VALID_AUTH_TYPES = new Set(['api-key', 'bearer', 'oauth2-cc', 'mTLS', 'internal-jwt', 'none']);
+
+function checkAuthTypeValid(system, bcYamls, diagnostics) {
+  const validate = (auth, location) => {
+    if (!auth || !auth.type) return;
+    if (!VALID_AUTH_TYPES.has(auth.type)) {
+      diagnostics.push({
+        code: 'INT-024',
+        level: 'error',
+        message: `Unknown auth.type "${auth.type}". Must be one of: ${[...VALID_AUTH_TYPES].join(', ')}.`,
+        location,
+      });
+    }
+  };
+
+  const integs = system.integrations || [];
+  for (let i = 0; i < integs.length; i++) {
+    validate(integs[i].auth, `system.yaml#/integrations[${i}]/auth`);
+  }
+  const exts = system.externalSystems || [];
+  for (let i = 0; i < exts.length; i++) {
+    validate(exts[i].auth, `system.yaml#/externalSystems[${i}]/auth`);
+  }
+  for (const bc of bcYamls) {
+    const outbounds = ((bc.integrations || {}).outbound) || [];
+    for (let i = 0; i < outbounds.length; i++) {
+      validate(outbounds[i].auth, `${bc.bc}.yaml#/integrations/outbound[${i}]/auth`);
+    }
+  }
+}
+
 function checkOAuth2ClientCredentials(system, bcYamls, diagnostics) {
   const isCc = (a) => a && a.type === 'oauth2-cc';
   const validateAuth = (auth, location) => {
@@ -950,6 +982,7 @@ function validateIntegrationCoherence(system, bcYamls, archDir, asyncApiByBc) {
   checkOrphanConsumers(bcYamls, diagnostics);
   checkPersistentProjections(bcYamls, bcIndex, diagnostics);
   checkSagas(system, bcIndex, diagnostics);
+  checkAuthTypeValid(system, bcYamls, diagnostics);
   checkOAuth2ClientCredentials(system, bcYamls, diagnostics);
   checkExternalSchemas(system, diagnostics);
 

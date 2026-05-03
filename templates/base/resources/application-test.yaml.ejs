@@ -6,3 +6,5 @@ spring:
 <%- hasMessaging ? '      - "classpath:parameters/test/' + broker + '.yaml"' : '' %>
 <%- hasHttpIntegrations ? '      - "classpath:parameters/test/urls.yaml"' : '' %>
 <%- resilienceEnabled ? '      - "classpath:parameters/test/resilience.yaml"' : '' %>
+<%- oauth2ClientEnabled ? '      - "classpath:parameters/test/oauth2.yaml"' : '' %>
+<%- mtlsEnabled ? '      - "classpath:parameters/test/mtls.yaml"' : '' %>

@@ -60,12 +60,17 @@ function resolveResilienceForBcHttp(system, bcYaml, targetBc) {
 
 /**
  * Resolve auth for a BC→BC HTTP integration.
+ * Precedence (highest first):
+ *   1. bc.yaml#/integrations/outbound[name=target].auth
+ *   2. system.yaml#/integrations[from=bc, to=target, channel=http].auth
+ *   3. system.yaml#/infrastructure/integrations/defaults.auth
  * @returns {object|null}
  */
 function resolveAuthForBcHttp(system, bcYaml, targetBc) {
   const ob = findBcOutbound(bcYaml, targetBc);
   const integ = findSystemHttpIntegration(system, bcYaml.bc, targetBc);
-  return pickFirst(ob && ob.auth, integ && integ.auth);
+  const defaults = (system && system.infrastructure && system.infrastructure.integrations && system.infrastructure.integrations.defaults) || {};
+  return pickFirst(ob && ob.auth, integ && integ.auth, defaults.auth);
 }
 
 /**
@@ -80,12 +85,17 @@ function resolveResilienceForExternal(system, bcYaml, externalName) {
 
 /**
  * Resolve auth for an external system from a given BC.
+ * Precedence (highest first):
+ *   1. bc.yaml#/integrations/outbound[name=target].auth
+ *   2. system.yaml#/externalSystems[name=target].auth
+ *   3. system.yaml#/infrastructure/integrations/defaults.auth
  * @returns {object|null}
  */
 function resolveAuthForExternal(system, bcYaml, externalName) {
   const ob = findBcOutbound(bcYaml, externalName);
   const ext = findExternalSystem(system, externalName);
-  return pickFirst(ob && ob.auth, ext && ext.auth);
+  const defaults = (system && system.infrastructure && system.infrastructure.integrations && system.infrastructure.integrations.defaults) || {};
+  return pickFirst(ob && ob.auth, ext && ext.auth, defaults.auth);
 }
 
 /**
@@ -238,6 +248,36 @@ function hasAnyOAuth2Cc(system, allBcYamls) {
   return false;
 }
 
+/**
+ * @returns {boolean} true if any HTTP integration uses auth.type === 'internal-jwt'.
+ */
+function hasAnyInternalJwt(system, allBcYamls) {
+  const isJwt = (a) => a && a.type === 'internal-jwt';
+  for (const integ of (system.integrations || [])) if (isJwt(integ.auth)) return true;
+  for (const ext of (system.externalSystems || [])) if (isJwt(ext.auth)) return true;
+  for (const bc of (allBcYamls || [])) {
+    for (const ob of (((bc.integrations || {}).outbound) || [])) {
+      if (isJwt(ob.auth)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @returns {boolean} true if any HTTP integration uses auth.type === 'mTLS'.
+ */
+function hasAnyMtls(system, allBcYamls) {
+  const isMtls = (a) => a && a.type === 'mTLS';
+  for (const integ of (system.integrations || [])) if (isMtls(integ.auth)) return true;
+  for (const ext of (system.externalSystems || [])) if (isMtls(ext.auth)) return true;
+  for (const bc of (allBcYamls || [])) {
+    for (const ob of (((bc.integrations || {}).outbound) || [])) {
+      if (isMtls(ob.auth)) return true;
+    }
+  }
+  return false;
+}
+
 module.exports = {
   resolveResilienceForBcHttp,
   resolveAuthForBcHttp,
@@ -245,5 +285,7 @@ module.exports = {
   resolveAuthForExternal,
   hasAnyResilience,
   hasAnyOAuth2Cc,
+  hasAnyInternalJwt,
+  hasAnyMtls,
   buildResilienceInstances,
 };

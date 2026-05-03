@@ -1,0 +1,16 @@
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+<% oauth2Integrations.forEach(function(item) { %>
+          <%- item.credentialKey %>:
+            authorization-grant-type: client_credentials
+            client-id: ${<%- item.clientIdEnvVar %>}
+            client-secret: ${<%- item.clientSecretEnvVar %>}
+<% }); %>
+        provider:
+<% oauth2Integrations.forEach(function(item) { %>
+          <%- item.credentialKey %>:
+            token-uri: <%- item.tokenEndpoint %>
+<% }); %>

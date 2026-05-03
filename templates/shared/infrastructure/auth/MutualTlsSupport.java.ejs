@@ -1,0 +1,85 @@
+package <%- packageName %>.shared.infrastructure.auth;
+
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Configuration;
+
+import javax.net.ssl.KeyManagerFactory;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManagerFactory;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
+import java.security.NoSuchAlgorithmException;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.CertificateException;
+
+/**
+ * derived_from: system.yaml#/integrations/auth (type: mTLS)
+ *
+ * Helper that builds a mutual-TLS {@link SSLSocketFactory} for Feign clients.
+ * The generated config class for each mTLS integration calls
+ * {@link #buildSSLSocketFactory()} to configure {@code feign.Client.Default}.
+ *
+ * <p>Keystore and truststore paths are resolved from Spring properties.
+ * Configure them per environment via the generated {@code mtls.yaml} parameter file.
+ */
+@Configuration
+public class MutualTlsSupport {
+
+    @Value("${integration.ssl.keystore-path:}")
+    private String keystorePath;
+
+    @Value("${integration.ssl.keystore-password:}")
+    private String keystorePassword;
+
+    @Value("${integration.ssl.truststore-path:}")
+    private String truststorePath;
+
+    @Value("${integration.ssl.truststore-password:}")
+    private String truststorePassword;
+
+    /**
+     * Builds an {@link SSLSocketFactory} that presents the client certificate
+     * and validates the server certificate using the configured keystore and truststore.
+     *
+     * @throws IllegalStateException if the SSL context cannot be initialised
+     *         (e.g. missing or malformed keystore file).
+     */
+    public SSLSocketFactory buildSSLSocketFactory() {
+        try {
+            return buildSSLContext().getSocketFactory();
+        } catch (Exception e) {
+            throw new IllegalStateException("Failed to build mTLS SSLSocketFactory", e);
+        }
+    }
+
+    private SSLContext buildSSLContext()
+            throws KeyStoreException, IOException, CertificateException,
+                   NoSuchAlgorithmException, UnrecoverableKeyException,
+                   java.security.KeyManagementException {
+        final char[] keyPassword   = keystorePassword.toCharArray();
+        final char[] trustPassword = truststorePassword.toCharArray();
+
+        KeyStore keyStore = KeyStore.getInstance("PKCS12");
+        try (FileInputStream fis = new FileInputStream(keystorePath)) {
+            keyStore.load(fis, keyPassword);
+        }
+
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
+        kmf.init(keyStore, keyPassword);
+
+        KeyStore trustStore = KeyStore.getInstance("PKCS12");
+        try (FileInputStream fis = new FileInputStream(truststorePath)) {
+            trustStore.load(fis, trustPassword);
+        }
+
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        tmf.init(trustStore);
+
+        SSLContext sslContext = SSLContext.getInstance("TLS");
+        sslContext.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
+        return sslContext;
+    }
+}

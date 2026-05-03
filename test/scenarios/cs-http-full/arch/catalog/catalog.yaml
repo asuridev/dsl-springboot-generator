@@ -35,6 +35,15 @@ useCases:
       kind: http
       operationId: validateProductsAndPrices
     method: validate
+    input:
+      - name: productId
+        type: Uuid
+        source: body
+        required: true
+      - name: quantity
+        type: Integer
+        source: body
+        required: true
     implementation: scaffold
 
   - id: get-product-by-id
@@ -45,6 +54,11 @@ useCases:
     trigger:
       kind: http
       operationId: getProductById
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
     method: getById
     implementation: scaffold
 

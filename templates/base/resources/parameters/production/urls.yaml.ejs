@@ -2,3 +2,9 @@ integration:
 <% httpIntegrations.forEach(function(item) { %>
   <%= item.toBc %>.base-url: ${<%= item.envVar %>}
 <% }); %>
+<% if (authSecrets && authSecrets.length > 0) { %>
+  # ── auth secrets — configure via environment variables ──────────────────
+<% authSecrets.forEach(function(s) { %>
+  # <%= s.propertyKey %>: ${<%= s.envVar %>}
+<% }); %>
+<% } %>

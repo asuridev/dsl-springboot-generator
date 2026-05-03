@@ -6,6 +6,8 @@ spring:
 <%- hasMessaging ? '      - "classpath:parameters/production/' + broker + '.yaml"' : '' %>
 <%- hasHttpIntegrations ? '      - "classpath:parameters/production/urls.yaml"' : '' %>
 <%- resilienceEnabled ? '      - "classpath:parameters/production/resilience.yaml"' : '' %>
+<%- oauth2ClientEnabled ? '      - "classpath:parameters/production/oauth2.yaml"' : '' %>
+<%- mtlsEnabled ? '      - "classpath:parameters/production/mtls.yaml"' : '' %>
 
 springdoc:
   swagger-ui:

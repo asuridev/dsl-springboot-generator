@@ -1,0 +1,10 @@
+integration:
+  ssl:
+    # Path to the PKCS12 keystore containing the client certificate and private key.
+    keystore-path: ${SSL_KEYSTORE_PATH:src/main/resources/certs/client.p12}
+    # Password protecting the keystore and private key.
+    keystore-password: ${SSL_KEYSTORE_PASSWORD:changeit}
+    # Path to the PKCS12 truststore containing trusted server CA certificates.
+    truststore-path: ${SSL_TRUSTSTORE_PATH:src/main/resources/certs/truststore.p12}
+    # Password protecting the truststore.
+    truststore-password: ${SSL_TRUSTSTORE_PASSWORD:changeit}

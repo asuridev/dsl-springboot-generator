@@ -2,16 +2,21 @@
 
 > **Alcance:** este documento describe el comportamiento **real y verificado** del generador
 > para el bloque `auth` de integraciones HTTP salientes. Documenta qué código se produce,
-> qué validaciones se aplican, y qué gaps existen para futuras mejoras.
+> qué validaciones se aplican.
 >
 > Fuentes verificadas:
 > - `templates/infrastructure/adapters/OutboundFeignConfig.java.ejs`
 > - `templates/infrastructure/adapters/external/ExternalRestConfig.java.ejs`
 > - `templates/shared/infrastructure/auth/OAuth2ClientCredentialsSupport.java.ejs`
+> - `templates/shared/infrastructure/auth/InternalJwtPropagator.java.ejs`
+> - `templates/shared/infrastructure/auth/MutualTlsSupport.java.ejs`
 > - `src/utils/resilience-auth-resolver.js`
 > - `src/utils/integration-validator.js`
 > - `src/generators/base-project-generator.js`
 > - `templates/base/gradle/build.gradle.ejs`
+> - `templates/base/resources/parameters/{env}/urls.yaml.ejs`
+> - `templates/base/resources/parameters/{env}/oauth2.yaml.ejs`
+> - `templates/base/resources/parameters/{env}/mtls.yaml.ejs`
 
 ---
 
@@ -26,9 +31,9 @@
    - 3.4 [`type: mTLS`](#34-type-mtls)
    - 3.5 [`type: internal-jwt`](#35-type-internal-jwt)
    - 3.6 [`type: none` o ausencia](#36-type-none-o-ausencia)
-4. [Validaciones activas (INT-015)](#4-validaciones-activas-int-015)
+4. [Validaciones activas (INT-015, INT-024)](#4-validaciones-activas-int-015-int-024)
 5. [Artefactos generados por tipo — resumen](#5-artefactos-generados-por-tipo--resumen)
-6. [Gaps identificados](#6-gaps-identificados)
+6. [Gaps resueltos](#6-gaps-resueltos)
 
 ---
 
@@ -42,9 +47,8 @@ El bloque `auth` puede aparecer en tres ubicaciones:
 | `system.yaml#/externalSystems[].auth` | Sistema externo (usado por `pattern: acl, channel: http`) |
 | `{bc}.yaml#/integrations/outbound[name=X].auth` | Override por BC de cualquiera de los anteriores |
 
-> **`infrastructure.integrations.defaults.auth`** es un campo documentado en los skills de
-> diseño pero **no está implementado en el generador**. El resolver (`resilience-auth-resolver.js`)
-> no lee esa sección. Ver [GAP-AUTH-007](#gap-auth-007--infrastructure-integrations-defaults-no-implementado).
+> `system.yaml#/infrastructure/integrations/defaults.auth` actúa como **tercer nivel de
+> fallback** en el resolver — ver sección 2.
 
 ---
 
@@ -54,11 +58,13 @@ El resolver (`resolveAuthForBcHttp` / `resolveAuthForExternal` en `resilience-au
 aplica la siguiente precedencia usando `pickFirst()` — devuelve el primer objeto no-vacío:
 
 ```
-bc.yaml#/integrations/outbound[name=target].auth   ← override (máxima prioridad)
+bc.yaml#/integrations/outbound[name=target].auth           ← override (máxima prioridad)
   ↓ si ausente o vacío
 system.yaml#/integrations[from=bc, to=target, channel=http].auth   ← BC→BC
   o
 system.yaml#/externalSystems[name=target].auth                     ← externo
+  ↓ si ausente o vacío
+system.yaml#/infrastructure/integrations/defaults.auth             ← defaults del sistema
 ```
 
 El objeto resuelto se pasa entero al template como variable `auth`. Si `auth` es `null` (nada
@@ -104,8 +110,8 @@ public RequestInterceptor smsAuthInterceptor() {
 - El sufijo `:` en `@Value("${...}:")` evita `IllegalArgumentException` si la property no está
   definida — inyecta string vacío, no null.
 - El guard `!apiKey.isBlank()` evita enviar un header vacío en tiempo de ejecución.
-- El generador **no produce ninguna property** `integration.{target}.api-key` en los archivos
-  de configuración. Ver [GAP-AUTH-002](#gap-auth-002--placeholders-de-secrets-no-generados).
+- El generador emite una entrada **comentada** en `urls.yaml` con la clave de property y la
+  variable de entorno sugerida (`${TARGET_API_KEY}`).
 
 ---
 
@@ -139,12 +145,18 @@ public RequestInterceptor catalogAuthInterceptor() {
 **Notas:**
 - El header siempre es `"Authorization"` con prefijo `"Bearer "` — no configurable.
 - `auth.header` se ignora silenciosamente para este tipo (el template solo lo usa para `api-key`).
-- El generador **no produce ninguna property** `integration.{target}.bearer-token`.
-  Ver [GAP-AUTH-002](#gap-auth-002--placeholders-de-secrets-no-generados).
+- El generador emite una entrada **comentada** en `urls.yaml` con la clave de property y la
+  variable de entorno sugerida (`${TARGET_BEARER_TOKEN}`).
 
 ---
 
 ### 3.3 `type: oauth2-cc`
+
+Es el flujo OAuth2 **machine-to-machine** (Client Credentials Grant): el BC se autentica
+con un Authorization Server usando un `client_id` + `client_secret` para obtener un access
+token, y lo propaga automáticamente en cada llamada saliente. Spring Security gestiona el
+ciclo de vida del token — lo solicita al inicio, lo cachea y lo renueva automáticamente
+al expirar.
 
 ```yaml
 auth:
@@ -204,7 +216,24 @@ public class OAuth2ClientCredentialsSupport {
 }
 ```
 
-**3. `build.gradle`** — dependencia condicional:
+**3. `parameters/{env}/oauth2.yaml`** — emitido en los 4 entornos condicionalmente
+(`oauth2ClientEnabled = true`), con el bloque `spring.security.oauth2.client`:
+```yaml
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+          payment-gateway:
+            authorization-grant-type: client_credentials
+            client-id: ${PAYMENT_GATEWAY_CLIENT_ID}  # ← credentialKey en SCREAMING_SNAKE
+            client-secret: ${PAYMENT_GATEWAY_CLIENT_SECRET}
+        provider:
+          payment-gateway:
+            token-uri: https://auth.provider.example.com/oauth/token  # ← auth.tokenEndpoint
+```
+
+**4. `build.gradle`** — dependencia condicional:
 ```groovy
 // solo si oauth2ClientEnabled = true (alguna integración usa oauth2-cc)
 implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
@@ -214,9 +243,8 @@ implementation 'org.springframework.boot:spring-boot-starter-oauth2-client'
 > **siempre**, independientemente de si hay `oauth2-cc` o no.
 
 **Notas:**
-- `tokenEndpoint` es validado por INT-015 pero el generador **no produce** el bloque
-  `spring.security.oauth2.client.registration.{credentialKey}` en `application.yaml`.
-  Ver [GAP-AUTH-001](#gap-auth-001--configuración-spring-security-oauth2-no-generada).
+- El `oauth2.yaml` se importa desde `application-{env}.yaml` condicionalmente:
+  `<%- oauth2ClientEnabled ? '- "classpath:parameters/{env}/oauth2.yaml"' : '' %>`.
 - El helper `OAuth2ClientCredentialsSupport` usa `principal("system")` hardcodeado —
   no configurable desde el YAML.
 
@@ -229,16 +257,59 @@ auth:
   type: mTLS
 ```
 
-**Código Java generado:** ninguno relacionado con auth.
+TLS mutuo: el BC presenta un certificado de cliente al servidor y valida el certificado del
+servidor usando un truststore propio. Se configura a nivel de `feign.Client.Default`,
+not con un `RequestInterceptor`.
 
-El template evalúa `auth.type === 'api-key'`, `=== 'bearer'`, `=== 'oauth2-cc'` en orden.
-`mTLS` no coincide con ninguna rama, por lo que solo se emite el `FeignConfig` con timeouts
-y logger level, sin ningún `RequestInterceptor`.
+**Artefactos generados:**
 
-**Efecto colateral:** como `auth` no es null, el template emite `import feign.RequestInterceptor`
-al inicio del archivo — import no utilizado en el código generado.
+**1. `{Target}FeignConfig.java`** — inyecta `MutualTlsSupport` y configura `feign.Client.Default`:
+```java
+import feign.Client;
+import com.example.shared.infrastructure.auth.MutualTlsSupport;
 
-Ver [GAP-AUTH-003](#gap-auth-003--mtls-sin-implementación) y [GAP-AUTH-005](#gap-auth-005--import-muerto-para-tipos-sin-interceptor).
+private final MutualTlsSupport mutualTlsSupport;
+
+public CatalogFeignConfig(MutualTlsSupport mutualTlsSupport) {
+    this.mutualTlsSupport = mutualTlsSupport;
+}
+
+@Bean
+public Client feignClient() {
+    return new Client.Default(mutualTlsSupport.buildSSLSocketFactory(), null);
+}
+```
+
+**2. `shared/infrastructure/auth/MutualTlsSupport.java`** — emitido **una sola vez**
+cuando alguna integración usa `mTLS` (`hasAnyMtls()` = true). Construye un
+`SSLSocketFactory` desde keystore/truststore configurados vía properties:
+```java
+@Configuration
+public class MutualTlsSupport {
+    @Value("${integration.ssl.keystore-path:}")
+    private String keystorePath;
+    // ... (keystore-password, truststore-path, truststore-password)
+
+    public SSLSocketFactory buildSSLSocketFactory() {
+        // carga PKCS12 keystore + truststore, construye SSLContext TLS
+    }
+}
+```
+
+**3. `parameters/{env}/mtls.yaml`** — emitido en los 4 entornos condicionalmente
+(`mtlsEnabled = true`). Entorno `local` incluye defaults con rutas de ejemplo;
+los demás entornos usan solo variables de entorno:
+```yaml
+integration:
+  ssl:
+    keystore-path: ${SSL_KEYSTORE_PATH}
+    keystore-password: ${SSL_KEYSTORE_PASSWORD}
+    truststore-path: ${SSL_TRUSTSTORE_PATH}
+    truststore-password: ${SSL_TRUSTSTORE_PASSWORD}
+```
+
+**Nota:** `import feign.RequestInterceptor` **no se emite** para `mTLS` — mTLS usa
+`feign.Client`, no `RequestInterceptor`.
 
 ---
 
@@ -249,14 +320,48 @@ auth:
   type: internal-jwt
 ```
 
-**Código Java generado:** ninguno relacionado con auth. Mismo comportamiento que `mTLS` —
-ninguna rama del template coincide.
+Propagación del JWT del request entrante hacia todas las llamadas Feign salientes.
+Util para comunicación BC→BC donde el token del usuario original debe fluir por toda
+la cadena de servicio.
 
-La intención declarativa de `internal-jwt` es que la propagación del JWT sea resuelta por
-un interceptor Feign global en la infraestructura compartida. El generador **no crea** ese
-interceptor global como parte del scaffolding.
+**Artefactos generados:**
 
-Ver [GAP-AUTH-004](#gap-auth-004--no-hay-interceptor-global-para-internal-jwt) y [GAP-AUTH-005](#gap-auth-005--import-muerto-para-tipos-sin-interceptor).
+**1. `{Target}FeignConfig.java`** — inyecta `InternalJwtPropagator` como `RequestInterceptor` bean:
+```java
+import feign.RequestInterceptor;
+import com.example.shared.infrastructure.auth.InternalJwtPropagator;
+
+private final InternalJwtPropagator internalJwtPropagator;
+
+public CatalogFeignConfig(InternalJwtPropagator internalJwtPropagator) {
+    this.internalJwtPropagator = internalJwtPropagator;
+}
+
+@Bean
+public RequestInterceptor catalogAuthInterceptor() {
+    return internalJwtPropagator;
+}
+```
+
+**2. `shared/infrastructure/auth/InternalJwtPropagator.java`** — emitido **una sola vez**
+cuando alguna integración usa `internal-jwt` (`hasAnyInternalJwt()` = true).
+`@Component` que implementa `feign.RequestInterceptor` y extrae el token del
+`SecurityContextHolder`:
+```java
+@Component
+public class InternalJwtPropagator implements RequestInterceptor {
+    @Override
+    public void apply(RequestTemplate template) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth instanceof AbstractOAuth2TokenAuthenticationToken<?> tokenAuth) {
+            template.header("Authorization", "Bearer " + tokenAuth.getToken().getTokenValue());
+        }
+    }
+}
+```
+
+**Nota:** si no hay principal autenticado en el `SecurityContext` (hilos de background,
+tests sin contexto), el header no se añade y la llamada procede sin autenticación.
 
 ---
 
@@ -280,16 +385,15 @@ interceptor ni import de `RequestInterceptor`. El `FeignConfig` solo contiene lo
 y `Request.Options`.
 
 **Caso B** — `auth: {type: none}` es un objeto no-vacío, por lo que `pickFirst` lo devuelve
-como valor resuelto. El template recibe `auth = {type: 'none'}`, evalúa las ramas y no
-coincide con ninguna, pero sí emite `import feign.RequestInterceptor` (import muerto).
-El comportamiento efectivo es el mismo que caso A. Ver [GAP-AUTH-005](#gap-auth-005--import-muerto-para-tipos-sin-interceptor).
+como valor resuelto. El template recibe `auth = {type: 'none'}`, evalúa todas las ramas y
+no coincide con ninguna. No se emite ningún interceptor ni ningún import de `RequestInterceptor`
+(la condición del import excluye explícitamente `none`).
 
 ---
 
-## 4. Validaciones activas (INT-015)
+## 4. Validaciones activas (INT-015, INT-024)
 
-La única validación de auth implementada en `integration-validator.js` es **INT-015**, que
-cubre exclusivamente `type: oauth2-cc`:
+### INT-015 — `oauth2-cc` requiere `tokenEndpoint` + `credentialKey`
 
 ```
 INT-015 — level: error
@@ -301,197 +405,124 @@ INT-015 — level: error
     - Si falta auth.credentialKey → error
 ```
 
-**No existe ninguna validación para:**
-- `api-key` — `header` y `valueProperty` opcionales, sin validación de formato
-- `bearer` — `valueProperty` opcional, sin validación
-- `mTLS` — aceptado silenciosamente, cero código generado
-- `internal-jwt` — aceptado silenciosamente, cero código generado
-- Tipos no reconocidos — aceptados silenciosamente, cero código generado
+### INT-024 — `auth.type` debe ser un valor reconocido
+
+```
+INT-024 — level: error
+  Aplica a: system.integrations[].auth, system.externalSystems[].auth,
+            bc.yaml#/integrations/outbound[].auth
+  Condición: auth está presente y auth.type no es uno de los valores válidos
+  Valores válidos: api-key, bearer, oauth2-cc, mTLS, internal-jwt, none
+  Error: Unknown auth.type "{value}". Must be one of: ...
+```
+
+Ejemplo — typo `type: bearrer` produce:
+```
+[INT-024] Unknown auth.type "bearrer". Must be one of: api-key, bearer, oauth2-cc, mTLS, internal-jwt, none.
+  (system.yaml#/integrations[0]/auth)
+```
 
 ---
 
 ## 5. Artefactos generados por tipo — resumen
 
-| `auth.type` | `RequestInterceptor` en Config | Helper compartido | `build.gradle` | Validación activa |
-|---|---|---|---|---|
-| `api-key` | ✅ `@Value` + lambda con header configurable | — | — | — |
-| `bearer` | ✅ `@Value` + lambda con `Authorization: Bearer` | — | — | — |
-| `oauth2-cc` | ✅ via `OAuth2ClientCredentialsSupport.buildInterceptor()` | `OAuth2ClientCredentialsSupport.java` (1 vez) | `starter-oauth2-client` | INT-015 (tokenEndpoint + credentialKey) |
-| `mTLS` | ❌ ninguno | — | — | — |
-| `internal-jwt` | ❌ ninguno | — | — | — |
-| `none` / ausente | ❌ ninguno | — | — | — |
+| `auth.type` | Artefacto en FeignConfig | Helper compartido | Archivo de config | `build.gradle` | Validación |
+|---|---|---|---|---|---|
+| `api-key` | `RequestInterceptor` con `@Value` + header configurable | — | comentario en `urls.yaml` | — | — |
+| `bearer` | `RequestInterceptor` con `@Value` + `Authorization: Bearer` | — | comentario en `urls.yaml` | — | — |
+| `oauth2-cc` | `RequestInterceptor` via `OAuth2ClientCredentialsSupport` | `OAuth2ClientCredentialsSupport.java` (1 vez) | `oauth2.yaml` (4 envs) | `starter-oauth2-client` | INT-015 |
+| `mTLS` | `feign.Client.Default` con `SSLSocketFactory` | `MutualTlsSupport.java` (1 vez) | `mtls.yaml` (4 envs) | — | — |
+| `internal-jwt` | `RequestInterceptor` via `InternalJwtPropagator` | `InternalJwtPropagator.java` (1 vez) | — | — | — |
+| `none` / ausente | ❌ ninguno | — | — | — | INT-024 si typo |
 
 ---
 
-## 6. Gaps identificados
+## 6. Gaps resueltos
 
-Los gaps a continuación son comportamientos **no implementados** verificados contra el código
-fuente. No son bugs — son funcionalidades que el generador no cubre actualmente y que requieren
-intervención manual del desarrollador.
+Los siguientes gaps fueron identificados y resueltos. Se documentan como referencia histórica
+y para explicar las decisiones de diseño del generador.
 
 ---
 
-### GAP-AUTH-001 — Configuración `spring.security.oauth2` no generada
+### GAP-AUTH-001 ✅ — Configuración `spring.security.oauth2` ahora generada
 
-**Afecta a:** `type: oauth2-cc`
+**Resuelto en:** `templates/base/resources/parameters/{env}/oauth2.yaml.ejs` (×4) +
+`src/generators/base-project-generator.js` + `templates/base/resources/application-{env}.yaml.ejs` (×4)
 
-**Situación actual:** el generador valida que `tokenEndpoint` y `credentialKey` estén presentes
-(INT-015) y genera `OAuth2ClientCredentialsSupport.java` con el `ClientRegistrationRepository`
-inyectado. Pero **no genera** el bloque de properties que registra el cliente OAuth2 en Spring:
+El generador ahora produce `parameters/{env}/oauth2.yaml` con el bloque completo
+`spring.security.oauth2.client.registration.{credentialKey}` + `.provider.{credentialKey}.token-uri`
+para cada integración `oauth2-cc`. El archivo se importa condicionalmente desde
+`application-{env}.yaml` cuando `oauth2ClientEnabled = true`.
 
+---
+
+### GAP-AUTH-002 ✅ — Placeholders de secrets ahora generados en `urls.yaml`
+
+**Resuelto en:** `templates/base/resources/parameters/{env}/urls.yaml.ejs` (×4) +
+`src/generators/base-project-generator.js`
+
+El generador ahora emite una sección comentada al final de `urls.yaml` con una entrada
+por cada integración `api-key` o `bearer`:
 ```yaml
-# Este bloque NO es generado — debe añadirse manualmente
-spring:
-  security:
-    oauth2:
-      client:
-        registration:
-          payment-gateway:                           # ← auth.credentialKey
-            authorization-grant-type: client_credentials
-            client-id: ${PAYMENT_GATEWAY_CLIENT_ID}
-            client-secret: ${PAYMENT_GATEWAY_CLIENT_SECRET}
-        provider:
-          payment-gateway:
-            token-uri: https://auth.provider.example.com/oauth/token  # ← auth.tokenEndpoint
+# ── auth secrets — configure via environment variables ──────────────────
+# integration.payment-gateway.api-key: ${PAYMENT_GATEWAY_API_KEY}
 ```
 
-Sin este bloque, `OAuth2ClientCredentialsSupport` falla en runtime con
-`IllegalArgumentException: Could not find ClientRegistration with id 'payment-gateway'`.
+---
 
-**Qué necesitaría para cubrirlo:** nueva sección en `application.yaml.ejs` (o en un archivo
-de parámetros separado) que itere sobre las integraciones con `auth.type === 'oauth2-cc'` y
-emita el bloque `spring.security.oauth2.client.registration.{credentialKey}` con variables
-de entorno derivadas del `credentialKey` (ej: `PAYMENT_GATEWAY_CLIENT_ID`).
+### GAP-AUTH-003 ✅ — `mTLS` implementado con `MutualTlsSupport`
+
+**Resuelto en:** `templates/shared/infrastructure/auth/MutualTlsSupport.java.ejs` (nuevo) +
+`templates/infrastructure/adapters/OutboundFeignConfig.java.ejs` +
+`templates/infrastructure/adapters/external/ExternalRestConfig.java.ejs` +
+`templates/base/resources/parameters/{env}/mtls.yaml.ejs` (×4) +
+`src/generators/base-project-generator.js`
+
+`mTLS` ahora genera `MutualTlsSupport.java` (compartido), configura `feign.Client.Default`
+con `buildSSLSocketFactory()` en los FeignConfig, y produce `mtls.yaml` en los 4 entornos.
 
 ---
 
-### GAP-AUTH-002 — Placeholders de secrets no generados
+### GAP-AUTH-004 ✅ — `internal-jwt` implementado con `InternalJwtPropagator`
 
-**Afecta a:** `type: api-key`, `type: bearer`
+**Resuelto en:** `templates/shared/infrastructure/auth/InternalJwtPropagator.java.ejs` (nuevo) +
+`templates/infrastructure/adapters/OutboundFeignConfig.java.ejs` +
+`templates/infrastructure/adapters/external/ExternalRestConfig.java.ejs` +
+`src/generators/base-project-generator.js`
 
-**Situación actual:** el generador emite `@Value("${integration.sms.api-key:}")` en el
-`FeignConfig`, pero **no genera** ninguna entrada en los archivos de parámetros
-(`urls.yaml`, `application.yaml` o cualquier otro) que documente que esa property debe
-ser configurada. El `urls.yaml` generado solo contiene `integration.{target}.base-url`.
-
-```yaml
-# urls.yaml generado — solo contiene base-url
-integration:
-  sms-provider.base-url: https://api.sms-provider.example.com
-
-# Estas entries NO son generadas — el desarrollador debe añadirlas:
-  sms-provider.api-key: ${SMS_PROVIDER_API_KEY}      # api-key
-  catalog.bearer-token: ${CATALOG_BEARER_TOKEN}      # bearer
-```
-
-**Consecuencia:** la aplicación arranca sin error (el `@Value` da string vacío por el `:`)
-pero las llamadas salientes se realizan sin autenticación hasta que el desarrollador note
-el problema y configure la property.
-
-**Qué necesitaría:** en `urls.yaml.ejs` (o en un nuevo `secrets.yaml.ejs`), emitir una
-línea comentada con la clave de property y la variable de entorno sugerida para cada
-integración con `api-key` o `bearer`.
+`internal-jwt` ahora genera `InternalJwtPropagator.java` (compartido, emitido 1 vez cuando
+`hasAnyInternalJwt()` es true), y los FeignConfig lo inyectan como `RequestInterceptor`.
 
 ---
 
-### GAP-AUTH-003 — `mTLS` sin implementación
+### GAP-AUTH-005 ✅ — Import muerto eliminado para tipos sin `RequestInterceptor`
 
-**Afecta a:** `type: mTLS`
+**Resuelto en:** `templates/infrastructure/adapters/OutboundFeignConfig.java.ejs` +
+`templates/infrastructure/adapters/external/ExternalRestConfig.java.ejs`
 
-**Situación actual:** `mTLS` es un valor aceptado por el validador (no emite error) pero
-el template no genera ningún código relacionado con TLS mutuo:
-- No genera un bean `SSLContext` o `TrustManagerFactory`
-- No genera configuración de keystore/truststore en `application.yaml`
-- No añade ninguna dependencia al `build.gradle`
-- El `FeignConfig` resultante es idéntico al de `type: none`
-
-**Qué necesitaría:** un bloque en el template para `auth.type === 'mTLS'` que genere
-configuración de `feign.Client` con `SSLSocketFactory` personalizado, más properties de
-keystore/truststore en `application.yaml` con variables de entorno para las rutas y
-contraseñas de los certificados.
+La condición del `import feign.RequestInterceptor` ahora es explícita:
+solo se emite si `auth.type` es `api-key`, `bearer`, `oauth2-cc` o `internal-jwt`.
+`mTLS`, `none` y ausencia no producen el import.
 
 ---
 
-### GAP-AUTH-004 — No hay interceptor global para `internal-jwt`
+### GAP-AUTH-006 ✅ — Validación INT-024 para tipos no reconocidos
 
-**Afecta a:** `type: internal-jwt`
+**Resuelto en:** `src/utils/integration-validator.js`
 
-**Situación actual:** `internal-jwt` comunica la intención de que el JWT del request
-entrante sea propagado al request saliente. El generador no produce ningún código para
-esta propagación:
-- No existe un `GlobalFeignInterceptor` en el scaffolding de `shared/infrastructure/`
-- El `FeignConfig` generado es idéntico al de `type: none`
-- Cada desarrollador debe implementar el interceptor global manualmente
-
-**Qué necesitaría:** un artefacto en `shared/infrastructure/auth/` (emitido una sola vez,
-igual que `OAuth2ClientCredentialsSupport`) que intercepte el `SecurityContext` del request
-entrante, extraiga el JWT raw, y lo propague como header `Authorization: Bearer <token>`
-en las llamadas Feign. La habilitación sería condicional a `hasAnyInternalJwt()`.
+La regla **INT-024** rechaza cualquier `auth.type` que no esté en el conjunto
+`['api-key', 'bearer', 'oauth2-cc', 'mTLS', 'internal-jwt', 'none']`.
+Un typo como `type: bearrer` produce error antes de la generación.
 
 ---
 
-### GAP-AUTH-005 — Import muerto para tipos sin interceptor
+### GAP-AUTH-007 ✅ — `infrastructure.integrations.defaults.auth` implementado
 
-**Afecta a:** `type: mTLS`, `type: internal-jwt`, `type: none` (declarado como objeto)
+**Resuelto en:** `src/utils/resilience-auth-resolver.js`
 
-**Situación actual:** el template emite `import feign.RequestInterceptor` cuando `auth` es
-truthy (objeto no-null), independientemente de si se genera un `@Bean` que lo use:
-
-```java
-// FeignConfig generado para mTLS — import no utilizado:
-import feign.RequestInterceptor;   // ← nunca referenciado abajo
-import org.springframework.context.annotation.Bean;
-// ...
-// (no hay @Bean de tipo RequestInterceptor)
-```
-
-Esto produce una advertencia del compilador (`unused import`) o del IDE. No causa error de
-compilación pero es ruido.
-
-**Qué necesitaría:** ajustar la condición del import a
-`if (auth && (auth.type === 'api-key' || auth.type === 'bearer' || auth.type === 'oauth2-cc'))`.
-
----
-
-### GAP-AUTH-006 — Tipos no reconocidos aceptados silenciosamente
-
-**Afecta a:** cualquier `auth.type` que no sea `api-key`, `bearer`, `oauth2-cc`, `mTLS`,
-`internal-jwt` o `none`.
-
-**Situación actual:** el validador no comprueba que `auth.type` sea uno de los valores
-reconocidos. Un typo como `type: bearrer` o un valor inventado como `type: custom-token`
-no produce ningún error — el generador simplemente no emite interceptor y el developer
-no recibe ningún aviso.
-
-**Qué necesitaría:** una regla de validación que compruebe
-`auth.type in ['none', 'api-key', 'bearer', 'oauth2-cc', 'mTLS', 'internal-jwt']`
-y emita un error cuando se use un valor desconocido.
-
----
-
-### GAP-AUTH-007 — `infrastructure.integrations.defaults` no implementado
-
-**Afecta a:** cualquier integración HTTP saliente que espere heredar auth de un bloque
-de defaults declarado en `system.yaml#/infrastructure/integrations/defaults`.
-
-**Situación actual:** el resolver `resolveAuthForBcHttp` / `resolveAuthForExternal` solo
-consulta dos fuentes: el `bc.yaml` outbound y el `system.yaml` integrations/externalSystems.
-El campo `system.yaml#/infrastructure/integrations/defaults/auth` **no existe** como nivel
-de precedencia en el resolver — es ignorado aunque esté declarado en el YAML.
-
-```
-Precedencia REAL (implementada):
-  bc.yaml outbound.auth
-    ↓
-  system.yaml integrations[].auth  /  externalSystems[].auth
-
-Precedencia DOCUMENTADA en skills de diseño (no implementada):
-  bc.yaml outbound.auth
-    ↓
-  system.yaml integrations[].auth
-    ↓
-  system.yaml infrastructure.integrations.defaults.auth   ← NO procesado
-```
+`resolveAuthForBcHttp()` y `resolveAuthForExternal()` ahora consultan un tercer nivel:
+`system.infrastructure?.integrations?.defaults?.auth`. La cadena de precedencia completa
+es: bc.yaml outbound → system integrations/externalSystems → system defaults.
 
 **Qué necesitaría:** un tercer nivel de fallback en `pickFirst()` que lea
 `system.infrastructure?.integrations?.defaults?.auth`.
