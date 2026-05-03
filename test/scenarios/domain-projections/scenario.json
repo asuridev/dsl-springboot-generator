@@ -1,0 +1,3 @@
+{
+  "description": "Projection generation: record-based DTOs in application/dtos, @JsonProperty from serializedName, @JsonInclude(NON_NULL) when optional fields present, class-level derived_from comment."
+}

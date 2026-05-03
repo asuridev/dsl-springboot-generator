@@ -1,0 +1,103 @@
+bc: catalog
+version: "1.0.0"
+
+enums:
+  - name: ProductStatus
+    description: Lifecycle states of a Product.
+    values:
+      - value: DRAFT
+        transitions: []
+      - value: ACTIVE
+        transitions: []
+
+valueObjects:
+  - name: Money
+    description: Monetary amount with currency.
+    properties:
+      - name: amount
+        type: Decimal
+        precision: 19
+        scale: 4
+        required: true
+      - name: currency
+        type: String(3)
+        required: true
+
+projections:
+  - name: ProductSummary
+    description: Compact view of a product for listing pages.
+    source: aggregate:Product
+    properties:
+      - name: id
+        type: Uuid
+        required: true
+      - name: name
+        type: String(200)
+        required: true
+      - name: status
+        type: ProductStatus
+        required: true
+      - name: price
+        type: Money
+        required: true
+      - name: slugUrl
+        type: String(200)
+        required: false
+        serializedName: slug_url
+
+  - name: InvoiceView
+    description: Invoice view with a derived field.
+    properties:
+      - name: subtotal
+        type: Long
+        required: true
+      - name: totalWithTax
+        type: Long
+        required: false
+        derivedFrom: subtotal
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+      - name: status
+        type: ProductStatus
+        defaultValue: DRAFT
+      - name: price
+        type: Money
+
+useCases:
+  - id: UC-001
+    name: CreateProduct
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: createProduct
+    input:
+      - name: name
+        type: String(200)
+        source: body
+        required: true
+    implementation: scaffold
+
+errors:
+  - code: PRODUCT_NOT_FOUND
+    httpStatus: 404
+    description: Product not found.
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: save
+        signature: "save(Product): Product"

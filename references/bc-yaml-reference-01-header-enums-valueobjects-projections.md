@@ -63,8 +63,10 @@ Los enums declaran tipos con un conjunto cerrado de valores. Hay dos variantes:
 
 **Problema que resuelve:** sin modelar las transiciones en el YAML, el generador no
 puede producir el método de estado en el agregado ni detectar automáticamente el estado
-objetivo de un use case. Con las transiciones declaradas, el generador infiere la
-asignación `entity.setStatus(ProductStatus.ACTIVE)` dentro del handler.
+objetivo de un use case. Con las transiciones declaradas, el generador produce la
+máquina de estados en el propio enum y el método de negocio del agregado invoca
+`this.status = this.status.transitionTo(ProductStatus.ACTIVE)`. La guarda de estado
+inválido vive en `Enum.transitionTo()`, no en el handler.
 
 ```yaml
 enums:
@@ -114,7 +116,7 @@ enums:
 |---|---|---|---|
 | `to` | SCREAMING_SNAKE_CASE | ✅ | Estado destino. Debe ser otro `value` del mismo enum. |
 | `triggeredBy` | `{UC-ID} {NombreUC}` | ✅ | Use case que dispara la transición. El generador lee el ID para detectar automáticamente el estado objetivo. |
-| `condition` | `{RULE-ID}` o `none` | ✅ | La regla que actúa como puerta de entrada. `none` significa que la transición siempre es válida desde este estado. |
+| `condition` | `{RULE-ID}` o `none` | no | La regla que actúa como puerta de entrada. `none` significa transición siempre válida. Solo referencia; el generador no lee este campo. |
 | `rules` | lista de RULE-ID | no | Todas las reglas evaluadas en este use case (incluye `condition` más reglas adicionales). |
 | `emits` | PascalCase o `null` | no | Evento de dominio emitido al completar la transición. |
 
@@ -124,16 +126,49 @@ enums:
 ```java
 package com.canastaShop.catalog.domain.enums;
 
-public enum ProductStatus {
+import com.canastaShop.shared.domain.customExceptions.InvalidStateTransitionException;
+import java.util.Map;
+import java.util.Set;
 
+/**
+ * ProductStatus
+ * Lifecycle states of a Product aggregate.
+ */
+public enum ProductStatus {
     DRAFT,
     ACTIVE,
     DISCONTINUED;
+
+    private static final Map<ProductStatus, Set<ProductStatus>> VALID_TRANSITIONS = Map.ofEntries(
+        Map.entry(ProductStatus.DRAFT, Set.of(ProductStatus.ACTIVE, ProductStatus.DISCONTINUED)),
+        Map.entry(ProductStatus.ACTIVE, Set.of(ProductStatus.DISCONTINUED)),
+        Map.entry(ProductStatus.DISCONTINUED, Set.of())
+    );
+
+    /**
+     * Returns {@code true} if transitioning from the current state to {@code target} is allowed.
+     */
+    public boolean canTransitionTo(ProductStatus target) {
+        return VALID_TRANSITIONS.getOrDefault(this, Set.of()).contains(target);
+    }
+
+    /**
+     * Transitions to {@code target} state.
+     *
+     * @throws InvalidStateTransitionException if the transition is not permitted.
+     */
+    public ProductStatus transitionTo(ProductStatus target) {
+        if (!canTransitionTo(target)) {
+            throw new InvalidStateTransitionException(this.name(), target.name());
+        }
+        return target;
+    }
 }
 ```
 
-El generador detecta que `UC-PRD-004 ActivateProduct` lleva el agregado a `ACTIVE` y
-genera automáticamente en el handler:
+El generador detecta que `UC-PRD-004 ActivateProduct` lleva el agregado a `ACTIVE` e
+invoca `transitionTo()` en el método de negocio del agregado. El handler simplemente
+llama al método de dominio y persiste:
 
 **`ActivateProductHandler.java`** (fragmento del método `execute`):
 ```java
@@ -142,13 +177,16 @@ public void execute(ActivateProductCommand command) {
     Product product = productRepository.findById(command.productId())
         .orElseThrow(ProductNotFoundError::new);
 
-    // domainRule(PRD-RULE-001): statePrecondition
-    if (product.getStatus() != ProductStatus.DRAFT) {
-        throw new ProductCannotBeActivatedError();
-    }
-
-    product.activate();     // ← invoca domainMethod con el nombre detectado
+    product.activate();     // ← método de dominio generado en el agregado
     productRepository.save(product);
+}
+```
+
+El método `activate()` del agregado es donde ocurre la transición de estado:
+```java
+/** derived_from: UC-PRD-004 ActivateProduct */
+public void activate() {
+    this.status = this.status.transitionTo(ProductStatus.ACTIVE);
 }
 ```
 
@@ -177,7 +215,7 @@ package com.canastaShop.catalog.domain.enums;
 public enum ImageType {
     MAIN,
     GALLERY,
-    THUMBNAIL;
+    THUMBNAIL
 }
 ```
 
@@ -251,9 +289,10 @@ Los campos disponibles son:
 
 **`Money.java`:**
 ```java
-package com.canastaShop.catalog.domain.valueObjects;
+package com.canastaShop.catalog.domain.valueobject;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Objects;
 
 public final class Money {
@@ -262,9 +301,20 @@ public final class Money {
     private final String currency;
 
     public Money(BigDecimal amount, String currency) {
-        Objects.requireNonNull(amount, "amount must not be null");
-        Objects.requireNonNull(currency, "currency must not be null");
-        this.amount = amount;
+        if (amount == null) {
+            throw new IllegalArgumentException("VO Money.amount: required");
+        }
+        if (currency == null) {
+            throw new IllegalArgumentException("VO Money.currency: required");
+        }
+        if (currency != null && currency.length() > 3) {
+            throw new IllegalArgumentException("VO Money.currency: exceeds max length 3");
+        }
+        try {
+            this.amount = (amount == null) ? null : amount.setScale(4, RoundingMode.UNNECESSARY);
+        } catch (ArithmeticException ex) {
+            throw new IllegalArgumentException("VO Money.amount: scale exceeds 4", ex);
+        }
         this.currency = currency;
     }
 
@@ -274,29 +324,30 @@ public final class Money {
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof Money)) return false;
+        if (o == null || getClass() != o.getClass()) return false;
         Money that = (Money) o;
-        return Objects.equals(amount, that.amount) && Objects.equals(currency, that.currency);
+        return eqDecimal(amount, that.amount) &&
+               Objects.equals(currency, that.currency);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(amount, currency);
     }
-}
-```
 
-**`MoneyEmbeddable.java`** (para la entidad JPA):
-```java
-@Embeddable
-@Getter @Setter @NoArgsConstructor @AllArgsConstructor
-public class MoneyEmbeddable {
+    @Override
+    public String toString() {
+        return "Money{" +
+               "amount=" + amount +
+               ", currency=" + currency +
+               '}';
+    }
 
-    @Column(name = "amount", precision = 19, scale = 4)
-    private BigDecimal amount;
-
-    @Column(name = "currency", length = 3)
-    private String currency;
+    private static boolean eqDecimal(java.math.BigDecimal a, java.math.BigDecimal b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        return a.compareTo(b) == 0;
+    }
 }
 ```
 
@@ -307,16 +358,26 @@ public final class Slug {
     private final String value;
 
     public Slug(String value) {
-        Objects.requireNonNull(value, "value must not be null");
-        if (value != null && !value.matches("^[a-z0-9]+(?:-[a-z0-9]+)*$")) {
-            throw new IllegalArgumentException("value does not match required pattern");
+        if (value == null) {
+            throw new IllegalArgumentException("VO Slug.value: required");
+        }
+        if (value != null && value.length() > 200) {
+            throw new IllegalArgumentException("VO Slug.value: exceeds max length 200");
+        }
+        if (value != null && !Pattern.matches("^[a-z0-9]+(?:-[a-z0-9]+)*$", value)) {
+            throw new IllegalArgumentException("VO Slug.value: does not match required pattern");
         }
         this.value = value;
     }
 
+    /** Convenience factory. derived_from: valueObject:Slug */
+    public static Slug of(String value) {
+        return new Slug(value);
+    }
+
     public String getValue() { return value; }
 
-    // equals, hashCode...
+    // equals, hashCode, toString...
 }
 ```
 
@@ -441,12 +502,15 @@ Las projections pueden referenciar:
 ```java
 package com.canastaShop.catalog.application.dtos;
 
-import java.util.UUID;
-import java.net.URI;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import com.canastaShop.catalog.domain.enums.ProductStatus;
-import com.canastaShop.catalog.domain.valueObjects.Money;
-import com.canastaShop.catalog.domain.valueObjects.Slug;
+import com.canastaShop.catalog.domain.valueobject.Money;
+import com.canastaShop.catalog.domain.valueobject.Slug;
+import java.net.URI;
+import java.util.UUID;
 
+// derived_from: projection:ProductSummary
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record ProductSummary(
     UUID id,
     String name,
@@ -454,11 +518,14 @@ public record ProductSummary(
     ProductStatus status,
     Money price,
     URI mainImageUrl
-) {}
+) {
+}
 ```
 
 **`ProductDetail.java`** (con lista anidada):
 ```java
+// derived_from: projection:ProductDetail
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public record ProductDetail(
     UUID id,
     String name,
@@ -466,16 +533,19 @@ public record ProductDetail(
     ProductStatus status,
     Money price,
     List<ProductImageSummary> images
-) {}
+) {
+}
 ```
 
 **`ProductImageSummary.java`:**
 ```java
+// derived_from: projection:ProductImageSummary
 public record ProductImageSummary(
     UUID imageId,
     ImageType type,
     URI url
-) {}
+) {
+}
 ```
 
 ### Projection con `serializedName`
@@ -491,10 +561,12 @@ public record ProductImageSummary(
 
 Genera:
 ```java
+// derived_from: projection:OrderSnapshot
 public record OrderSnapshot(
     @JsonProperty("order_id")
     UUID orderId
-) {}
+) {
+}
 ```
 
 ### Projection con `derivedFrom`
@@ -509,12 +581,14 @@ public record OrderSnapshot(
         derivedFrom: subtotal      # ← campo calculado
 ```
 
-Genera:
+Genera (el campo `derivedFrom` se captura pero **no** produce un comentario inline en
+el record; el generador emite un comentario de clase `// derived_from: projection:InvoiceView`):
 ```java
+// derived_from: projection:InvoiceView
 public record InvoiceView(
-    // derived_from: subtotal
     BigDecimal totalWithTax
-) {}
+) {
+}
 ```
 
 ---
@@ -601,21 +675,21 @@ properties:
 | Restricción | Tipos aplicables | Anotación Jakarta | Guarda imperativa |
 |---|---|---|---|
 | `minLength: N` | String, Text, Email, String(n) | `@Size(min=N)` | `if (field.length() < N) throw...` |
-| `maxLength: N` | String, Text, Email | `@Size(max=N)` | `if (field.length() > N) throw...` |
+| `maxLength: N` | String, Text, Email, String(n) | — | `if (field.length() > N) throw...` |
 | `notEmpty: true` | String, Text, List[T] | `@NotEmpty` | `if (field.isEmpty()) throw...` |
 | `pattern: "regex"` | String, Text, Email, String(n) | `@Pattern(regexp="...")` | `if (!field.matches(...)) throw...` |
 | `min: N` | Integer, Long, Decimal | `@Min(N)` / `@DecimalMin("N")` | `if (field < N) throw...` |
 | `max: N` | Integer, Long, Decimal | `@Max(N)` / `@DecimalMax("N")` | `if (field > N) throw...` |
 | `positive: true` | Integer, Long, Decimal | `@Positive` | `if (field <= 0) throw...` |
 | `positiveOrZero: true` | Integer, Long, Decimal | `@PositiveOrZero` | `if (field < 0) throw...` |
-| `negative: true` | Integer, Long, Decimal | `@Negative` | `if (field >= 0) throw...` |
-| `negativeOrZero: true` | Integer, Long, Decimal | `@NegativeOrZero` | `if (field > 0) throw...` |
+| `negative: true` | Integer, Long, Decimal | `@Negative` | — |
+| `negativeOrZero: true` | Integer, Long, Decimal | `@NegativeOrZero` | — |
 | `future: true` | Date, DateTime | `@Future` | — |
 | `futureOrPresent: true` | Date, DateTime | `@FutureOrPresent` | — |
 | `past: true` | Date, DateTime | `@Past` | — |
 | `pastOrPresent: true` | Date, DateTime | `@PastOrPresent` | — |
 | `minSize: N` | List[T] | `@Size(min=N)` | `if (field.size() < N) throw...` |
-| `maxSize: N` | List[T] | `@Size(max=N)` | — |
+| `maxSize: N` | List[T] | `@Size(max=N)` | `if (field.size() > N) throw...` |
 
 #### Ejemplo de validaciones combinadas
 
@@ -639,7 +713,6 @@ private String name;
 Y en el constructor del dominio:
 ```java
 public Product(String name, ...) {
-    Objects.requireNonNull(name, "name must not be null");
     if (name != null && name.length() < 3) {
         throw new IllegalArgumentException("name must be at least 3 characters long");
     }

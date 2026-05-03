@@ -1,0 +1,49 @@
+{
+  "src/main/java/com/test/catalog/domain/enums/ProductStatus.java": {
+    "_comment": "Lifecycle enum: VALID_TRANSITIONS map + canTransitionTo + transitionTo machine. DRAFT has two outbound transitions (ACTIVE, DISCONTINUED); ACTIVE one (DISCONTINUED); DISCONTINUED none.",
+    "contains": [
+      "public enum ProductStatus",
+      "DRAFT",
+      "ACTIVE",
+      "DISCONTINUED",
+      "VALID_TRANSITIONS",
+      "Map.ofEntries",
+      "Set.of(ProductStatus.ACTIVE, ProductStatus.DISCONTINUED)",
+      "Set.of(ProductStatus.DISCONTINUED)",
+      "canTransitionTo",
+      "transitionTo",
+      "InvalidStateTransitionException",
+      "import java.util.Map",
+      "import java.util.Set"
+    ],
+    "notContains": [
+      "public enum ImageType"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/enums/ImageType.java": {
+    "_comment": "Classification enum: only literals, no state machine (no VALID_TRANSITIONS).",
+    "contains": [
+      "public enum ImageType",
+      "MAIN",
+      "GALLERY",
+      "THUMBNAIL"
+    ],
+    "notContains": [
+      "VALID_TRANSITIONS",
+      "canTransitionTo",
+      "transitionTo",
+      "import java.util.Map"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/aggregate/Product.java": {
+    "_comment": "Aggregate: activate() method has transitionTo(ACTIVE) detected from enum; discontinue() has transitionTo(DISCONTINUED).",
+    "contains": [
+      "public class Product",
+      "private ProductStatus status",
+      "this.status = this.status.transitionTo(ProductStatus.ACTIVE)",
+      "this.status = this.status.transitionTo(ProductStatus.DISCONTINUED)"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+system:
+  name: test-vo-system
+  description: Test system for value object generation scenarios.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products with monetary prices and slugs.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

@@ -1,0 +1,18 @@
+system:
+  name: test-enums-system
+  description: Test system for enum generation scenarios.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages product lifecycle states.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

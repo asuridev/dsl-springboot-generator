@@ -1,0 +1,53 @@
+{
+  "src/main/java/com/test/catalog/domain/valueobject/Money.java": {
+    "_comment": "Money VO: correct package (valueobject, singular lowercase), required null checks via IllegalArgumentException with prefix 'VO Money.', setScale(4) for Decimal, eqDecimal helper, no Objects.requireNonNull.",
+    "contains": [
+      "package com.test.catalog.domain.valueobject",
+      "public final class Money",
+      "private final BigDecimal amount",
+      "private final String currency",
+      "import java.math.RoundingMode",
+      "setScale(4, RoundingMode.UNNECESSARY)",
+      "VO Money.amount: required",
+      "VO Money.currency: required",
+      "eqDecimal(",
+      "a.compareTo(b) == 0"
+    ],
+    "notContains": [
+      "Objects.requireNonNull",
+      "domain.valueObjects",
+      "public record Money"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/valueobject/Slug.java": {
+    "_comment": "Slug VO: required null guard with VO prefix, Pattern.matches for pattern validation, static of() factory for single-field microtype.",
+    "contains": [
+      "package com.test.catalog.domain.valueobject",
+      "public final class Slug",
+      "private final String value",
+      "VO Slug.value: required",
+      "Pattern.matches(",
+      "does not match required pattern",
+      "public static Slug of("
+    ],
+    "notContains": [
+      "Objects.requireNonNull",
+      "value.matches("
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/persistence/entities/ProductJpa.java": {
+    "_comment": "JPA entity: Money expands into two flat columns (priceAmount BigDecimal + priceCurrency String) with correct precision/scale and length constraints.",
+    "contains": [
+      "private BigDecimal priceAmount",
+      "private String priceCurrency",
+      "precision = 19, scale = 4",
+      "length = 3"
+    ],
+    "notContains": [
+      "private Money price",
+      "@Embeddable"
+    ]
+  }
+}

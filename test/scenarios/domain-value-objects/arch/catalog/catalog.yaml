@@ -1,0 +1,75 @@
+bc: catalog
+version: "1.0.0"
+
+valueObjects:
+  - name: Money
+    description: >
+      Represents an exact monetary amount with its currency. Modeled as a VO to
+      guarantee that amount and currency always travel together and that precision
+      is never lost through floating-point.
+    properties:
+      - name: amount
+        type: Decimal
+        precision: 19
+        scale: 4
+        required: true
+        description: Exact monetary amount.
+      - name: currency
+        type: String(3)
+        required: true
+        description: ISO 4217 currency code (e.g. COP, USD, EUR).
+
+  - name: Slug
+    description: URL-friendly identifier derived from product name.
+    properties:
+      - name: value
+        type: String(200)
+        required: true
+        validations:
+          - pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+        description: Slug value matching URL-safe pattern.
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+      - name: price
+        type: Money
+      - name: slug
+        type: Slug
+
+useCases:
+  - id: UC-001
+    name: CreateProduct
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: createProduct
+    input:
+      - name: name
+        type: String(200)
+        source: body
+        required: true
+    implementation: scaffold
+
+errors:
+  - code: PRODUCT_NOT_FOUND
+    httpStatus: 404
+    description: Product not found.
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: save
+        signature: "save(Product): Product"

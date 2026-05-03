@@ -1,0 +1,37 @@
+{
+  "src/main/java/com/test/catalog/application/dtos/ProductSummary.java": {
+    "_comment": "Projection record: correct package (application/dtos), @JsonProperty from serializedName, @JsonInclude(NON_NULL) because slugUrl is required:false, VO and enum types resolved correctly.",
+    "contains": [
+      "package com.test.catalog.application.dtos",
+      "public record ProductSummary(",
+      "UUID id",
+      "ProductStatus status",
+      "Money price",
+      "@JsonProperty(\"slug_url\")",
+      "import com.fasterxml.jackson.annotation.JsonProperty",
+      "@JsonInclude(JsonInclude.Include.NON_NULL)",
+      "import com.fasterxml.jackson.annotation.JsonInclude"
+    ],
+    "notContains": [
+      "class ProductSummary",
+      "domain.valueObjects",
+      "Slug slug"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/dtos/InvoiceView.java": {
+    "_comment": "Projection record: class-level derived_from comment, Long fields, @JsonInclude(NON_NULL) because totalWithTax is required:false.",
+    "contains": [
+      "package com.test.catalog.application.dtos",
+      "// derived_from: projection:InvoiceView",
+      "public record InvoiceView(",
+      "Long subtotal",
+      "Long totalWithTax",
+      "@JsonInclude(JsonInclude.Include.NON_NULL)"
+    ],
+    "notContains": [
+      "// derived_from: subtotal",
+      "class InvoiceView"
+    ]
+  }
+}

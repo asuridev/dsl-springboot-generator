@@ -1,0 +1,18 @@
+system:
+  name: test-proj-system
+  description: Test system for projection generation scenarios.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products with read-optimized projections.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

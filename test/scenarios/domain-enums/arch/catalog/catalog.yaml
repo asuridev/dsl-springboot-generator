@@ -1,0 +1,107 @@
+bc: catalog
+version: "1.0.0"
+
+enums:
+  - name: ProductStatus
+    description: Lifecycle states of a Product aggregate.
+    values:
+      - value: DRAFT
+        description: Product is being prepared, not yet visible to customers.
+        transitions:
+          - to: ACTIVE
+            triggeredBy: UC-PRD-001 ActivateProduct
+            condition: none
+            rules: []
+          - to: DISCONTINUED
+            triggeredBy: UC-PRD-002 DiscontinueProduct
+            condition: none
+            rules: []
+      - value: ACTIVE
+        description: Product is live and available for purchase.
+        transitions:
+          - to: DISCONTINUED
+            triggeredBy: UC-PRD-002 DiscontinueProduct
+            condition: none
+            rules: []
+      - value: DISCONTINUED
+        description: Product is permanently retired.
+        transitions: []
+
+  - name: ImageType
+    description: Classification of product image by its role.
+    values:
+      - value: MAIN
+        description: Primary product image shown in listings.
+      - value: GALLERY
+        description: Additional image shown in the product detail gallery.
+      - value: THUMBNAIL
+        description: Small format image for compact views.
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+      - name: status
+        type: ProductStatus
+        defaultValue: DRAFT
+    domainMethods:
+      - name: activate
+        params: []
+      - name: discontinue
+        params: []
+
+useCases:
+  - id: UC-PRD-001
+    name: ActivateProduct
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: activateProduct
+    method: activate
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    notFoundError: PRODUCT_NOT_FOUND
+    implementation: scaffold
+
+  - id: UC-PRD-002
+    name: DiscontinueProduct
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: discontinueProduct
+    method: discontinue
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    notFoundError: PRODUCT_NOT_FOUND
+    implementation: scaffold
+
+errors:
+  - code: PRODUCT_NOT_FOUND
+    httpStatus: 404
+    description: Product not found.
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: save
+        signature: "save(Product): Product"

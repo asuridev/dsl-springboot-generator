@@ -111,8 +111,8 @@ aggregates:
 | `name` | PascalCase | ✅ | Nombre del agregado. Clase raíz Java y prefijo de todas las clases generadas. |
 | `root` | PascalCase | ✅ | Entidad raíz del agregado. Casi siempre igual a `name`. |
 | `auditable` | boolean | no | Si `true`, la entidad JPA extiende `FullAuditableEntity` y tiene columnas `created_at`, `updated_at`. Default: `false`. |
-| `softDelete` | boolean | no | Si `true`, la entidad JPA tiene columna `deleted_at` y las queries filtran registros donde `deleted_at IS NULL`. Default: `false`. |
-| `readOnly` | boolean | no | Si `true`, el agregado es inmutable (sin setters, sin `domainMethods` de mutación). |
+| `softDelete` | boolean | no | Si `true`, la entidad JPA tiene `@SQLRestriction("deleted_at IS NULL")` y la columna `deleted_at`. Las queries estándar filtran automáticamente los registros eliminados. Default: `false`. |
+| `readModel` | boolean | no | Si `true`, el agregado es un read model actualizado por eventos de otro BC. Requiere `sourceBC` y `sourceEvents`. |
 | `sourceBC` | kebab-case | ✅ si readModel | BC origen del read model. Solo para agregados read model. |
 | `sourceEvents` | lista PascalCase | ✅ si readModel | Eventos que actualizan este read model. |
 | `properties` | lista | ✅ (mínimo 1) | Campos del agregado raíz. |
@@ -362,8 +362,8 @@ entities:
 
 | `relationship` | JPA generado | Comportamiento |
 |---|---|---|
-| `composition` | `@OneToMany(cascade = ALL, orphanRemoval = true)` | Las entidades hijas no existen sin el padre. Se eliminan automáticamente. |
-| `aggregation` | `@OneToMany(cascade = PERSIST)` | Las entidades hijas pueden existir independientemente. |
+| `composition` | `@OneToMany(cascade = CascadeType.ALL, orphanRemoval = true)` | Las entidades hijas no existen sin el padre. Se eliminan automáticamente. |
+| `aggregation` | `@OneToMany(cascade = { CascadeType.PERSIST, CascadeType.MERGE }, orphanRemoval = false)` | Las entidades hijas pueden existir independientemente. |
 
 ### Código Java generado — entidad hija de dominio
 
@@ -593,14 +593,14 @@ domainRules:
 
 **Código Java generado** (en el handler del use case que referencia esta regla):
 ```java
-// domainRule(PRD-RULE-001): PRODUCT_CANNOT_BE_ACTIVATED
-if (product.getStatus() != ProductStatus.DRAFT) {
-    throw new ProductCannotBeActivatedError();
-}
+// TODO domainRule(PRD-RULE-001, statePrecondition): A product can only be activated if it is in DRAFT state.
+//      Enforce the precondition on product before invoking the domain method:
+//      if (!(<invariant on product>)) throw new ProductCannotBeActivatedError();
 ```
 
-> El generador detecta automáticamente el estado requerido consultando la transición
-> en el enum de ciclo de vida que referencia el use case.
+> La regla `statePrecondition` genera siempre un TODO enriquecido con el nombre de la clase
+> de error a lanzar. La condición concreta (e.g. `product.getStatus() != ProductStatus.DRAFT`)
+> debe ser completada en Fase 3, ya que requiere conocimiento de la lógica de negocio específica.
 
 ### 6.2 Tipo `uniqueness`
 
@@ -651,13 +651,20 @@ operación puede modificar el agregado. Esta regla bloquea cualquier intento de 
     errorCode: PRODUCT_IS_DISCONTINUED
 ```
 
-**Código Java generado** (guardia en el método de dominio):
+**Código Java generado** (en los métodos de negocio del agregado que invocan `transitionTo`):
 ```java
-// domainRule(PRD-RULE-003): terminalState
-if (this.status == ProductStatus.DISCONTINUED) {
+// derived_from: PRD-RULE-003 (terminalState)
+try {
+    this.status = this.status.transitionTo(ProductStatus.DISCONTINUED);
+} catch (InvalidStateTransitionException ex) {
     throw new ProductIsDiscontinuedError();
 }
 ```
+
+> El generador envuelve la llamada a `Enum.transitionTo()` en un try/catch que convierte
+> la `InvalidStateTransitionException` genérica en el error de dominio declarado. El guard
+> no se emite como sentencia `if` explícita — la validación del estado terminal la realiza
+> el propio método `transitionTo()` del enum.
 
 ### 6.4 Tipo `deleteGuard`
 
@@ -821,25 +828,32 @@ aggregates:
 **Efecto en el código generado:**
 
 - La entidad JPA también extiende `FullAuditableEntity` (ambos flags pueden combinarse)
+- La entidad JPA recibe `@SQLRestriction("deleted_at IS NULL")` — Hibernate aplica este filtro
+  automáticamente en todas las queries derivadas de Spring Data. No es necesario un `findActiveById` explícito.
 - Se genera el campo `deletedAt` en la entidad JPA
-- Las queries generadas automáticamente añaden `WHERE deleted_at IS NULL`
-- El repositorio genera `softDelete(id)` en lugar de `delete(id)`
+- El repositorio JPA genera automáticamente el método `softDelete(id)` en lugar de `delete(id)`
 
 **`OrderJpa.java`** (fragmento):
 ```java
-@Column(name = "deleted_at")
-private Instant deletedAt;
+@org.hibernate.annotations.SQLRestriction("deleted_at IS NULL")
+public class OrderJpa extends FullAuditableEntity {
+    // ...
+    @Column(name = "deleted_at")
+    private Instant deletedAt;
+}
 ```
 
-**`OrderJpaRepository.java`** (fragmento):
+**`OrderJpaRepository.java`** (fragmento — método auto-generado):
 ```java
-@Query("SELECT o FROM OrderJpa o WHERE o.id = :id AND o.deletedAt IS NULL")
-Optional<OrderJpa> findActiveById(@Param("id") UUID id);
-
 @Modifying
-@Query("UPDATE OrderJpa o SET o.deletedAt = :now WHERE o.id = :id")
-void softDeleteById(@Param("id") UUID id, @Param("now") Instant now);
+@Transactional
+@Query("UPDATE OrderJpa a SET a.deletedAt = CURRENT_TIMESTAMP WHERE a.id = :id AND a.deletedAt IS NULL")
+void softDelete(@Param("id") UUID id);
 ```
+
+> Cuando el agregado también tiene `auditable: true`, la query incluye
+> `a.deletedAt = CURRENT_TIMESTAMP, a.updatedAt = CURRENT_TIMESTAMP`
+> para mantener el campo `updated_at` sincronizado.
 
 ---
 
