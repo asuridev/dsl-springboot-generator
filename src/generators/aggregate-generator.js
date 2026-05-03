@@ -728,6 +728,10 @@ async function generateAggregates(bcYaml, config, outputDir) {
           value = `${enumType}.${p.defaultValue}`;
         } else if (typeof p.defaultValue === 'boolean') {
           value = String(p.defaultValue);
+        } else if (p.type === 'Integer' || p.type === 'Long') {
+          value = String(p.defaultValue);
+        } else if (p.type === 'Decimal') {
+          value = `new BigDecimal("${p.defaultValue}")`;
         } else {
           value = JSON.stringify(String(p.defaultValue));
         }
@@ -983,6 +987,10 @@ async function generateAggregates(bcYaml, config, outputDir) {
             value = `${enumType}.${p.defaultValue}`;
           } else if (typeof p.defaultValue === 'boolean') {
             value = String(p.defaultValue);
+          } else if (p.type === 'Integer' || p.type === 'Long') {
+            value = String(p.defaultValue);
+          } else if (p.type === 'Decimal') {
+            value = `new BigDecimal("${p.defaultValue}")`;
           } else {
             value = JSON.stringify(String(p.defaultValue));
           }

@@ -143,7 +143,6 @@ properties:
   - name: displayOrder
     type: Integer
     required: false
-    default: 0                 # valor por defecto en el constructor de creación
 
   - name: deletedAt
     type: DateTime
@@ -170,10 +169,10 @@ properties:
 |---|---|---|---|
 | `name` | camelCase | ✅ | Nombre del campo. Se convierte a `snake_case` para la columna JPA. |
 | `type` | tipo canónico | ✅ | Tipo del campo. Ver Parte 1 §5. Tipos prohibidos: `string`, `int`, `bool`, etc. |
-| `required` | boolean | no | Si `true`: `nullable=false` en JPA y `Objects.requireNonNull` en el constructor. Default: `false`. |
-| `readOnly` | boolean | no | Si `true` y `defaultValue: generated`: el campo es `UUID.randomUUID()` en la factory, sin setter ni parámetro en constructor de creación. |
-| `defaultValue` | `generated` | no | Solo válido combinado con `readOnly: true`. Indica que el UUID se genera automáticamente en la factory. |
-| `default` | valor primitivo | no | Valor por defecto asignado en el constructor cuando el parámetro no se provee (para campos opcionales). |
+| `required` | boolean | no | Si `true`: `nullable=false` en JPA. **No genera `Objects.requireNonNull` en la clase de dominio** — el dominio aplica solo las validaciones de `validations[]`. Default: `false`. |
+| `readOnly` | boolean | no | Si `true`: el campo se excluye del constructor de creación y el factory method lo inicializa automáticamente desde `defaultValue`. El campo sigue siendo mutable desde los métodos de negocio del agregado. Debe combinarse con `defaultValue`. |
+| `defaultValue` | ver tabla | no | Solo válido combinado con `readOnly: true`. Define el valor que el factory method asigna automáticamente al campo. Ver tabla de valores aceptados abajo. |
+| `default` | valor | no | Solo válido en inputs de use case con `source: header`. Genera `@RequestHeader(defaultValue="...")` en el controller. **Ignorado silenciosamente en propiedades de agregados y entidades.** |
 | `indexed` | boolean | no | Si `true`: genera `@Index` en la entidad JPA. |
 | `unique` | boolean | no | Si `true`: genera `@Column(unique=true)` en JPA. No reemplaza una domainRule `type: uniqueness` — son complementarios. |
 | `hidden` | boolean | no | Si `true`: el campo se excluye de los DTOs de respuesta y no tiene getter en el DTO. |
@@ -183,6 +182,18 @@ properties:
 | `validations` | lista | no | Restricciones de validación. Ver Parte 1 §5.2. |
 | `description` | texto | no | Solo referencia. |
 
+#### Valores aceptados para `defaultValue`
+
+| Valor | Java generado | Tipo de campo |
+|---|---|---|
+| `generated` | `UUID.randomUUID()` | `Uuid` |
+| `now()` | `java.time.Instant.now()` | `DateTime` |
+| `ENUM_VALUE` | `EnumType.ENUM_VALUE` | Enum del BC |
+| string literal | `"literal"` | `String` / `String(n)` |
+| boolean | `true` / `false` | `Boolean` |
+| número entero (e.g. `0`) | `0` | `Integer` / `Long` |
+| número decimal (e.g. `0`) | `new BigDecimal("0")` | `Decimal` |
+
 ### Código Java generado — entidad de dominio
 
 Para el agregado `Product` con `auditable: true`:
@@ -191,11 +202,10 @@ Para el agregado `Product` con `auditable: true`:
 ```java
 package com.canastaShop.catalog.domain.aggregate;
 
-import java.util.UUID;
 import java.time.Instant;
-import java.util.Objects;
+import java.util.UUID;
 import com.canastaShop.catalog.domain.enums.ProductStatus;
-import com.canastaShop.catalog.domain.valueObjects.Money;
+import com.canastaShop.catalog.domain.valueobject.Money;
 
 public class Product {
 
@@ -206,38 +216,43 @@ public class Product {
     private Money price;
     private UUID categoryId;
 
-    // Audit fields (injected by FullAuditableEntity contract, not declared here)
+    // Audit fields
     private Instant createdAt;
     private Instant updatedAt;
 
     // ── Constructor de reconstrucción (todos los campos — usado por el mapper JPA→dominio) ──
+    // Asignación directa sin null-checks: los datos vienen ya validados de la BD.
     public Product(UUID id, String sku, String name, ProductStatus status,
                    Money price, UUID categoryId, Instant createdAt, Instant updatedAt) {
-        this.id = Objects.requireNonNull(id, "id must not be null");
-        this.sku = Objects.requireNonNull(sku, "sku must not be null");
-        this.name = Objects.requireNonNull(name, "name must not be null");
-        if (name != null && name.length() < 3) {
-            throw new IllegalArgumentException("name must be at least 3 characters long");
-        }
-        this.status = Objects.requireNonNull(status, "status must not be null");
-        this.price = Objects.requireNonNull(price, "price must not be null");
-        this.categoryId = Objects.requireNonNull(categoryId, "categoryId must not be null");
+        this.id = id;
+        this.sku = sku;
+        this.name = name;
+        this.status = status;
+        this.price = price;
+        this.categoryId = categoryId;
         this.createdAt = createdAt;
         this.updatedAt = updatedAt;
     }
 
-    // ── Factory method estático (constructor de creación — sin id ni audit fields) ──
+    // ── Constructor de creación (PRIVADO — invocado solo por el factory method) ──
+    // Aquí se ejecutan las validaciones de dominio (validations[]).
+    private Product(String sku, String name, Money price, UUID categoryId) {
+        if (name != null && name.length() < 3) {
+            throw new IllegalArgumentException("name must be at least 3 characters long");
+        }
+        this.id = UUID.randomUUID();   // ← readOnly: true + defaultValue: generated
+        this.sku = sku;
+        this.name = name;
+        this.price = price;
+        this.categoryId = categoryId;
+        this.status = ProductStatus.DRAFT;  // ← readOnly: true + defaultValue: DRAFT (autoInit)
+    }
+
+    // ── Factory method estático (sin id ni status como parámetros — los asigna el ctor privado) ──
+    /** derived_from: UC-CREATE-PRODUCT Crear producto */
     public static Product create(String sku, String name, Money price, UUID categoryId) {
-        return new Product(
-            UUID.randomUUID(),  // ← readOnly: true + defaultValue: generated
-            sku,
-            name,
-            ProductStatus.DRAFT,  // ← estado inicial inferido del enum de ciclo de vida
-            price,
-            categoryId,
-            null,
-            null
-        );
+        Product instance = new Product(sku, name, price, categoryId);
+        return instance;
     }
 
     // ── Getters ──
@@ -251,14 +266,30 @@ public class Product {
     public Instant getUpdatedAt() { return updatedAt; }
 
     // ── Métodos de negocio (sin setters públicos) ──
+    /** derived_from: UC-ACTIVATE-PRODUCT Activar producto */
     public void activate() {
         this.status = ProductStatus.ACTIVE;
     }
 
+    /** derived_from: UC-UPDATE-PRICE Actualizar precio */
     public void updatePrice(Money newPrice) {
-        Objects.requireNonNull(newPrice, "newPrice must not be null");
         this.price = newPrice;
     }
+
+    // ── Identity equality ──
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        Product that = (Product) o;
+        return java.util.Objects.equals(this.id, that.id);
+    }
+
+    @Override
+    public int hashCode() { return java.util.Objects.hash(this.id); }
+
+    @Override
+    public String toString() { return "Product{id=" + this.id + "}"; }
 }
 ```
 
@@ -346,7 +377,6 @@ entities:
       - name: displayOrder
         type: Integer
         required: false
-        default: 0
 ```
 
 ### Propiedades de una entidad hija
@@ -369,11 +399,10 @@ entities:
 
 **`ProductImage.java`:**
 ```java
-package com.canastaShop.catalog.domain.models.entities;
+package com.canastaShop.catalog.domain.entity;
 
-import java.util.UUID;
 import java.net.URI;
-import java.util.Objects;
+import java.util.UUID;
 import com.canastaShop.catalog.domain.enums.ImageType;
 
 public class ProductImage {
@@ -383,23 +412,41 @@ public class ProductImage {
     private ImageType type;
     private Integer displayOrder;
 
-    // Constructor de reconstrucción
+    // Constructor de reconstrucción — asignación directa, sin null-checks
     public ProductImage(UUID id, URI url, ImageType type, Integer displayOrder) {
-        this.id = Objects.requireNonNull(id, "id must not be null");
-        this.url = Objects.requireNonNull(url, "url must not be null");
-        this.type = Objects.requireNonNull(type, "type must not be null");
-        this.displayOrder = displayOrder != null ? displayOrder : 0;
+        this.id = id;
+        this.url = url;
+        this.type = type;
+        this.displayOrder = displayOrder;
     }
 
-    // Factory method
-    public static ProductImage create(URI url, ImageType type) {
-        return new ProductImage(UUID.randomUUID(), url, type, 0);
+    // Constructor de creación (PÚBLICO — entidades hijas no tienen static factory)
+    // id se genera aquí; displayOrder es opcional (required: false) y se pasa como parámetro
+    public ProductImage(URI url, ImageType type, Integer displayOrder) {
+        this.id = UUID.randomUUID();
+        this.url = url;
+        this.type = type;
+        this.displayOrder = displayOrder;
     }
 
     public UUID getId() { return id; }
     public URI getUrl() { return url; }
     public ImageType getType() { return type; }
     public Integer getDisplayOrder() { return displayOrder; }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        ProductImage that = (ProductImage) o;
+        return java.util.Objects.equals(this.id, that.id);
+    }
+
+    @Override
+    public int hashCode() { return java.util.Objects.hash(this.id); }
+
+    @Override
+    public String toString() { return "ProductImage{id=" + this.id + "}"; }
 }
 ```
 
@@ -513,14 +560,20 @@ returns: Product (got "void").
 El generador produce el método `create` como **método estático de fábrica** (static factory):
 
 ```java
+/** derived_from: UC-CREATE-PRODUCT Crear producto */
 public static Product create(String sku, String name, Money price, UUID categoryId) {
-    Product product = new Product(
-        UUID.randomUUID(), sku, name, ProductStatus.DRAFT, price, categoryId, null, null
-    );
-    product.raise(new ProductCreated(product.getId(), ...)); // si emits está declarado
-    return product;
+    Product instance = new Product(sku, name, price, categoryId);  // ← llama al ctor PRIVADO de creación
+    // instance.raise(new ProductCreated(...)); // si emits está declarado
+    return instance;
 }
+// Dentro del constructor PRIVADO de creación:
+//   this.id = UUID.randomUUID();          ← defaultValue: generated
+//   this.status = ProductStatus.DRAFT;    ← defaultValue: DRAFT (autoInit)
 ```
+
+> **Clave**: el UUID y los campos `readOnly + defaultValue` se asignan dentro del
+> **constructor privado de creación**, no en el factory method. El factory solo
+> recibe los parámetros de negocio que el cliente debe proveer.
 
 ### Emisión de eventos con `emits`
 
@@ -707,41 +760,104 @@ Y añade el repositorio `ProductRepository` como dependencia del handler de dele
 ### 6.5 Tipo `crossAggregateConstraint`
 
 **Problema que resuelve:** una operación solo puede realizarse si un agregado relacionado
-(en otro repositorio) está en un estado específico. Ejemplo: no se puede crear un producto
-en una categoría que está `INACTIVE`.
+está en un estado específico. Ejemplo: no se puede crear un `Product` en una `Category`
+que está `INACTIVE`.
+
+#### Restricción DDD: solo válido dentro del mismo BC
+
+`crossAggregateConstraint` **solo es aplicable cuando `targetAggregate` pertenece al mismo
+Bounded Context** que el agregado que declara la regla. En DDD, un agregado nunca debe
+cargar una instancia completa de otro agregado de otro BC — eso crearía acoplamiento
+fuerte entre contextos.
+
+| Escenario | Mecanismo correcto |
+|---|---|
+| `Category` y `Product` en el **mismo BC** | `crossAggregateConstraint` → el generador inyecta `CategoryRepository` en el handler |
+| `Category` en otro BC | No usar esta regla. Declarar una integración `outbound` + un use case con `fkValidations` o un `crossAggregateConstraint` sin hints (TODO manual) |
+
+> **Nota sobre agregados de solo lectura:** La única excepción aceptable en DDD para
+> acceder a un repositorio de otro agregado (incluso de otro BC) es cuando ese agregado
+> es un **read model** (`readModel: true`) que este BC mantiene localmente como proyección
+> de eventos. En ese caso el acceso es de consulta pura y no viola el invariante de
+> consistencia transaccional del BC origen.
+
+#### Sub-atributos
+
+| Sub-atributo | Tipo | Requerido | Descripción |
+|---|---|---|---|
+| `targetAggregate` | PascalCase | no* | Nombre del agregado a verificar. **Debe existir en `aggregates[]` del mismo BC.** El generador lo busca en `bcYaml.aggregates` en tiempo de generación — si no lo encuentra emite un TODO. |
+| `field` | camelCase | no* | Nombre del campo en `useCases[].input[]` que lleva el FK hacia el target. El generador lo busca en los inputs del UC en tiempo de generación — si no lo encuentra emite un TODO. **`bc-yaml-reader.js` no valida esto en tiempo de parsing.** |
+| `expectedStatus` | SCREAMING_SNAKE | no* | Valor del enum de estado que debe tener el target. El generador resuelve el enum buscando la primera propiedad del target cuyo **tipo** termine en `Status` (ej. `CategoryStatus`, `OrderStatus`). |
+
+\* Los tres atributos son opcionales individualmente, pero deben declararse **todos juntos o ninguno**.
+`bc-yaml-reader.js` rechaza declarar uno o dos de los tres — falla en tiempo de parsing.
+Si se omiten todos, el generador produce un TODO enriquecido en lugar de código ejecutable.
+
+#### YAML con los tres hints — código ejecutable
 
 ```yaml
   - id: PRD-RULE-004
     type: crossAggregateConstraint
     description: Products can only be created in active categories.
     errorCode: PRODUCT_CATEGORY_NOT_ACTIVE
-    targetAggregate: Category
-    field: categoryId
-    expectedStatus: ACTIVE
+    targetAggregate: Category    # debe estar en aggregates[] del mismo BC
+    field: categoryId            # nombre del campo en input[] del UC que lleva el FK
+    expectedStatus: ACTIVE       # valor del enum *Status del target (ej. CategoryStatus.ACTIVE)
 ```
-
-| Sub-atributo | Tipo | Requerido | Descripción |
-|---|---|---|---|
-| `targetAggregate` | PascalCase | ✅ (junto con `field` y `expectedStatus`) | Agregado a verificar. |
-| `field` | camelCase | ✅ | Campo del input del UC que contiene el FK hacia el target. |
-| `expectedStatus` | SCREAMING_SNAKE | ✅ | Valor de estado que debe tener el target. |
 
 **Código Java generado** en el handler:
 ```java
-// domainRule(PRD-RULE-004): crossAggregateConstraint
-Category category = categoryRepository.findById(command.categoryId())
+// domainRule(PRD-RULE-004): PRODUCT_CATEGORY_NOT_ACTIVE
+Category category = categoryRepository
+    .findById(UUID.fromString(command.categoryId()))
     .orElseThrow(ProductCategoryNotActiveError::new);
 if (category.getStatus() != CategoryStatus.ACTIVE) {
     throw new ProductCategoryNotActiveError();
 }
 ```
 
-Y añade `CategoryRepository` como dependencia del handler.
+Donde:
+- El getter (`getStatus()`) se deriva del nombre de la propiedad cuyo tipo termina en `Status`
+- `CategoryRepository` se importa desde `{package}.{bc}.domain.repository.CategoryRepository` — es decir, el repositorio del BC actual, no de otro BC
+- El generador añade `CategoryRepository` como dependencia inyectada del handler e importa `Category`, `CategoryStatus` y `ProductCategoryNotActiveError`
+
+#### YAML sin hints — TODO enriquecido
+
+```yaml
+  - id: PRD-RULE-004
+    type: crossAggregateConstraint
+    description: Products can only be created in active categories.
+    errorCode: PRODUCT_CATEGORY_NOT_ACTIVE
+    # sin targetAggregate / field / expectedStatus
+```
+
+**Código Java generado:**
+```java
+// TODO domainRule(PRD-RULE-004, crossAggregateConstraint): Products can only be created in active categories.
+//      Declare "targetAggregate" + "field" + "expectedStatus" in the YAML to
+//      auto-generate the guard, or emit manually:
+//      if (<targetVar>.getStatus() != <Enum>.<EXPECTED>) throw new ProductCategoryNotActiveError();
+```
+
+#### TODOs de fallback en generación
+
+Cuando los hints están declarados pero el generador no puede resolver los datos necesarios,
+emite un TODO específico en lugar de código roto:
+
+| Causa | TODO generado |
+|---|---|
+| `targetAggregate` no existe en `aggregates[]` del BC | `// TODO domainRule(PRD-RULE-004): targetAggregate "Category" not found in current BC` |
+| El target no tiene ninguna propiedad de tipo `*Status` | `// TODO domainRule(PRD-RULE-004): no <Aggregate>Status property found on Category` |
+| `field` no existe en `input[]` del UC | `// TODO domainRule(PRD-RULE-004): input field "categoryId" not found in UC inputs` |
+
+El primer caso es el más frecuente cuando se intenta usar `crossAggregateConstraint` con un
+agregado de otro BC — el generador lo detecta y aborta la generación del guard sin error fatal.
 
 ### 6.6 Tipo `sideEffect`
 
-Declara un efecto secundario conocido del dominio. Actualmente no genera código ejecutable
-(produce un TODO enriquecido), pero documenta la intención para la Fase 3.
+Declara un efecto secundario conocido del dominio. **El generador no produce ningún código
+ejecutable ni comentario** para este tipo de regla en los handlers — la regla es intencionalmente
+inerte en `domain-rule-mapper.js` (`return emptyResult()`).
 
 ```yaml
   - id: PRD-RULE-005
@@ -751,11 +867,13 @@ Declara un efecto secundario conocido del dominio. Actualmente no genera código
       This is handled via the ProductActivated event consumer.
 ```
 
-**Código generado:**
-```java
-// TODO domainRule(PRD-RULE-005, sideEffect): Activating a product triggers a price
-//      indexation in the search service. This is handled via the ProductActivated event consumer.
-```
+**Código generado:** ninguno. La `description` sirve como documentación del diseño para
+Fase 3 — el implementador sabe que el efecto secundario existe sin necesidad de un TODO
+en el código.
+
+> Si el efecto secundario se implementa vía evento de dominio, declara `emits` en el
+> `domainMethod` correspondiente para que el generador emita la llamada `raise(...)`.
+> Si se implementa en el handler como llamada a otro servicio, codificarlo manualmente en Fase 3.
 
 ### Campos comunes de `domainRules`
 
@@ -859,9 +977,21 @@ void softDelete(@Param("id") UUID id);
 
 ### 7.3 `readOnly: true` en propiedades
 
-**Problema que resuelve:** ciertos campos como `id` o `createdBy` no deben poder ser
-modificados después de la creación. Sin `readOnly`, cualquier método del agregado podría
-sobrescribir el `id`.
+**Problema que resuelve:** ciertos campos como `id`, `registeredAt` o `status` no
+deben ser asignados por el cliente en el momento de la creación — su valor inicial
+lo determina el sistema automáticamente. Sin `readOnly`, estos campos serían parámetros
+del factory method y el llamador podría pasar cualquier valor.
+
+Siempre se combina con `defaultValue`. Los valores aceptados son:
+
+| `defaultValue` | Java en factory | Tipo típico |
+|---|---|---|
+| `generated` | `UUID.randomUUID()` | `Uuid` — para `id` |
+| `now()` | `java.time.Instant.now()` | `DateTime` — para timestamps de creación |
+| `ENUM_VALUE` | `EnumType.ENUM_VALUE` | Enum — para estado inicial fijo |
+| string / boolean | literal Java | `String`, `Boolean` |
+| número entero (e.g. `0`) | `0` | `Integer` / `Long` |
+| número decimal (e.g. `0`) | `new BigDecimal("0")` | `Decimal` |
 
 ```yaml
 properties:
@@ -869,25 +999,51 @@ properties:
     type: Uuid
     required: true
     readOnly: true
-    defaultValue: generated
+    defaultValue: generated       # UUID.randomUUID() en factory
+
+  - name: registeredAt
+    type: DateTime
+    required: true
+    readOnly: true
+    defaultValue: now()           # Instant.now() en factory
+
+  - name: status
+    type: OrderStatus
+    required: true
+    readOnly: true
+    defaultValue: PENDING         # OrderStatus.PENDING en factory
 ```
 
 **Efectos en el código generado:**
-- El campo se declara `final` en la clase de dominio
 - Se excluye del constructor de creación (factory method)
-- Se genera con `UUID.randomUUID()` si `defaultValue: generated`
-- No se genera setter
+- El factory method asigna el valor automáticamente según `defaultValue`
+- El campo sigue siendo mutable desde los métodos de negocio del agregado (e.g. `activate()` puede reasignar `status`)
 
 ```java
-// Campo final — no modificable
-private final UUID id;
+private final UUID id;    // id es siempre final — hardcodeado en template, independiente de readOnly
+private Instant registeredAt;
+private OrderStatus status;
 
-// En el constructor de reconstrucción: se acepta el id
-public Product(UUID id, ...) { this.id = Objects.requireNonNull(id, "..."); }
+// En el constructor de reconstrucción: asignación directa, sin null-checks
+public Order(UUID id, Instant registeredAt, OrderStatus status, ...) {
+    this.id = id;
+    this.registeredAt = registeredAt;
+    this.status = status;
+    ...
+}
 
-// En el factory method: se genera automáticamente
-public static Product create(String sku, ...) {
-    return new Product(UUID.randomUUID(), ...);  // ← NO hay parámetro id
+// En el constructor PRIVADO de creación: ninguno de estos es parámetro
+private Order(...) {
+    this.id = UUID.randomUUID();          // ← defaultValue: generated
+    this.registeredAt = java.time.Instant.now();    // ← defaultValue: now()
+    this.status = OrderStatus.PENDING;    // ← defaultValue: PENDING
+    ...
+}
+
+// El factory method estático llama al constructor privado de creación
+public static Order create(...) {
+    Order instance = new Order(...);
+    return instance;
 }
 ```
 

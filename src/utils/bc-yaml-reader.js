@@ -32,11 +32,16 @@ function resolveType(type) {
 // ─── Validators ──────────────────────────────────────────────────────────────
 
 /**
- * Validate all properties of an aggregate / entity for prohibited types
- * and Decimal precision/scale rules.
+ * Validate all properties of an aggregate / entity for prohibited types,
+ * Decimal precision/scale rules, and readOnly+defaultValue type compatibility.
+ *
+ * @param {Array}  properties - the properties[] array from the YAML
+ * @param {string} context    - human-readable location for error messages
+ * @param {Array}  enums      - doc.enums array for enum value validation
  */
-function validateProperties(properties, context) {
+function validateProperties(properties, context, enums = []) {
   if (!Array.isArray(properties)) return;
+  const enumNames = new Set((enums || []).map((e) => e.name));
   for (const prop of properties) {
     resolveType(prop.type);
 
@@ -44,6 +49,39 @@ function validateProperties(properties, context) {
       if (prop.precision == null || prop.scale == null) {
         fail(`Property "${prop.name}" in ${context} has type Decimal but is missing "precision" and/or "scale".`);
       }
+    }
+
+    if (prop.readOnly === true && prop.defaultValue != null) {
+      const dv = prop.defaultValue;
+      const typeBase = (prop.type || '').replace(/\(\d+(?:,\s*\d+)?\)$/, '').trim();
+      if (typeBase === 'Uuid') {
+        if (dv !== 'generated') {
+          fail(`Property "${prop.name}" in ${context}: readOnly Uuid must have defaultValue: generated.`);
+        }
+      } else if (typeBase === 'DateTime') {
+        if (dv !== 'now()') {
+          fail(`Property "${prop.name}" in ${context}: readOnly DateTime must have defaultValue: now().`);
+        }
+      } else if (typeBase === 'Integer' || typeBase === 'Long') {
+        if (isNaN(Number(dv))) {
+          fail(`Property "${prop.name}" in ${context}: readOnly Integer/Long defaultValue must be numeric, got "${dv}".`);
+        }
+      } else if (typeBase === 'Decimal') {
+        if (isNaN(Number(dv))) {
+          fail(`Property "${prop.name}" in ${context}: readOnly Decimal defaultValue must be numeric, got "${dv}".`);
+        }
+      } else if (typeBase === 'Boolean') {
+        if (dv !== true && dv !== false && dv !== 'true' && dv !== 'false') {
+          fail(`Property "${prop.name}" in ${context}: readOnly Boolean defaultValue must be true or false, got "${dv}".`);
+        }
+      } else if (enumNames.has(typeBase)) {
+        const enumDef = (enums || []).find((e) => e.name === typeBase);
+        const validValues = (enumDef?.values || []).map((v) => (typeof v === 'object' ? v.value : v));
+        if (!validValues.includes(dv)) {
+          fail(`Property "${prop.name}" in ${context}: defaultValue "${dv}" is not a valid value of enum ${typeBase}. Valid values: ${validValues.join(', ')}.`);
+        }
+      }
+      // String, String(n) — any value accepted
     }
   }
 }
@@ -795,9 +833,9 @@ function validate(doc, opts = {}) {
       allRuleIds.add(rule.id);
     }
     // Validate properties
-    validateProperties(agg.properties, `aggregate ${agg.name}`);
+    validateProperties(agg.properties, `aggregate ${agg.name}`, doc.enums);
     for (const entity of agg.entities || []) {
-      validateProperties(entity.properties, `entity ${entity.name}`);
+      validateProperties(entity.properties, `entity ${entity.name}`, doc.enums);
       // S6 — child entity relationship/cardinality whitelist
       if (entity.relationship !== undefined &&
           entity.relationship !== 'composition' &&
@@ -821,7 +859,7 @@ function validate(doc, opts = {}) {
     if (!Array.isArray(vo.properties) || vo.properties.length === 0) {
       fail(`Value object "${vo.name}" has no properties. A VO must declare at least one property.`);
     }
-    validateProperties(vo.properties, `valueObject ${vo.name}`);
+    validateProperties(vo.properties, `valueObject ${vo.name}`, doc.enums);
 
     // Each property type must resolve to a canonical type, an enum, another VO, or List[<resolvable>]
     for (const prop of vo.properties) {
@@ -883,8 +921,7 @@ function validate(doc, opts = {}) {
       if (!prop.type) fail(`Projection "${proj.name}" property "${prop.name}" is missing required field "type".`);
     }
     projectionNames.add(proj.name);
-    validateProperties(proj.properties, `projection ${proj.name}`);
-  }
+    validateProperties(proj.properties, `projection ${proj.name}`, doc.enums);  }
 
   // Second pass: every property type in projections must resolve to a canonical
   // type, an enum, a VO, another projection or List[<resolvable>]. Aggregates

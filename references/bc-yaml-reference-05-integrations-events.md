@@ -72,7 +72,7 @@ integrations:
 | `name` | kebab-case | ✅ | Nombre del BC destino o sistema externo. Debe coincidir con un BC declarado en `system.yaml#/boundedContexts` o con un sistema externo en `system.yaml#/externalSystems`. |
 | `protocol` | `http` | ✅ | Solo HTTP disponible en esta versión. |
 | `operations` | lista | ✅ | Operaciones que este BC consume del destino. La validación depende del tipo de destino. |
-| `operations[].name` | camelCase | ✅ | **BC interno (INT-003):** debe coincidir con un `operationId` en `{target}-internal-api.yaml`. **Sistema externo (INT-009):** debe coincidir con un `name` en `system.yaml#/externalSystems[name={target}].operations[]`. |
+| `operations[].name` | camelCase | ✅ | **BC interno (INT-003):** debe coincidir con un `name` en `{target}.yaml#/integrations.inbound[].operations[]`. El archivo `{target}-internal-api.yaml` debe existir (INT-003 verifica su existencia). **Sistema externo (INT-009):** debe coincidir con un `name` en `system.yaml#/externalSystems[name={target}].operations[]`. |
 | `operations[].description` | texto | no | Solo referencia. |
 | `resilience` | objeto | no | Configuración de resiliencia local (override del default en `system.yaml`). Ver §1.1.1. |
 | `auth` | objeto | no | Configuración de autenticación local (override del default en `system.yaml`). Ver §1.1.2. |
@@ -194,6 +194,7 @@ auth:
 | `oauth2-cc` | Client Credentials Flow — obtiene un token Bearer antes de cada llamada (con caché). | `tokenEndpoint`, `credentialKey` |
 | `api-key` | Envía una clave estática en un header HTTP. | `header` (default: `X-Api-Key`), `valueProperty` |
 | `bearer` | Token Bearer estático en `Authorization: Bearer <token>`. | `valueProperty` |
+| `mTLS` | Mutual TLS — autenticación por certificado de cliente. | — |
 | `internal-jwt` | Declarativo — no genera interceptor. Requiere interceptor global manual. | — |
 | `none` | Sin autenticación (default). | — |
 
@@ -362,8 +363,8 @@ domainEvents:
 
 | Propiedad | Tipo | Requerido | Descripción |
 |---|---|---|---|
-| `name` | PascalCase | ✅ | Nombre del evento. Genera `{Name}.java` (domain event record) e `{Name}IntegrationEvent.java` (wire format). |
-| `scope` | `internal` \| `integration` \| `both` | ✅ | Determina qué capas reciben el evento. `internal`: solo dentro del BC. `integration`: solo hacia el broker. `both`: ambas. |
+| `name` | PascalCase | ✅ | Nombre del evento. Genera `{Name}Event.java` (domain event record — con sufijo `Event`) e `{Name}IntegrationEvent.java` (wire format). |
+| `scope` | `internal` \| `integration` \| `both` | no | Determina qué capas reciben el evento. `internal`: solo dentro del BC. `integration`: solo hacia el broker. `both`: ambas. **Default: `both`** cuando se omite. |
 | `channel` | string | no (recomendado) | Canal del broker. Convención: `{bc}.{kebab-event-name-con-puntos}`. Ej: `catalog.product.activated`. Validación INT-018 compara con AsyncAPI. |
 | `payload` | lista | ✅ | Campos del evento. Ver §2.2. |
 | `broker` | objeto | no | Configuración de publicación en el broker. Ver §2.3. |
@@ -387,7 +388,7 @@ payload:
 
   - name: performedBy
     type: Uuid
-    source: auth-context        # SecurityContextHolder → userId claim
+    source: auth-context        # genera TODO null — debe completarse en el handler (los agregados son agnósticos a la seguridad)
 
   - name: notes
     type: String
@@ -395,11 +396,12 @@ payload:
 
   - name: calculatedRisk
     type: String
-    source: constant            # valor constante (inline en el raise)
+    source: constant
+    value: "HIGH"               # campo 'value' requerido cuando source: constant
 
   - name: margin
     type: Decimal
-    source: derived             # generador emite TODO — lógica computada
+    source: derived             # generador emite TODO null — lógica computada
 
   # Campo oculto — solo válido con allowHiddenLeak: true
   - name: internalCostBasis
@@ -417,6 +419,7 @@ payload:
 | `type` | tipo canónico | ✅ | Tipo Java del campo. |
 | `source` | enum | ✅ | De dónde proviene el valor en runtime. Ver tabla siguiente. |
 | `field` | camelCase | ✅ si `source: aggregate` | Nombre de la propiedad del agregado. Debe existir en `aggregates[].properties`. |
+| `value` | literal | ✅ si `source: constant` | Valor constante a emitir. Si se omite, el generador emite `null /* TODO */`. |
 | `allowHiddenLeak` | boolean | no | Si `true`, permite exponer en el evento un campo marcado `hidden: true` en el agregado (INT-021). Default: `false`. |
 
 #### Valores de `source`
@@ -425,22 +428,22 @@ payload:
 |---|---|---|
 | `aggregate` | `this.get{Field}()` | El valor proviene directamente del estado del agregado. |
 | `timestamp` | `Instant.now()` | Marca temporal del momento en que ocurre el evento. |
-| `auth-context` | `SecurityContextHolder.getContext().getAuthentication().getName()` | El actor que realizó la acción (userId del JWT). |
-| `param` | parámetro adicional en la firma de `raise()` | Un valor que se pasa explícitamente al método. Ej: `reason`, `notes`. |
-| `constant` | valor literal inline | Valores fijos como versiones, tipos de evento, códigos. |
-| `derived` | `// TODO: compute {fieldName} — ver {bc}-flows.md` | Lógica derivada que debe implementarse en Fase 3. |
+| `auth-context` | `null /* TODO: source=auth-context — populate from SecurityContext in the application handler, not in the aggregate */` | El actor que realizó la acción. El generador emite un TODO porque los agregados deben ser agnósticos a la seguridad. El campo debe ser completado en Fase 3 en el handler de aplicación. |
+| `param` | parámetro adicional en la firma de `raise()` | Un valor que se pasa explícitamente al método. Ej: `reason`, `notes`. Requiere que el parámetro exista en la firma del método del agregado. |
+| `constant` | valor literal del campo `value` en el payload | Valores fijos. **Requiere declarar `value:` en el campo del payload** (ej: `value: "1"`). Si `value` está ausente, el generador emite un TODO con null. |
+| `derived` | `null /* TODO: source=derived — implement projection */` | Lógica derivada que debe implementarse en Fase 3. |
 
 #### Código Java generado
 
-**`ProductActivated.java`** (domain event record):
+**`ProductActivatedEvent.java`** (domain event record — el generador añade el sufijo `Event`):
 ```java
 package com.canastaShop.catalog.domain.events;
 
 import java.time.Instant;
 import java.util.UUID;
 
-// derived_from: domainEvents.published[name=ProductActivated]
-public record ProductActivated(
+// derived_from: domainEvents.published.ProductActivated
+public record ProductActivatedEvent(
     EventMetadata metadata,   // ← solo si events.metadata.enabled = true
     UUID productId,
     String sku,
@@ -449,25 +452,23 @@ public record ProductActivated(
     UUID activatedBy,
     String promotionCode,
     String displayCategory
-) {}
+) implements DomainEvent {}
 ```
 
 **Método `raise()` en el agregado** (generado cuando `domainMethods[].emits: ProductActivated`):
 ```java
 // En Product.java:
-public ProductActivated raiseProductActivated(String promotionCode) {
-    return new ProductActivated(
+public ProductActivatedEvent raiseProductActivated(String promotionCode) {
+    return new ProductActivatedEvent(
         EventMetadata.now("ProductActivated", "1"),  // metadata (si habilitado)
         this.getId(),                      // source: aggregate, field: id
         this.getSku(),                     // source: aggregate, field: sku
         this.getPrice(),                   // source: aggregate, field: price
         Instant.now(),                     // source: timestamp
-        SecurityContextHolder.getContext() // source: auth-context
-            .getAuthentication().getName() != null
-            ? UUID.fromString(...) : null,
+        null /* TODO domainEvent(ProductActivated, activatedBy): source=auth-context
+              — populate from SecurityContext in the application handler, not in the aggregate */,
         promotionCode,                     // source: param
-        // TODO: compute displayCategory — ver catalog-flows.md  // source: derived
-        null
+        null /* TODO domainEvent(ProductActivated, displayCategory): source=derived — implement projection */
     );
 }
 ```
@@ -571,53 +572,46 @@ domainEvents:
 |---|---|---|---|
 | `name` | PascalCase | ✅ | Nombre del evento. Debe estar declarado en `domainEvents.published[]` del BC `sourceBc` (validación INT-007). |
 | `sourceBc` | kebab-case | ✅ | BC que publica este evento. Usado para la validación INT-007 y INT-020. |
+| `channel` | string | no | Canal del broker donde se publica el evento (ej: `catalog.product.activated`). Cuando se declara, el generador lo usa para derivar el BC productor en la topología de colas. |
 | `payload` | lista | no | Subconjunto de campos del payload que este BC necesita. Validación INT-020: todos los campos declarados aquí deben existir en el `published[].payload[]` del BC productor. Si `payload` se omite, se usa el payload completo del evento publicado. |
 | `retry` | objeto | no | Configuración de reintento del consumer. Misma estructura que `broker.retry`. |
 | `dlq` | objeto | no | Configuración de DLQ del consumer. Misma estructura que `broker.dlq`. |
 
 #### Código Java generado
 
-**`ProductActivatedConsumer.java`:**
+**`ProductActivatedRabbitListener.java`** (o `ProductActivatedKafkaListener.java` según broker):
 ```java
-package com.canastaShop.inventory.infrastructure.messaging.consumers;
+package com.canastaShop.inventory.infrastructure.rabbitListener;
 
 // derived_from: domainEvents.consumed[name=ProductActivated, sourceBc=catalog]
 @Component
-public class ProductActivatedConsumer {
+public class ProductActivatedRabbitListener {
 
-    private final UseCaseMediator mediator;
+    private final UseCaseMediator useCaseMediator;
+    private final ObjectMapper objectMapper;
 
-    // RabbitMQ:
-    @RabbitListener(
-        queues = "inventory.product-activated",
-        containerFactory = "rabbitListenerContainerFactory"
-    )
-    // Kafka:
-    // @KafkaListener(topics = "catalog.product.activated", groupId = "inventory-group")
-    public void handle(ProductActivated event) {
+    @RabbitListener(queues = "${queues.inventory-product-activated}")
+    public void handle(Message message, Channel channel) throws IOException {
+        EventEnvelope<Map<String, Object>> event = objectMapper.readValue(
+                message.getBody(),
+                new TypeReference<EventEnvelope<Map<String, Object>>>() {});
+
+        Map<String, Object> payload = event.payload();
         CreateStockItemCommand command = new CreateStockItemCommand(
-            event.productId(),
-            event.sku(),
-            event.price()
+            (String) payload.get("productId"),
+            (String) payload.get("sku")
         );
-        mediator.send(command);
+        useCaseMediator.send(command);
+        channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
     }
 }
 ```
 
-**`ProductActivated.java`** (record de deserialización en el BC consumidor):
-```java
-// Solo con los campos que el BC consumidor necesita (subconjunto del payload)
-public record ProductActivated(
-    UUID productId,
-    String sku,
-    Money price
-) {}
-```
-
 > **El consumer sabe qué use case activar** a través de la referencia `trigger.kind: event`
 > en el use case correspondiente. El generador vincula automáticamente el consumer con
-> el handler del use case.
+> el handler del use case derivando el `command` del use case cuyo `trigger.consumes`
+> coincide con el `name` del evento consumido. No se genera un record separado para
+> deserialización: el listener usa `EventEnvelope<Map<String, Object>>` con Jackson.
 
 ---
 
@@ -668,21 +662,28 @@ detiene.
 |---|---|---|
 | **INT-001** | error | Cada evento declarado en `system.integrations[]` debe existir en `domainEvents.published[]` del BC `from`. |
 | **INT-002** | error | Cada evento declarado en `system.integrations[]` debe existir en `domainEvents.consumed[]` del BC `to`. |
-| **INT-003** | error | Una integración `pattern: customer-supplier` + `channel: http` requiere `{to}-internal-api.yaml` + entradas recíprocas en `integrations.inbound[]` (BC `to`) y `integrations.outbound[]` (BC `from`). |
+| **INT-003** | error | Una integración `pattern: customer-supplier` + `channel: http` requiere `{to}-internal-api.yaml` + entradas recíprocas en `integrations.inbound[]` (BC `to`) y `integrations.outbound[]` (BC `from`). Los nombres de operación se validan contra `{bc}.yaml#/integrations.inbound[].operations[].name`. |
 | **INT-004** | error | Una integración `pattern: acl` + `channel: http` requiere que `to` exista en `system.externalSystems[]`. |
 | **INT-005** | warn | El `channel` declarado en `domainEvents.published[]` no sigue la convención `{bc}.{kebab-event-name}`. |
 | **INT-006** | error | Cada `integrations.outbound[]` debe tener un recíproco en `system.integrations[]` (`from` = BC actual, `to` = `outbound.name`). |
 | **INT-007** | error | Cada `domainEvents.consumed[].name` debe estar declarado en `domainEvents.published[]` de algún otro BC. |
+| **INT-008** | warn/error | Operación declarada en `system.integrations[].contracts[]` (patrón ACL) no está declarada en `externalSystems[name=target].operations[]`. |
+| **INT-009** | error | Operación declarada en `bc.integrations.outbound[type=externalSystem]` no coincide con ninguna en `externalSystems[name=target].operations[].name`. |
 | **INT-010** | error | Una projection con `persistent: true` debe declarar `source.kind: event` y el evento debe estar publicado por el BC `source.from`. |
 | **INT-011** | error | Una projection persistente debe declarar `keyBy` apuntando a una propiedad existente. |
 | **INT-012** | error | Cada `step.triggeredBy` en una saga debe estar publicado por algún BC. |
 | **INT-013** | error | `saga.trigger.event` debe estar en `domainEvents.published[]` del BC `saga.trigger.bc`. |
+| **INT-014** | error | `saga.step.onSuccess` / `step.onFailure` deben estar publicados por el BC del step. `step.compensation` debe estar publicado por algún BC. |
 | **INT-015** | error | Una integración HTTP con `auth.type: oauth2-cc` debe declarar `tokenEndpoint` y `credentialKey`. |
+| **INT-016** | error | Cada mensaje referenciado en un canal del AsyncAPI debe estar declarado en `domainEvents.published[]` o `domainEvents.consumed[]` del mismo BC. |
 | **INT-017** | error | Cada `domainEvents.published[].name` debe tener una entrada en el AsyncAPI del BC (mensaje + canal). |
 | **INT-018** | warn | El `channel` en `domainEvents.published[]` no coincide con ningún canal del AsyncAPI que referencie el mensaje correspondiente. |
-| **INT-019** | warn | Drift de tipo: un campo de `published[].payload[]` existe en el AsyncAPI pero con un tipo incompatible. |
+| **INT-019** | error/warn | Campo de `published[].payload[]` ausente en el schema del AsyncAPI → **error**. Campo presente pero con tipo incompatible (drift) → **warn**. |
 | **INT-020** | error | Los campos de `consumed[].payload[]` deben ser un subconjunto de los campos del `published[].payload[]` del BC productor. |
 | **INT-021** | error | Un campo del `published[].payload[]` coincide con una propiedad `hidden: true` del agregado pero no tiene `allowHiddenLeak: true`. |
+| **INT-022** | error | Campo de `externalSystems[].operations[].request\|response.fields[]` con tipo no escalar que no está declarado en `externalSystems[].schemas`. |
+| **INT-023** | error | Campo dentro de `externalSystems[].schemas[schemaName]` con tipo que no es escalar ni referencia a otro schema del mismo sistema externo. |
+| **INT-024** | error | `auth.type` con valor desconocido. Valores válidos: `api-key`, `bearer`, `oauth2-cc`, `mTLS`, `internal-jwt`, `none`. |
 
 ---
 
@@ -840,18 +841,24 @@ El generador produce el consumer listener que extrae los campos del evento y los
 convierte en los parámetros del command:
 
 ```java
-@Component
-public class ProductActivatedConsumer {
+@Component("inventory.ProductActivatedRabbitListener")
+public class ProductActivatedRabbitListener {
 
-    private final UseCaseMediator mediator;
+    private final UseCaseMediator useCaseMediator;
+    private final ObjectMapper objectMapper;
 
-    @RabbitListener(queues = "inventory.product-activated")
-    public void handle(ProductActivated event) {
+    @RabbitListener(queues = "${queues.inventory-product-activated}")
+    public void handle(Message message, Channel channel) throws IOException {
+        EventEnvelope<Map<String, Object>> event = objectMapper.readValue(
+                message.getBody(),
+                new TypeReference<EventEnvelope<Map<String, Object>>>() {});
+
+        Map<String, Object> payload = event.payload();
         CreateStockItemCommand command = new CreateStockItemCommand(
-            event.productId(),
-            event.sku()
+            (String) payload.get("stockItemId")
         );
-        mediator.send(command);
+        useCaseMediator.send(command);
+        channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
     }
 }
 ```
