@@ -1,0 +1,48 @@
+# ─── Test scenario: auth-defaults ─────────────────────────────────────────────
+# Covers:
+#   - infrastructure.integrations.defaults.auth as third fallback level (GAP-AUTH-007)
+#   - BC→BC integration (orders → catalog) has NO auth declared at integration level
+#   - No auth override in orders.yaml outbound
+#   - defaults.auth: { type: bearer } is resolved and propagated to CatalogFeignConfig.java
+#   - Resolver picks up defaults.auth when integration-level and externalSystems-level auth are absent
+# ──────────────────────────────────────────────────────────────────────────────
+
+system:
+  name: test-auth-system
+  description: Minimal system to test auth fallback from infrastructure.integrations.defaults.
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Handles order operations, calls catalog for product validation.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+  - name: catalog
+    type: supporting
+    purpose: Provides product catalog information.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+integrations:
+  - from: orders
+    to: catalog
+    pattern: customer-supplier
+    channel: http
+    contracts:
+      - validateProduct
+    # intentionally no auth here — should fall through to defaults
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc
+  integrations:
+    defaults:
+      auth:
+        type: bearer

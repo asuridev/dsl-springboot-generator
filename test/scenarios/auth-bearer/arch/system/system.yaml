@@ -1,0 +1,48 @@
+# ─── Test scenario: auth-bearer ───────────────────────────────────────────────
+# Covers:
+#   - auth.type: bearer on externalSystem (valueProperty override)
+#   - BillingServiceRestConfig.java generates @Value + bearer interceptor
+#   - import feign.RequestInterceptor is present (bearer uses it)
+#   - import feign.Client is NOT present (bearer doesn't need it)
+#   - urls.yaml emits commented secret placeholder for the bearer token
+# ──────────────────────────────────────────────────────────────────────────────
+
+system:
+  name: test-auth-system
+  description: Minimal system to test bearer auth on an external system.
+  domainType: core
+
+boundedContexts:
+  - name: payments
+    type: core
+    purpose: Handles payment operations via billing provider.
+    aggregates:
+      - name: Payment
+        root: Payment
+        entities: []
+
+externalSystems:
+
+  - name: billing-service
+    description: External billing provider.
+    type: billing
+    auth:
+      type: bearer
+      valueProperty: integration.billing-service.token
+    operations:
+      - name: createInvoice
+        method: POST
+        path: /v1/invoices
+
+integrations:
+  - from: payments
+    to: billing-service
+    pattern: acl
+    channel: http
+    contracts:
+      - createInvoice
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

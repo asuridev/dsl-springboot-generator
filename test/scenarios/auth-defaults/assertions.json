@@ -1,0 +1,25 @@
+{
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/CatalogFeignConfig.java": {
+    "_comment": "defaults.auth=bearer: bearer interceptor must be generated, resolved from infrastructure.integrations.defaults",
+    "contains": [
+      "@Value(\"${integration.catalog.bearer-token:}\")",
+      "private String bearerToken",
+      "template.header(\"Authorization\", \"Bearer \" + bearerToken)",
+      "import feign.RequestInterceptor"
+    ],
+    "notContains": [
+      "import feign.Client",
+      "MutualTlsSupport",
+      "InternalJwtPropagator",
+      "OAuth2ClientCredentialsSupport",
+      "apiKey"
+    ]
+  },
+  "src/main/resources/parameters/local/urls.yaml": {
+    "_comment": "defaults.auth=bearer: secret placeholder must appear in urls.yaml for catalog",
+    "contains": [
+      "catalog.base-url",
+      "# integration.catalog.bearer-token:"
+    ]
+  }
+}

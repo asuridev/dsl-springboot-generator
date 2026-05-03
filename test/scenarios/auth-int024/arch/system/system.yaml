@@ -1,0 +1,45 @@
+# ─── Test scenario: auth-int024 ───────────────────────────────────────────────
+# Covers:
+#   - INT-024: unknown auth.type must produce a build-time validation error
+#   - The build must exit with non-zero code
+#   - The error output must contain "INT-024"
+# ──────────────────────────────────────────────────────────────────────────────
+
+system:
+  name: test-auth-system
+  description: Minimal system with an invalid auth.type to trigger INT-024.
+  domainType: core
+
+boundedContexts:
+  - name: payments
+    type: core
+    purpose: Handles payment operations.
+    aggregates:
+      - name: Payment
+        root: Payment
+        entities: []
+
+externalSystems:
+
+  - name: billing-service
+    description: External billing provider with an unknown auth type (typo).
+    type: billing
+    auth:
+      type: not-a-valid-type
+    operations:
+      - name: createInvoice
+        method: POST
+        path: /v1/invoices
+
+integrations:
+  - from: payments
+    to: billing-service
+    pattern: acl
+    channel: http
+    contracts:
+      - createInvoice
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

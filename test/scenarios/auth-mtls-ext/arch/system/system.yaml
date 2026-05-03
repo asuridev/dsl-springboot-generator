@@ -1,0 +1,48 @@
+# ─── Test scenario: auth-mtls-ext ─────────────────────────────────────────────
+# Covers:
+#   - auth.type: mTLS on externalSystem
+#   - InternalLedgerRestConfig.java injects MutualTlsSupport, creates feign.Client.Default
+#   - import feign.RequestInterceptor is NOT emitted (mTLS doesn't use it)
+#   - MutualTlsSupport.java is generated once in shared/
+#   - parameters/{env}/mtls.yaml is generated with integration.ssl.* properties
+#   - application-{env}.yaml imports mtls.yaml
+# ──────────────────────────────────────────────────────────────────────────────
+
+system:
+  name: test-auth-system
+  description: Minimal system to test mTLS auth on an external system.
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Handles order operations via mTLS-secured ledger API.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+externalSystems:
+
+  - name: internal-ledger
+    description: Internal ledger requiring mutual TLS authentication.
+    type: ledger
+    auth:
+      type: mTLS
+    operations:
+      - name: getBalance
+        method: GET
+        path: /v1/balance
+
+integrations:
+  - from: orders
+    to: internal-ledger
+    pattern: acl
+    channel: http
+    contracts:
+      - getBalance
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

@@ -1,0 +1,64 @@
+{
+  "src/main/java/com/test/payments/infrastructure/adapters/authService/AuthServiceRestConfig.java": {
+    "_comment": "oauth2-cc: injects OAuth2ClientCredentialsSupport, calls buildInterceptor with credentialKey",
+    "contains": [
+      "OAuth2ClientCredentialsSupport oauth2Support",
+      "oauth2Support.buildInterceptor(\"billing-provider\")",
+      "import feign.RequestInterceptor",
+      "import com.test.shared.infrastructure.auth.OAuth2ClientCredentialsSupport",
+      "derived_from: system.yaml#/externalSystems[auth-service]/auth (type: oauth2-cc)"
+    ],
+    "notContains": [
+      "import feign.Client",
+      "MutualTlsSupport",
+      "InternalJwtPropagator",
+      "@Value",
+      "bearerToken",
+      "apiKey"
+    ]
+  },
+  "src/main/java/com/test/shared/infrastructure/auth/OAuth2ClientCredentialsSupport.java": {
+    "_comment": "oauth2-cc: shared support class must be generated exactly once",
+    "contains": [
+      "class OAuth2ClientCredentialsSupport",
+      "OAuth2AuthorizedClientManager",
+      "client_credentials",
+      "buildInterceptor"
+    ]
+  },
+  "src/main/resources/parameters/local/oauth2.yaml": {
+    "_comment": "oauth2-cc: oauth2.yaml with registration block for credentialKey=billing-provider",
+    "contains": [
+      "billing-provider:",
+      "client_credentials",
+      "BILLING_PROVIDER_CLIENT_ID",
+      "BILLING_PROVIDER_CLIENT_SECRET",
+      "https://auth.billing.example.com/oauth/token"
+    ]
+  },
+  "src/main/resources/parameters/production/oauth2.yaml": {
+    "_comment": "oauth2.yaml is generated for all 4 environments",
+    "contains": [
+      "billing-provider:",
+      "BILLING_PROVIDER_CLIENT_ID"
+    ]
+  },
+  "src/main/resources/application-local.yaml": {
+    "_comment": "application-local.yaml conditionally imports oauth2.yaml",
+    "contains": [
+      "oauth2.yaml"
+    ]
+  },
+  "src/main/resources/application-production.yaml": {
+    "_comment": "application-production.yaml conditionally imports oauth2.yaml",
+    "contains": [
+      "oauth2.yaml"
+    ]
+  },
+  "build.gradle": {
+    "_comment": "oauth2-cc requires starter-oauth2-client dependency",
+    "contains": [
+      "spring-boot-starter-oauth2-client"
+    ]
+  }
+}

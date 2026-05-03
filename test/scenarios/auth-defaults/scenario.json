@@ -1,0 +1,4 @@
+{
+  "description": "auth.type: bearer inherited from infrastructure.integrations.defaults.auth (GAP-AUTH-007 fix). BC→BC integration has no auth declared — the default bearer config must be picked up and generated.",
+  "expectFailure": false
+}

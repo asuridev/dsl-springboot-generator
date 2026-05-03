@@ -1,0 +1,33 @@
+{
+  "src/main/java/com/test/payments/infrastructure/adapters/billingService/BillingServiceRestConfig.java": {
+    "_comment": "bearer auth: @Value with valueProperty override, bearer interceptor, no feign.Client import",
+    "contains": [
+      "@Value(\"${integration.billing-service.token:}\")",
+      "private String bearerToken",
+      "template.header(\"Authorization\", \"Bearer \" + bearerToken)",
+      "import feign.RequestInterceptor",
+      "derived_from: system.yaml#/externalSystems[billing-service]/auth (type: bearer)"
+    ],
+    "notContains": [
+      "import feign.Client",
+      "MutualTlsSupport",
+      "InternalJwtPropagator",
+      "OAuth2ClientCredentialsSupport",
+      "apiKey",
+      "@Value(\"${integration.billing-service.api-key"
+    ]
+  },
+  "src/main/resources/parameters/local/urls.yaml": {
+    "_comment": "bearer auth: commented secret placeholder must appear in urls.yaml",
+    "contains": [
+      "billing-service.base-url",
+      "# integration.billing-service.token:"
+    ]
+  },
+  "src/main/resources/parameters/production/urls.yaml": {
+    "_comment": "production urls.yaml also carries the secret placeholder",
+    "contains": [
+      "# integration.billing-service.token:"
+    ]
+  }
+}

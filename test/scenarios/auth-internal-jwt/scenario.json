@@ -1,0 +1,4 @@
+{
+  "description": "auth.type: internal-jwt on BC→BC customer-supplier integration. Verifies InternalJwtPropagator injection in CatalogFeignConfig, shared InternalJwtPropagator.java generated.",
+  "expectFailure": false
+}

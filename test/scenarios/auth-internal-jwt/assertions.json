@@ -1,0 +1,33 @@
+{
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/CatalogFeignConfig.java": {
+    "_comment": "internal-jwt: InternalJwtPropagator injected as RequestInterceptor, no static token",
+    "contains": [
+      "InternalJwtPropagator internalJwtPropagator",
+      "return internalJwtPropagator",
+      "import feign.RequestInterceptor",
+      "import com.test.shared.infrastructure.auth.InternalJwtPropagator",
+      "derived_from: system.yaml#/integrations[from=orders,to=catalog]/auth (type: internal-jwt)"
+    ],
+    "notContains": [
+      "import feign.Client",
+      "MutualTlsSupport",
+      "OAuth2ClientCredentialsSupport",
+      "@Value",
+      "bearerToken",
+      "apiKey"
+    ]
+  },
+  "src/main/java/com/test/shared/infrastructure/auth/InternalJwtPropagator.java": {
+    "_comment": "internal-jwt: shared InternalJwtPropagator generated once, propagates JWT from SecurityContext",
+    "contains": [
+      "class InternalJwtPropagator",
+      "implements RequestInterceptor",
+      "SecurityContextHolder",
+      "Authorization\", \"Bearer \""
+    ],
+    "notContains": [
+      "MutualTlsSupport",
+      "OAuth2ClientCredentialsSupport"
+    ]
+  }
+}

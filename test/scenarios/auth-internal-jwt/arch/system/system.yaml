@@ -1,0 +1,46 @@
+# ─── Test scenario: auth-internal-jwt ─────────────────────────────────────────
+# Covers:
+#   - auth.type: internal-jwt on system.yaml BC→BC integration (orders → catalog)
+#   - CatalogFeignConfig.java injects InternalJwtPropagator as RequestInterceptor
+#   - import feign.RequestInterceptor is present
+#   - import feign.Client is NOT present
+#   - InternalJwtPropagator.java is generated once in shared/
+#   - No @Value annotation generated (no static token)
+# ──────────────────────────────────────────────────────────────────────────────
+
+system:
+  name: test-auth-system
+  description: Minimal system to test internal-jwt auth on BC→BC integration.
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Handles order operations, calls catalog for product validation.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+  - name: catalog
+    type: supporting
+    purpose: Provides product catalog information.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+integrations:
+  - from: orders
+    to: catalog
+    pattern: customer-supplier
+    channel: http
+    contracts:
+      - validateProduct
+    auth:
+      type: internal-jwt
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

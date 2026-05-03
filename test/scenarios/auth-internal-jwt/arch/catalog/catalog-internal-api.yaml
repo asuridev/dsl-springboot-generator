@@ -1,0 +1,30 @@
+openapi: "3.0.3"
+info:
+  title: Catalog Internal API
+  version: "1.0.0"
+  description: Internal contract consumed by orders BC.
+paths:
+
+  /internal/products/validate:
+    post:
+      operationId: validateProduct
+      summary: Validate a product.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ValidateProductRequest'
+      responses:
+        '200':
+          description: Validation result.
+
+components:
+  schemas:
+
+    ValidateProductRequest:
+      type: object
+      properties:
+        productId:
+          type: string
+          format: uuid

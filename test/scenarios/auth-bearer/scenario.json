@@ -1,0 +1,4 @@
+{
+  "description": "auth.type: bearer on externalSystem. Verifies @Value bearer token interceptor, no dead RequestInterceptor import, and secret placeholder in urls.yaml.",
+  "expectFailure": false
+}

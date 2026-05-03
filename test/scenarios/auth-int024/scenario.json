@@ -1,0 +1,5 @@
+{
+  "description": "INT-024: unknown auth.type on externalSystem must produce a validation error and abort the build.",
+  "expectFailure": true,
+  "expectedErrorPattern": "INT-024"
+}

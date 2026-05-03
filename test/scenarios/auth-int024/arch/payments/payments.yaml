@@ -1,0 +1,22 @@
+bc: payments
+version: "1.0.0"
+
+aggregates:
+  - name: Payment
+    root: Payment
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: status
+        type: String(50)
+
+integrations:
+  outbound:
+    - name: billing-service
+      type: externalSystem
+      protocol: http
+      operations:
+        - name: createInvoice

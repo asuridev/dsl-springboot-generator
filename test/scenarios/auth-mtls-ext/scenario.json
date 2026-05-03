@@ -1,0 +1,4 @@
+{
+  "description": "auth.type: mTLS on externalSystem. Verifies MutualTlsSupport injection, feign.Client.Default bean, NO RequestInterceptor import, mtls.yaml generated, application-*.yaml imports mtls.yaml.",
+  "expectFailure": false
+}

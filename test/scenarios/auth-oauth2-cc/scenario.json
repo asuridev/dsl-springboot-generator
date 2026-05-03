@@ -1,0 +1,4 @@
+{
+  "description": "auth.type: oauth2-cc on externalSystem. Verifies OAuth2ClientCredentialsSupport injection, oauth2.yaml generated, application-*.yaml imports oauth2.yaml, starter-oauth2-client in build.gradle.",
+  "expectFailure": false
+}

@@ -1,0 +1,61 @@
+{
+  "src/main/java/com/test/orders/infrastructure/adapters/internalLedger/InternalLedgerRestConfig.java": {
+    "_comment": "mTLS: MutualTlsSupport injected, feign.Client.Default created, NO RequestInterceptor",
+    "contains": [
+      "MutualTlsSupport mutualTlsSupport",
+      "new Client.Default(mutualTlsSupport.buildSSLSocketFactory(), null)",
+      "import feign.Client",
+      "import com.test.shared.infrastructure.auth.MutualTlsSupport",
+      "derived_from: system.yaml#/externalSystems[internal-ledger]/auth (type: mTLS)"
+    ],
+    "notContains": [
+      "import feign.RequestInterceptor",
+      "InternalJwtPropagator",
+      "OAuth2ClientCredentialsSupport",
+      "@Value",
+      "bearerToken",
+      "apiKey"
+    ]
+  },
+  "src/main/java/com/test/shared/infrastructure/auth/MutualTlsSupport.java": {
+    "_comment": "mTLS: shared MutualTlsSupport generated once, reads keystore/truststore from properties",
+    "contains": [
+      "class MutualTlsSupport",
+      "SSLSocketFactory",
+      "integration.ssl.keystore-path",
+      "integration.ssl.keystore-password",
+      "integration.ssl.truststore-path",
+      "buildSSLSocketFactory"
+    ]
+  },
+  "src/main/resources/parameters/local/mtls.yaml": {
+    "_comment": "mTLS: mtls.yaml with ssl properties (local env has defaults)",
+    "contains": [
+      "integration:",
+      "ssl:",
+      "keystore-path",
+      "keystore-password",
+      "truststore-path"
+    ]
+  },
+  "src/main/resources/parameters/production/mtls.yaml": {
+    "_comment": "mTLS: production mtls.yaml uses env vars without defaults",
+    "contains": [
+      "SSL_KEYSTORE_PATH",
+      "SSL_KEYSTORE_PASSWORD",
+      "SSL_TRUSTSTORE_PATH"
+    ]
+  },
+  "src/main/resources/application-local.yaml": {
+    "_comment": "application-local.yaml conditionally imports mtls.yaml",
+    "contains": [
+      "mtls.yaml"
+    ]
+  },
+  "src/main/resources/application-production.yaml": {
+    "_comment": "application-production.yaml conditionally imports mtls.yaml",
+    "contains": [
+      "mtls.yaml"
+    ]
+  }
+}
