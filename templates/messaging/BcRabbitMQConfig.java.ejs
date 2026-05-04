@@ -1,9 +1,11 @@
 package <%= packageName %>.<%= moduleName %>.infrastructure.adapters.rabbitmqMessageBroker;
 
+<% if (consumersByProducer.length > 0) { %>
 import org.springframework.amqp.core.Binding;
 import org.springframework.amqp.core.BindingBuilder;
 import org.springframework.amqp.core.Queue;
 import org.springframework.amqp.core.QueueBuilder;
+<% } %>
 import org.springframework.amqp.core.TopicExchange;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -36,48 +38,9 @@ public class <%= modulePascalCase %>RabbitMQConfig {
     public TopicExchange <%= moduleCamelCase %>DlxExchange() {
         return new TopicExchange(<%= moduleCamelCase %>ExchangeName + ".dlx", true, false);
     }
+    // Consumers declare their own queues bound to this exchange — the publisher BC
+    // does not declare queues for its own events. See consumersByProducer section below.
 
-<% for (const event of publishedEvents) { %>
-    // ─── <%= event.name %> ────────────────────────────────────────────────────────────
-
-    @Value("${queues.<%= event.queueKey %>}")
-    private String <%= event.fieldName %>QueueName;
-
-    @Value("${routing-keys.<%= event.queueKey %>}")
-    private String <%= event.fieldName %>RoutingKey;
-
-    @Bean
-    public Queue <%= event.fieldName %>Queue() {
-        return QueueBuilder.durable(<%= event.fieldName %>QueueName)
-                .withArgument("x-dead-letter-exchange", <%= moduleCamelCase %>ExchangeName + ".dlx")
-<% if (event.dlqTarget) { %>                .withArgument("x-dead-letter-routing-key", "<%= event.dlqTarget %>")
-<% } %><% if (event.deliveryLimit) { %>                .withArgument("x-delivery-limit", <%= event.deliveryLimit %>)
-<% } %><% if (event.messageTtlMs) { %>                .withArgument("x-message-ttl", <%= event.messageTtlMs %>)
-<% } %>                .build();
-    }
-
-    @Bean
-    public Binding <%= event.fieldName %>Binding() {
-        return BindingBuilder
-                .bind(<%= event.fieldName %>Queue())
-                .to(<%= moduleCamelCase %>Exchange())
-                .with(<%= event.fieldName %>RoutingKey);
-    }
-
-    @Bean
-    public Queue <%= event.fieldName %>Dlq() {
-        return QueueBuilder.durable(<% if (event.dlqTarget) { %>"<%= event.dlqTarget %>"<% } else { %><%= event.fieldName %>QueueName + ".dlq"<% } %>).build();
-    }
-
-    @Bean
-    public Binding <%= event.fieldName %>DlqBinding() {
-        return BindingBuilder
-                .bind(<%= event.fieldName %>Dlq())
-                .to(<%= moduleCamelCase %>DlxExchange())
-                .with(<% if (event.dlqTarget) { %>"<%= event.dlqTarget %>"<% } else { %><%= event.fieldName %>RoutingKey<% } %>);
-    }
-
-<% } %>
 <% } %>
 <% for (const producerEntry of consumersByProducer) { %>
     // ─── Consumer: events from <%= producerEntry.producerBc %> ──────────────────────────────────────
@@ -110,7 +73,7 @@ public class <%= modulePascalCase %>RabbitMQConfig {
     public Queue <%= event.fieldName %>Queue() {
         return QueueBuilder.durable(<%= event.fieldName %>QueueName)
                 .withArgument("x-dead-letter-exchange", <%= moduleCamelCase %>_<%= producerEntry.producerCamel %>ExchangeName + ".dlx")
-<% if (event.dlqTarget) { %>                .withArgument("x-dead-letter-routing-key", "<%= event.dlqTarget %>")
+<% if (event.dlqRoutingKey) { %>                .withArgument("x-dead-letter-routing-key", "<%= event.dlqRoutingKey %>")
 <% } %><% if (event.deliveryLimit) { %>                .withArgument("x-delivery-limit", <%= event.deliveryLimit %>)
 <% } %><% if (event.messageTtlMs) { %>                .withArgument("x-message-ttl", <%= event.messageTtlMs %>)
 <% } %>                .build();
@@ -126,7 +89,7 @@ public class <%= modulePascalCase %>RabbitMQConfig {
 
     @Bean
     public Queue <%= event.fieldName %>Dlq() {
-        return QueueBuilder.durable(<% if (event.dlqTarget) { %>"<%= event.dlqTarget %>"<% } else { %><%= event.fieldName %>QueueName + ".dlq"<% } %>).build();
+        return QueueBuilder.durable(<% if (event.dlqQueueName) { %>"<%= event.dlqQueueName %>"<% } else { %><%= event.fieldName %>QueueName + ".dlq"<% } %>).build();
     }
 
     @Bean
@@ -134,7 +97,7 @@ public class <%= modulePascalCase %>RabbitMQConfig {
         return BindingBuilder
                 .bind(<%= event.fieldName %>Dlq())
                 .to(<%= moduleCamelCase %>_<%= producerEntry.producerCamel %>DlxExchange())
-                .with(<% if (event.dlqTarget) { %>"<%= event.dlqTarget %>"<% } else { %><%= event.fieldName %>RoutingKey<% } %>);
+                .with(<% if (event.dlqRoutingKey) { %>"<%= event.dlqRoutingKey %>"<% } else { %><%= event.fieldName %>RoutingKey<% } %>);
     }
 
 <% } %>

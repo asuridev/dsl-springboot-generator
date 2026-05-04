@@ -1179,7 +1179,7 @@ function validate(doc, opts = {}) {
   const ALLOWED_BROKER_KEYS = new Set(['partitionKey', 'headers', 'retry', 'dlq']);
   const ALLOWED_RETRY_KEYS = new Set(['maxAttempts', 'backoff', 'initialMs', 'maxMs']);
   const ALLOWED_BACKOFF = new Set(['fixed', 'exponential']);
-  const ALLOWED_DLQ_KEYS = new Set(['afterAttempts', 'target']);
+  const ALLOWED_DLQ_KEYS = new Set(['afterAttempts', 'routingKey', 'queueName']);
 
   function validateRetry(retry, ctx) {
     if (retry == null) return;
@@ -1218,8 +1218,11 @@ function validate(doc, opts = {}) {
     if (dlq.afterAttempts != null && (!Number.isInteger(dlq.afterAttempts) || dlq.afterAttempts < 1)) {
       fail(`${ctx} "dlq.afterAttempts" must be a positive integer.`);
     }
-    if (dlq.target != null && typeof dlq.target !== 'string') {
-      fail(`${ctx} "dlq.target" must be a string (queue/topic name).`);
+    if (dlq.routingKey != null && typeof dlq.routingKey !== 'string') {
+      fail(`${ctx} "dlq.routingKey" must be a string (routing key used by the DLX to route rejected messages).`);
+    }
+    if (dlq.queueName != null && typeof dlq.queueName !== 'string') {
+      fail(`${ctx} "dlq.queueName" must be a string (physical DLQ name; defaults to dlq.routingKey if omitted).`);
     }
   }
 

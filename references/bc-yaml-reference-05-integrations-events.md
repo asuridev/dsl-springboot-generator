@@ -15,6 +15,10 @@
    - 2.5 [EventMetadata canónico](#25-eventmetadata-canónico)
 3. [Sección `eventDtos`](#3-sección-eventdtos)
 4. [Ejemplos completos](#4-ejemplos-completos)
+5. [Artefactos de infraestructura RabbitMQ generados](#5-artefactos-de-infraestructura-rabbitmq-generados)
+   - 5.1 [`parameters/{env}/rabbitmq.yaml`](#51-parametersenvrabbitmsqyaml)
+   - 5.2 [`RabbitMQConfig.java` — beans compartidos](#52-rabbitmqconfigjava--beans-compartidos)
+   - 5.3 [`{BcPascal}RabbitMQConfig.java` — topología por BC](#53-bcpascalrabbitmqconfigjava--topología-por-bc)
 
 ---
 
@@ -707,7 +711,7 @@ payload:
 | Un solo campo por evento | Si más de un campo tiene `partitionKey: true`, el generador emite `GEN-ERROR`. |
 | Tipos válidos | `Uuid`, `String`, `Integer`, `Long`. Otros tipos producen `GEN-WARN`. |
 | Solo Kafka | Si el broker seleccionado en build es RabbitMQ, `partitionKey: true` se ignora silenciosamente. |
-| DLQ por convención | El nombre del DLQ se deriva como `{channel}.dlq`. No hay campo `dlq.target` ni bloque `broker.dlq` en `published[]`. |
+| DLQ por convención | Si no se declara `broker.dlq`, el nombre de la DLQ se deriva como `${queues.{queueKey}}.dlq` y el routing-key del DLX se usa como routing-key de la DLQ. |
 | Retry de publicación | Configurado en los archivos de entorno — no en el YAML del BC. |
 
 > ⚠️ Si un `{bc}.yaml` contiene un bloque `broker:` en `published[]`, el generador emite `GEN-ERROR: schema obsoleto — el bloque broker ya no existe; usar partitionKey: true en el campo del payload`.
@@ -1502,3 +1506,360 @@ El nombre del canal sigue la convención:
 
 La validación INT-005 emite un `warn` si el `channel` declarado en el YAML no sigue
 esta convención; la build no se detiene pero el humano debe corregirlo.
+
+---
+
+## 5. Artefactos de infraestructura RabbitMQ generados
+
+Cuando el build se ejecuta con `broker: rabbitmq` (declarado en `system.yaml`), el generador
+produce tres tipos de artefactos de configuración. Ninguno requiere declaración adicional en el
+`{bc}.yaml` — se derivan completamente de `domainEvents.published[]` y `domainEvents.consumed[]`.
+
+---
+
+### 5.1 `parameters/{env}/rabbitmq.yaml`
+
+**Ubicación:** `src/main/resources/parameters/{env}/rabbitmq.yaml`  
+**Entornos:** `local`, `develop`, `test`, `production`  
+**Importado desde:** `application-{env}.yaml` vía `spring.config.import`
+
+Cada archivo contiene dos partes: la **conexión al broker** y la **topología** (exchanges, queues, routing-keys) derivada de todos los BCs del sistema.
+
+#### Sección `spring.rabbitmq` — conexión y listener
+
+Las propiedades de conexión varían por entorno: `local` y `test` usan valores literales; `develop` y `production` usan variables de entorno.
+
+| Propiedad | `local` / `test` | `develop` | `production` |
+|---|---|---|---|
+| `host` | `localhost` | `${RABBITMQ_HOST:localhost}` | `${RABBITMQ_HOST}` (sin default) |
+| `port` | `5672` | `${RABBITMQ_PORT:5672}` | `${RABBITMQ_PORT:5672}` |
+| `username` | `guest` | `${RABBITMQ_USERNAME:guest}` | `${RABBITMQ_USERNAME}` (sin default) |
+| `password` | `guest` | `${RABBITMQ_PASSWORD:guest}` | `${RABBITMQ_PASSWORD}` (sin default) |
+| `virtual-host` | `/` | `${RABBITMQ_VHOST:/}` | `${RABBITMQ_VHOST:/}` |
+| `publisher-confirm-type` | `correlated` | `correlated` | `correlated` |
+| `publisher-returns` | `true` | `true` | `true` |
+
+**`publisher-confirm-type: correlated`** — habilita las confirmaciones broker→productor (`ConfirmCallback`). El `RabbitTemplate` loguea error cuando `ack = false`.
+
+**`publisher-returns: true`** — habilita el `ReturnsCallback` para mensajes no enrutables (ninguna queue recibió el mensaje).
+
+#### Sección `listener.simple` — consumidor
+
+| Propiedad | `local` / `develop` | `test` | `production` |
+|---|---|---|---|
+| `acknowledge-mode` | `manual` | `manual` | `manual` |
+| `concurrency` | `3` | `1` | `5` |
+| `max-concurrency` | — | — | `20` |
+| `prefetch` | `5` | `1` | `10` |
+
+- **`acknowledge-mode: manual`** — el listener llama explícitamente a `channel.basicAck()` / `channel.basicNack()`. Coordinado con `AcknowledgeMode.MANUAL` en `SimpleRabbitListenerContainerFactory`.
+- **`concurrency`** — número de threads consumidores por listener container.
+- **`max-concurrency`** — techo de escalado dinámico del container (solo `production`).
+- **`prefetch`** — máximo de mensajes en vuelo por consumer antes de esperar ack.
+
+#### Sección `listener.simple.retry` — backoff exponencial
+
+| Propiedad | `local` / `develop` | `test` | `production` |
+|---|---|---|---|
+| `enabled` | `true` | `true` | `true` |
+| `max-attempts` | `3` | `2` | `5` |
+| `initial-interval` (ms) | `1500` | `500` | `2000` |
+| `multiplier` | `2.0` | `1.0` | `2.0` |
+| `max-interval` (ms) | `30000` | `1000` | `30000` |
+| `stateless` | `true` | `true` | `true` |
+
+Estos valores son consumidos directamente por `@Value` en `RabbitMQConfig.java` y pasados al `RetryInterceptorBuilder`. Cuando `max-attempts` se agota, el interceptor lanza `AmqpRejectAndDontRequeueException` → el broker mueve el mensaje a la DLQ.
+
+#### Propiedades adicionales solo en `production`
+
+| Propiedad | Valor | Rol |
+|---|---|---|
+| `connection-timeout` | `5000` ms | Tiempo máximo de espera para establecer conexión TCP con el broker. |
+| `requested-heartbeat` | `60` s | Intervalo de heartbeat AMQP para detectar conexiones caídas. |
+| `cache.channel.size` | `25` | Tamaño del pool de canales AMQP reutilizables por conexión. |
+| `ssl.enabled` | `${RABBITMQ_SSL_ENABLED:false}` | Habilita TLS en el socket AMQP. |
+| `template.mandatory` | `true` | Fuerza `ReturnsCallback` en `RabbitTemplate`; equivalente a `setMandatory(true)`. |
+
+#### Sección `exchanges` / `queues` / `routing-keys` — topología
+
+El generador calcula la topología leyendo los `domainEvents` de **todos** los BCs del sistema
+y la escribe al final del mismo archivo, en las tres secciones de nivel raíz. Cada valor es
+leído en runtime vía `@Value` — ningún nombre está hardcodeado en el código Java.
+
+**Reglas de derivación** (implementadas en `buildRabbitMQTopology` de `messaging-generator.js`):
+
+| Sección | Clave | Valor | Fuente |
+|---|---|---|---|
+| `exchanges` | `{bcName}` | `{bcName}.events` | Un exchange por BC que publica con `scope != internal` |
+| `exchanges` (consumidor) | `{producerBc}` | `{producerBc}.events` | Derivado del primer segmento del `channel` del evento consumido |
+| `queues` (publicado) | `{event-kebab}` | `{bcName}.{event-kebab}` | Un entry por evento publicado externo |
+| `queues` (consumido) | `{consumerBc}-{event-kebab}` | `{consumerBc}.{event-kebab}` | O el `queueKey` declarado en el YAML si existe |
+| `queues` (projection persistente) | `{bc}-projection-{proj-kebab}-{event-kebab}` | `{bc}.{key}` | Por cada `projection.persistent: true` |
+| `routing-keys` (publicado) | misma clave que la queue | `{event.dot.case}` o el `channel` declarado | `channel` tiene precedencia sobre el nombre derivado |
+| `routing-keys` (consumido) | misma clave que la queue | `{event.dot.case}` o el `channel` declarado | Ídem |
+
+**Ejemplo** para un sistema con BC `orders` publicando `OrderPlaced` y BC `inventory` consumiéndolo:
+
+```yaml
+# src/main/resources/parameters/local/rabbitmq.yaml
+spring:
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    virtual-host: /
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        acknowledge-mode: manual
+        concurrency: 3
+        prefetch: 5
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1500
+          multiplier: 2.0
+          max-interval: 30000
+          stateless: true
+
+exchanges:
+  orders: orders.events       # BC orders publica
+  inventory: inventory.events # BC inventory también publica (si aplica)
+
+queues:
+  inventory-order-placed: inventory.order-placed  # consumer queue (clave = {consumer}-{event-kebab})
+
+routing-keys:
+  order-placed: order.placed              # canal declarado o event-name kebab→dot (clave = event-kebab)
+  inventory-order-placed: order.placed    # el consumidor usa la misma routing-key del producer
+```
+
+> **Responsabilidad de las queues:** el BC **publicador** no declara queues para sus propios eventos — solo declara el exchange. Son los BCs **consumidores** quienes declaran sus propias queues y las enlazan al exchange del productor. Esto evita queues huérfanas sin consumer.
+
+---
+
+### 5.2 `RabbitMQConfig.java` — beans compartidos
+
+**Ubicación:** `src/main/java/{package}/shared/infrastructure/configurations/rabbitmqConfig/RabbitMQConfig.java`
+
+Un único archivo por servicio (no por BC). Provee los beans de infraestructura que todos los BC comparten.
+
+```java
+@Configuration
+@EnableRabbit
+public class RabbitMQConfig {
+
+    // Valores leídos de spring.rabbitmq.listener.simple.retry.* en rabbitmq.yaml
+    @Value("${spring.rabbitmq.listener.simple.retry.max-attempts:3}")
+    private int maxAttempts;
+
+    @Value("${spring.rabbitmq.listener.simple.retry.initial-interval:1500}")
+    private long initialInterval;
+
+    @Value("${spring.rabbitmq.listener.simple.retry.multiplier:2.0}")
+    private double multiplier;
+
+    @Value("${spring.rabbitmq.listener.simple.retry.max-interval:30000}")
+    private long maxInterval;
+    ...
+}
+```
+
+| Bean | Tipo | Rol |
+|---|---|---|
+| `jsonMessageConverter` | `Jackson2JsonMessageConverter` | Serialización/deserialización JSON de todos los mensajes AMQP. Recibe el `ObjectMapper` del contexto (con los módulos de la aplicación). |
+| `rabbitAdmin` | `RabbitAdmin` | Declara la topología (exchanges, queues, bindings) contra el broker al arrancar la aplicación. |
+| `rabbitInitializer` | `ApplicationRunner` | Llama `rabbitAdmin.initialize()` en el startup para forzar la declaración anticipada de la topología antes de que los listeners comiencen a consumir. |
+| `rabbitTemplate` | `RabbitTemplate` | Cliente de publicación. Configurado con `mandatory = true` + `ConfirmCallback` (loguea si el broker rechaza el mensaje) + `ReturnsCallback` (loguea si el mensaje no puede ser enrutado a ninguna queue). |
+| `rabbitListenerContainerFactory` | `SimpleRabbitListenerContainerFactory` | Factory que aplica a todos los `@RabbitListener`. Configura: `AcknowledgeMode.MANUAL`, `defaultRequeueRejected = false` y el `RetryOperationsInterceptor` con backoff exponencial usando los valores de `@Value`. |
+
+**Lógica del `RetryOperationsInterceptor`:**
+
+```java
+RetryOperationsInterceptor retryInterceptor = RetryInterceptorBuilder.stateless()
+    .maxAttempts(maxAttempts)                           // spring.rabbitmq.listener.simple.retry.max-attempts
+    .backOffOptions(initialInterval, multiplier, maxInterval)  // initial-interval, multiplier, max-interval
+    .recoverer((message, cause) -> {
+        // Se ejecuta cuando maxAttempts se agota:
+        log.error("Message sent to DLQ after retry exhausted. queue={}, error={}", ...);
+        throw new AmqpRejectAndDontRequeueException("Retry exhausted", cause);
+        // ↑ basicNack con requeue=false → el broker mueve el mensaje a la DLQ
+    })
+    .build();
+```
+
+> El interceptor gestiona **reintentos en memoria** (dentro del mismo proceso). El mensaje
+> no vuelve al broker entre reintentos — es backoff local. Solo cuando `maxAttempts` se agota
+> el mensaje se rechaza y el broker lo mueve a la DLQ (`x-dead-letter-exchange`).
+
+---
+
+### 5.3 `{BcPascal}RabbitMQConfig.java` — topología por BC
+
+**Ubicación:** `src/main/java/{package}/{bcName}/infrastructure/adapters/rabbitmqMessageBroker/{BcPascal}RabbitMQConfig.java`
+
+Uno por BC con eventos. Lee todos los nombres via `@Value` — ningún string de exchange, queue
+ni routing-key está hardcodeado. `RabbitAdmin` (del bean compartido) lo detecta al arrancar
+y declara la topología contra el broker.
+
+#### Beans generados por cada evento publicado (con `scope != internal`)
+
+El BC publicador solo declara el exchange y su DLX. **No declara queues para sus propios eventos** — los BCs consumidores declaran sus propias queues enlazadas a este exchange. Esto evita queues huérfanas (sin consumer) que acumularían mensajes indefinidamente en el broker.
+
+| Bean | Tipo | Nombre / referencia | Rol |
+|---|---|---|---|
+| `{bcCamel}Exchange` | `TopicExchange` | `${exchanges.{bcName}}` | Exchange principal del BC publicador. `durable = true`, `autoDelete = false`. |
+| `{bcCamel}DlxExchange` | `TopicExchange` | `${exchanges.{bcName}}` + `.dlx` | Dead-Letter Exchange. Recibe los mensajes rechazados después de agotar reintentos. |
+
+**Argumentos de queue generados condicionalmente** (solo aplican al lado consumidor — ver sección siguiente):
+
+| Argumento AMQP | Cuándo se genera | Fuente en el YAML |
+|---|---|---|
+| `x-dead-letter-exchange` | **Siempre** en toda queue del consumidor | Hardcoded: `${exchanges.{producerBc}}.dlx` |
+| `x-dead-letter-routing-key` | Solo si `broker.dlq.routingKey` está declarado en el evento **publicado** | `published[].broker.dlq.routingKey` |
+| `x-delivery-limit` | Nunca generado (requiere quorum queue — configurar en el broker directamente) | — |
+| `x-message-ttl` | Nunca generado (independiente del retry Spring — configurar en el broker directamente) | — |
+
+> **Nota sobre `broker.dlq` en el publicador:** `dlq.routingKey` y `dlq.queueName` se declaran en el evento **publicado** del BC origen, no en el `consumed[]` del BC consumidor. El generador los propaga al `BcRabbitMQConfig` del BC consumidor cuando declara la queue. El BC publicador no crea queues — por tanto, aunque declare `broker.dlq.*`, solo afecta a las queues del lado consumidor.
+
+> Los campos `retry` y `dlq` en `consumed[]` son ignorados por el generador (`GEN-WARN`).
+
+#### Beans generados por cada evento consumido (agrupados por BC productor)
+
+Por cada BC productor distinto que aparece en `consumed[]` (derivado del primer segmento del `channel`):
+
+| Bean | Tipo | Nombre calificado (Spring) | Rol |
+|---|---|---|---|
+| `{bcCamel}_{producerCamel}Exchange` | `TopicExchange` | `"${bcCamel}_${producerCamel}Exchange"` | Exchange del BC productor. Bean name prefijado con el BC consumidor para evitar colisiones cuando múltiples BCs consumen del mismo productor. |
+| `{bcCamel}_{producerCamel}DlxExchange` | `TopicExchange` | `"${bcCamel}_${producerCamel}DlxExchange"` | DLX del exchange del productor (visto desde este BC consumidor). |
+
+Por cada evento consumido del productor:
+
+| Bean | Tipo | Rol |
+|---|---|---|
+| `{eventCamel}Queue` | `Queue` | Queue durable del consumidor para este evento. `x-dead-letter-exchange` apunta al DLX del productor. |
+| `{eventCamel}Binding` | `Binding` | Enlaza la queue al exchange del productor con la routing-key del evento. |
+| `{eventCamel}Dlq` | `Queue` | DLQ del consumidor para este evento (`{queue}.dlq`). |
+| `{eventCamel}DlqBinding` | `Binding` | Enlaza la DLQ al DLX del productor. |
+
+**Ejemplo completo** — BC `inventory` que publica `StockReserved` y consume `OrderPlaced` del BC `orders`:
+
+```java
+// src/main/java/com/example/inventory/infrastructure/adapters/
+//     rabbitmqMessageBroker/InventoryRabbitMQConfig.java
+
+@Configuration
+public class InventoryRabbitMQConfig {
+
+    // ─── Publisher exchange for inventory ─────────────────────────────────────
+
+    @Value("${exchanges.inventory}")
+    private String inventoryExchangeName;           // valor: "inventory.events"
+
+    @Bean
+    public TopicExchange inventoryExchange() {
+        return new TopicExchange(inventoryExchangeName, true, false);
+    }
+
+    @Bean
+    public TopicExchange inventoryDlxExchange() {
+        return new TopicExchange(inventoryExchangeName + ".dlx", true, false);
+    }
+    // Los BCs consumidores declaran sus propias queues enlazadas a este exchange.
+    // El BC publicador no declara queues para sus propios eventos.
+
+    // ─── Consumer: events from orders ─────────────────────────────────────────
+    // Bean names prefixed with owning BC to avoid collisions when multiple BCs
+    // consume from the same producer exchange.
+
+    @Value("${exchanges.orders}")
+    private String inventory_ordersExchangeName;    // valor: "orders.events"
+
+    @Bean("inventory_ordersExchange")
+    public TopicExchange inventory_ordersExchange() {
+        return new TopicExchange(inventory_ordersExchangeName, true, false);
+    }
+
+    @Bean("inventory_ordersDlxExchange")
+    public TopicExchange inventory_ordersDlxExchange() {
+        return new TopicExchange(inventory_ordersExchangeName + ".dlx", true, false);
+    }
+
+    // ─── OrderPlaced (evento consumido de orders) ─────────────────────────────
+
+    @Value("${queues.inventory-order-placed}")
+    private String inventoryOrderPlacedQueueName;   // valor: "inventory.order-placed"
+
+    @Value("${routing-keys.inventory-order-placed}")
+    private String inventoryOrderPlacedRoutingKey;  // valor: "order.placed"
+
+    @Bean
+    public Queue inventoryOrderPlacedQueue() {
+        return QueueBuilder.durable(inventoryOrderPlacedQueueName)
+                .withArgument("x-dead-letter-exchange", inventory_ordersExchangeName + ".dlx")
+                .build();
+    }
+
+    @Bean
+    public Binding inventoryOrderPlacedBinding() {
+        return BindingBuilder
+                .bind(inventoryOrderPlacedQueue())
+                .to(inventory_ordersExchange())
+                .with(inventoryOrderPlacedRoutingKey);
+    }
+
+    @Bean
+    public Queue inventoryOrderPlacedDlq() {
+        return QueueBuilder.durable(inventoryOrderPlacedQueueName + ".dlq").build();
+    }
+
+    @Bean
+    public Binding inventoryOrderPlacedDlqBinding() {
+        return BindingBuilder
+                .bind(inventoryOrderPlacedDlq())
+                .to(inventory_ordersDlxExchange())
+                .with(inventoryOrderPlacedRoutingKey);
+    }
+}
+```
+
+#### Convención de nombres de beans
+
+| Elemento | Patrón del nombre del bean | Ejemplo |
+|---|---|---|
+| Exchange propio (publicador) | `{bcCamel}Exchange` | `inventoryExchange` |
+| DLX propio (publicador) | `{bcCamel}DlxExchange` | `inventoryDlxExchange` |
+| Exchange del productor (consumidor) | `"{bcCamel}_{producerCamel}Exchange"` | `"inventory_ordersExchange"` |
+| DLX del productor (consumidor) | `"{bcCamel}_{producerCamel}DlxExchange"` | `"inventory_ordersDlxExchange"` |
+| Queue (consumido) | `{fieldName}Queue` (`fieldName = camelCase(queueKey)`) | `inventoryOrderPlacedQueue` |
+| DLQ (consumido) | `{fieldName}Dlq` | `inventoryOrderPlacedDlq` |
+| Binding (consumido) | `{fieldName}Binding` | `inventoryOrderPlacedBinding` |
+| Binding DLQ (consumido) | `{fieldName}DlqBinding` | `inventoryOrderPlacedDlqBinding` |
+
+> El prefijo `{bcCamel}_` en los beans del productor evita colisiones en el contexto Spring
+> cuando dos BCs (desplegados en el mismo servicio) consumen del mismo exchange productor.
+
+#### Bloque `broker.dlq` en `published[]` — campos `routingKey` y `queueName`
+
+Opcional. Solo aplica cuando el BC publicador necesita controlar el enrutamiento del DLX de sus consumidores.
+
+```yaml
+domainEvents:
+  published:
+    - name: OrderPlaced
+      scope: integration
+      channel: orders.order.placed
+      broker:
+        dlq:
+          routingKey: orders.order.placed.dead    # x-dead-letter-routing-key en la queue del consumidor
+          queueName: orders-placed-poison         # nombre físico de la DLQ (opcional; default = routingKey)
+```
+
+| Campo | Rol | Generado en |
+|---|---|---|
+| `broker.dlq.routingKey` | Valor de `x-dead-letter-routing-key` en la queue principal y routing-key del `DlqBinding` | `{ConsumerBc}RabbitMQConfig.java` |
+| `broker.dlq.queueName` | Nombre físico de la DLQ declarada. Si se omite, defaultea a `dlq.routingKey`. Si ambos se omiten, se usa `{queueName}.dlq` por convención. | `{ConsumerBc}RabbitMQConfig.java` |
+
+> `dlq.routingKey ≠ dlq.queueName` es el caso avanzado: permite que el DLX enrute con una routing-key específica a una queue con un nombre independiente (por ejemplo, una queue de archivo compartida por varios eventos).

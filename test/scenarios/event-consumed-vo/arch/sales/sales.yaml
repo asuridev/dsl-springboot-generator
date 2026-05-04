@@ -39,6 +39,10 @@ domainEvents:
     - name: OrderPlaced
       scope: integration
       channel: sales.order.placed
+      broker:
+        dlq:
+          routingKey: sales.order.placed.dead
+          queueName: sales-order-placed-poison
       payload:
         - name: orderId
           type: Uuid

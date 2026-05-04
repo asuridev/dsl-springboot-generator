@@ -449,14 +449,19 @@ async function generateBcRabbitMQConfig(
     name:           ctx.name,
     queueKey:       ctx.topicNameKebab,
     fieldName:      ctx.topicNameCamel,
-    // Phase 4.3 — queue arguments derived from broker.retry / broker.dlq
-    deliveryLimit:  ctx.retry && ctx.retry.maxAttempts ? ctx.retry.maxAttempts : null,
-    messageTtlMs:   ctx.retry && ctx.retry.initialMs   ? ctx.retry.initialMs   : null,
-    dlqTarget:      ctx.dlq   && ctx.dlq.target        ? ctx.dlq.target        : null,
+    // broker.retry.* drives Spring-level RetryOperationsInterceptor (in-memory, pre-DLQ).
+    // x-delivery-limit and x-message-ttl are broker-level queue arguments (quorum queues only)
+    // and must NOT be derived from Spring retry config — they are independent mechanisms.
+    // dlq.routingKey  → x-dead-letter-routing-key arg + DlqBinding routing key
+    // dlq.queueName   → physical DLQ name (defaults to dlq.routingKey when omitted)
+    deliveryLimit:   null,
+    messageTtlMs:    null,
+    dlqRoutingKey:   ctx.dlq?.routingKey ?? null,
+    dlqQueueName:    ctx.dlq?.queueName  ?? ctx.dlq?.routingKey ?? null,
   }));
 
   // Group consumed events by producer BC
-  const producerMap = new Map(); // producerBc → [{name, queueKey, fieldName, deliveryLimit, messageTtlMs, dlqTarget}]
+  const producerMap = new Map(); // producerBc → [{name, queueKey, fieldName, deliveryLimit, messageTtlMs, dlqRoutingKey, dlqQueueName}]
   for (const ev of resolvedConsumedEvents) {
     const producerBc = producerBcFromChannel(ev.channel) || ev.producer || 'unknown';
     if (!producerMap.has(producerBc)) producerMap.set(producerBc, []);
@@ -467,9 +472,10 @@ async function generateBcRabbitMQConfig(
       name: ev.name,
       queueKey,
       fieldName,
-      deliveryLimit: null,
-      messageTtlMs:  null,
-      dlqTarget:     null,
+      deliveryLimit:  null,
+      messageTtlMs:   null,
+      dlqRoutingKey:  null,
+      dlqQueueName:   null,
     });
   }
 
@@ -863,8 +869,11 @@ function buildRabbitMQTopology(allBcYamls) {
         // gap #1: when published[].channel is declared in the YAML, it takes
         // precedence over the derived kebab→dot fallback.
         const routingKey = event.channel || dotCase;
-        queueMap.set(eventKebab,  `${bcName}.${eventKebab}`);
-        rkMap.set(eventKebab,     routingKey);
+        // Publisher BC does not declare a queue for its own events.
+        // Each consumer BC declares its own queue (e.g. {consumerBc}-{event-kebab})
+        // bound to this exchange — see consumed[] loop below.
+        // Only the routing-key needs to be registered so consumers can bind correctly.
+        rkMap.set(eventKebab, routingKey);
       }
     }
 

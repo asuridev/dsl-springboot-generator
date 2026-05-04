@@ -381,7 +381,10 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
       await renderAndWrite(
         path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, `${brokerId}.yaml.ejs`),
         path.join(paramDir, `${brokerId}.yaml`),
-        { topology: null, artifactId }
+        // topology: empty arrays — avoids Spring failing on missing placeholder if the
+        // broker topology yaml is read before generateBrokerTopologyYaml() runs the
+        // second write pass with the real topology populated from all BCs.
+        { topology: { exchanges: [], queues: [], routingKeys: [] }, artifactId }
       );
     }
 

@@ -23,14 +23,16 @@ import java.util.Map;
 <% const hasLists = fields && fields.some(f => f.javaType && f.javaType.startsWith('List')); %>
 <% if (hasLists) { %>import java.util.List;
 <% } %>
-<% const needsBigDecimal = fields && fields.some(f => f.javaType === 'BigDecimal'); %>
-<% const needsLocalDate  = fields && fields.some(f => ['LocalDate','LocalDateTime','LocalTime'].includes(f.javaType)); %>
-<% const needsInstant    = fields && fields.some(f => f.javaType === 'Instant'); %>
-<% const needsUUID       = fields && fields.some(f => f.javaType === 'UUID'); %>
+<% const needsBigDecimal    = fields && fields.some(f => f.javaType === 'BigDecimal'); %>
+<% const needsLocalDate     = fields && fields.some(f => f.javaType === 'LocalDate'); %>
+<% const needsLocalDateTime = fields && fields.some(f => f.javaType === 'LocalDateTime'); %>
+<% const needsLocalTime     = fields && fields.some(f => f.javaType === 'LocalTime'); %>
+<% const needsInstant       = fields && fields.some(f => f.javaType === 'Instant'); %>
+<% const needsUUID          = fields && fields.some(f => f.javaType === 'UUID'); %>
 <% if (needsBigDecimal) { %>import java.math.BigDecimal;
 <% } %><% if (needsLocalDate) { %>import java.time.LocalDate;
-import java.time.LocalDateTime;
-import java.time.LocalTime;
+<% } %><% if (needsLocalDateTime) { %>import java.time.LocalDateTime;
+<% } %><% if (needsLocalTime) { %>import java.time.LocalTime;
 <% } %><% if (needsInstant) { %>import java.time.Instant;
 <% } %><% if (needsUUID) { %>import java.util.UUID;
 <% } %><%
