@@ -33,7 +33,20 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 <% } %><% if (needsInstant) { %>import java.time.Instant;
 <% } %><% if (needsUUID) { %>import java.util.UUID;
-<% } %>
+<% } %><%
+const _handledImports = new Set([
+  'java.util.List', 'java.util.Map', 'java.util.UUID',
+  'java.math.BigDecimal', 'java.time.LocalDate', 'java.time.LocalDateTime',
+  'java.time.LocalTime', 'java.time.Instant', 'java.io.IOException',
+]);
+const _domainImports = new Set();
+(fields || []).forEach(f => {
+  if (f.importHint && !_handledImports.has(f.importHint)) _domainImports.add(f.importHint);
+  if (f.innerImportHint && !_handledImports.has(f.innerImportHint)) _domainImports.add(f.innerImportHint);
+});
+%>
+<% [..._domainImports].sort().forEach(imp => { %>import <%= imp %>;
+<% }); %>
 /**
  * RabbitMQ listener for queue ${queues.<%= queueKey %>}.
  * Consumes events produced by: <%= producer %>.

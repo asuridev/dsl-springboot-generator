@@ -92,9 +92,14 @@ function javaTypeForEventField(payloadField, packageName, moduleName, enumNames 
     // importHint: null in type-mapper. Derive the import from the correct domain sub-package.
     let importHint = mapped.importHint;
     if (!importHint && (mapped.isValueObject || mapped.isDomainType)) {
-      const isEnum = enumNames.has(mapped.javaType);
-      const subPackage = isEnum ? 'enums' : 'valueobject';
-      importHint = `${packageName}.${moduleName}.domain.${subPackage}.${mapped.javaType}`;
+      // eventDtos live in application.dtos.incoming — check before falling back to domain.*
+      if (eventDtoNames.has(mapped.javaType)) {
+        importHint = `${packageName}.${moduleName}.application.dtos.incoming.${mapped.javaType}`;
+      } else {
+        const isEnum = enumNames.has(mapped.javaType);
+        const subPackage = isEnum ? 'enums' : 'valueobject';
+        importHint = `${packageName}.${moduleName}.domain.${subPackage}.${mapped.javaType}`;
+      }
     }
     return {
       javaType: mapped.javaType,

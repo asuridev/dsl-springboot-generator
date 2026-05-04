@@ -950,6 +950,55 @@ function validate(doc, opts = {}) {
     }
   }
 
+  // ── eventDtos ──────────────────────────────────────────────────────────────
+  const ALLOWED_EVENT_DTO_KEYS = new Set(['name', 'sourceBc', 'properties']);
+  const ALLOWED_EVENT_DTO_PROP_KEYS = new Set(['name', 'type', 'precision', 'scale', 'required', 'description']);
+  const CANONICAL_TYPES_SET = new Set([
+    'Uuid', 'String', 'Text', 'Integer', 'Long', 'Decimal', 'Boolean',
+    'Date', 'DateTime', 'Duration', 'Email', 'Url', 'Money',
+  ]);
+  const eventDtoNames = new Set();
+  for (const dto of doc.eventDtos || []) {
+    if (!dto.name) fail('An eventDtos[] entry is missing required field "name".');
+    if (eventDtoNames.has(dto.name)) fail(`Duplicate eventDtos name: "${dto.name}"`);
+    eventDtoNames.add(dto.name);
+    for (const key of Object.keys(dto)) {
+      if (!ALLOWED_EVENT_DTO_KEYS.has(key)) {
+        fail(`eventDtos "${dto.name}" declares unsupported attribute "${key}". Allowed keys: ${[...ALLOWED_EVENT_DTO_KEYS].join(', ')}.`);
+      }
+    }
+    if (!Array.isArray(dto.properties) || dto.properties.length === 0) {
+      fail(`eventDtos "${dto.name}" has no properties. An eventDto must declare at least one property.`);
+    }
+    // Validate properties (catches Decimal without precision/scale, prohibited types, etc.)
+    validateProperties(dto.properties, `eventDtos ${dto.name}`, doc.enums);
+    for (const prop of dto.properties) {
+      if (!prop || typeof prop !== 'object') {
+        fail(`eventDtos "${dto.name}" has an invalid property entry; expected a mapping with "name" and "type".`);
+      }
+      for (const key of Object.keys(prop)) {
+        if (!ALLOWED_EVENT_DTO_PROP_KEYS.has(key)) {
+          fail(`eventDtos "${dto.name}" property "${prop.name || '<unnamed>'}" declares unsupported attribute "${key}". Allowed keys: ${[...ALLOWED_EVENT_DTO_PROP_KEYS].join(', ')}.`);
+        }
+      }
+      if (!prop.name) fail(`eventDtos "${dto.name}" has a property without "name".`);
+      if (!prop.type) fail(`eventDtos "${dto.name}" property "${prop.name}" is missing required field "type".`);
+      // Type must resolve to a canonical type, an enum, a VO, another eventDto, or List[<resolvable>]
+      const baseType = (prop.type || '').replace(/^List\[(.+)\]$/, '$1');
+      const head = baseType.replace(/\(.*\)/, '');
+      if (CANONICAL_TYPES_SET.has(head)) continue;
+      const enumWrapMatch = /^Enum<(.+)>$/.exec(head);
+      if (enumWrapMatch) {
+        if (!enumNames.has(enumWrapMatch[1])) {
+          fail(`eventDtos "${dto.name}" property "${prop.name}" references unknown enum "${enumWrapMatch[1]}".`);
+        }
+        continue;
+      }
+      if (enumNames.has(head) || voNames.has(head) || eventDtoNames.has(head)) continue;
+      fail(`eventDtos "${dto.name}" property "${prop.name}" has unresolved type "${prop.type}". Declare it under enums[], valueObjects[], eventDtos[], or use a canonical type.`);
+    }
+  }
+
   // ── 1. Referential integrity ───────────────────────────────────────────────
   for (const uc of useCases) {
     // rules must reference declared rule IDs

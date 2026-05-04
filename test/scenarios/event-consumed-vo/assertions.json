@@ -21,12 +21,14 @@
       "constructCollectionType(List.class, OrderLineSnapshot.class)",
       "List<OrderLineSnapshot> lines",
       "new ProcessPlacedOrderCommand(lines)",
-      "java.util.List"
+      "java.util.List",
+      "import com.test.ordering.application.dtos.incoming.OrderLineSnapshot"
     ],
     "notContains": [
       "orderId",
       "buyerId",
-      "String lines"
+      "String lines",
+      "domain.valueobject.OrderLineSnapshot"
     ]
   },
 
