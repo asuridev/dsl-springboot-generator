@@ -928,6 +928,33 @@ function checkConsumerPayloadSubset(bcYamls, bcIndex, diagnostics) {
   }
 }
 
+function checkAuthContextInEventPayload(bcYamls, diagnostics) {
+  // INT-025 — source: auth-context is not a valid origin for domainEvents.published[].payload[].
+  // The aggregate must be agnostic to security concerns; the value must be passed as an
+  // explicit param (source: param) resolved by the application handler before calling the
+  // domain method.
+  for (const bc of bcYamls) {
+    const published = ((bc.domainEvents || {}).published) || [];
+    for (let i = 0; i < published.length; i++) {
+      const ev = published[i];
+      for (let p = 0; p < (ev.payload || []).length; p++) {
+        const f = ev.payload[p];
+        if (!f || !f.name) continue;
+        if (f.source === 'auth-context') {
+          diagnostics.push({
+            code: 'INT-025',
+            level: 'error',
+            message: `Event "${ev.name}" payload field "${f.name}" declares source: auth-context, which is not allowed in domainEvents.published[].payload[]. ` +
+              `Aggregates must be agnostic to security. Declare the field as source: param, ` +
+              `add it to domainMethods[].params, and resolve SecurityContext in the application handler.`,
+            location: `${bc.bc}.yaml#/domainEvents/published[${i}]/payload[${p}]`,
+          });
+        }
+      }
+    }
+  }
+}
+
 function checkHiddenFieldLeak(bcYamls, _bcIndex, diagnostics) {
   // INT-021 — published payload field names must not collide with aggregate
   // properties marked hidden:true on the producing BC, unless the event opts
@@ -991,6 +1018,7 @@ function validateIntegrationCoherence(system, bcYamls, archDir, asyncApiByBc) {
     checkConsumerPayloadSubset(bcYamls, bcIndex, diagnostics);
   }
   checkHiddenFieldLeak(bcYamls, bcIndex, diagnostics);
+  checkAuthContextInEventPayload(bcYamls, diagnostics);
 
   return diagnostics;
 }

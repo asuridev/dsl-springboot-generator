@@ -221,11 +221,10 @@ function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParam
         return JSON.stringify(p.value);
       }
       case 'auth-context': {
-        // Aggregates must remain agnostic to authentication; surface a TODO so
-        // the human (or Phase 3 follow-up) wires the lookup at the handler layer.
-        const claim = p.claim ? ` claim="${p.claim}"` : '';
-        unresolved.push(`${p.name} (source: auth-context — must be resolved at handler)`);
-        return `null /* TODO domainEvent(${event.name}, ${p.name}): source=auth-context${claim} — populate from SecurityContext in the application handler, not in the aggregate */`;
+        // INT-025: source: auth-context is rejected by integration-validator before the
+        // generator runs. This branch is unreachable in a valid build; guard defensively.
+        unresolved.push(`${p.name} (source: auth-context — invalid in event payload, blocked by INT-025)`);
+        return `null /* INVALID: domainEvent(${event.name}, ${p.name}): source=auth-context is not allowed in event payload — INT-025 should have blocked this build */`;
       }
       case 'derived': {
         const ref = p.derivedFrom || p.expression || '';

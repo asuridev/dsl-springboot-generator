@@ -10,7 +10,7 @@
 2. [Sección `domainEvents`](#2-sección-domainevents)
    - 2.1 [Eventos publicados (`domainEvents.published`)](#21-eventos-publicados-domainevents-published)
    - 2.2 [Payload de eventos](#22-payload-de-eventos)
-   - 2.3 [Broker y configuración de publicación](#23-broker-y-configuración-de-publicación)
+   - 2.3 [Partición de eventos (partitionKey)](#23-partición-de-eventos-partitionkey)
    - 2.4 [Eventos consumidos (`domainEvents.consumed`)](#24-eventos-consumidos-domainevents-consumed)
    - 2.5 [EventMetadata canónico](#25-eventmetadata-canónico)
 3. [Validaciones cruzadas (INT-*)](#3-validaciones-cruzadas-int-)
@@ -317,6 +317,7 @@ domainEvents:
           type: Uuid
           source: aggregate
           field: id
+          partitionKey: true    # clave de partición Kafka; solo un campo por evento; ignorado en RabbitMQ
 
         - name: sku
           type: String(50)
@@ -334,7 +335,8 @@ domainEvents:
 
         - name: activatedBy
           type: Uuid
-          source: auth-context
+          source: param           # ← source: auth-context está prohibido en payload (INT-025)
+                                  #   el handler resuelve SecurityContext y lo pasa como param
 
         - name: promotionCode
           type: String
@@ -343,20 +345,6 @@ domainEvents:
         - name: displayCategory
           type: String
           source: derived         # generador emite TODO — lógica derivada
-
-      broker:
-        partitionKey: productId   # campo del payload para la clave de partición Kafka
-        headers:
-          eventType: ProductActivated
-          version: "1"
-        retry:
-          maxAttempts: 3
-          backoff: exponential
-          initialMs: 1000
-          maxMs: 10000
-        dlq:
-          afterAttempts: 3
-          target: catalog.product.activated.dlq
 ```
 
 #### Propiedades de `published`
@@ -367,7 +355,6 @@ domainEvents:
 | `scope` | `internal` \| `integration` \| `both` | no | Determina qué capas reciben el evento. `internal`: solo dentro del BC. `integration`: solo hacia el broker. `both`: ambas. **Default: `both`** cuando se omite. |
 | `channel` | string | no (recomendado) | Canal del broker. Convención: `{bc}.{kebab-event-name-con-puntos}`. Ej: `catalog.product.activated`. Validación INT-018 compara con AsyncAPI. |
 | `payload` | lista | ✅ | Campos del evento. Ver §2.2. |
-| `broker` | objeto | no | Configuración de publicación en el broker. Ver §2.3. |
 
 ---
 
@@ -388,7 +375,8 @@ payload:
 
   - name: performedBy
     type: Uuid
-    source: auth-context        # genera TODO null — debe completarse en el handler (los agregados son agnósticos a la seguridad)
+    source: param               # ← correcto: el handler resuelve SecurityContext y lo pasa como param
+    # source: auth-context      ← INVÁLIDO en payload de evento — INT-025 rechaza la build
 
   - name: notes
     type: String
@@ -420,6 +408,7 @@ payload:
 | `source` | enum | ✅ | De dónde proviene el valor en runtime. Ver tabla siguiente. |
 | `field` | camelCase | ✅ si `source: aggregate` | Nombre de la propiedad del agregado. Debe existir en `aggregates[].properties`. |
 | `value` | literal | ✅ si `source: constant` | Valor constante a emitir. Si se omite, el generador emite `null /* TODO */`. |
+| `partitionKey` | boolean | no | Si `true`, este campo actúa como clave de partición Kafka. Solo un campo por evento puede tenerlo. Ignorado en RabbitMQ. |
 | `allowHiddenLeak` | boolean | no | Si `true`, permite exponer en el evento un campo marcado `hidden: true` en el agregado (INT-021). Default: `false`. |
 
 #### Valores de `source`
@@ -428,10 +417,68 @@ payload:
 |---|---|---|
 | `aggregate` | `this.get{Field}()` | El valor proviene directamente del estado del agregado. |
 | `timestamp` | `Instant.now()` | Marca temporal del momento en que ocurre el evento. |
-| `auth-context` | `null /* TODO: source=auth-context — populate from SecurityContext in the application handler, not in the aggregate */` | El actor que realizó la acción. El generador emite un TODO porque los agregados deben ser agnósticos a la seguridad. El campo debe ser completado en Fase 3 en el handler de aplicación. |
+| `auth-context` | ❌ **No permitido** — la build falla con INT-025 | No es un origen válido en el payload de un evento. El agregado es agnóstico a la seguridad. Declarar el campo como `source: param`, añadirlo a `domainMethods[].params`, y resolver `SecurityContext` en el handler. |
 | `param` | parámetro adicional en la firma de `raise()` | Un valor que se pasa explícitamente al método. Ej: `reason`, `notes`. Requiere que el parámetro exista en la firma del método del agregado. |
 | `constant` | valor literal del campo `value` en el payload | Valores fijos. **Requiere declarar `value:` en el campo del payload** (ej: `value: "1"`). Si `value` está ausente, el generador emite un TODO con null. |
-| `derived` | `null /* TODO: source=derived — implement projection */` | Lógica derivada que debe implementarse en Fase 3. |
+| `derived` | `null /* TODO: source=derived — implement in aggregate */` | El valor se **calcula dentro del propio agregado** a partir de su estado interno, pero la fórmula es lógica de negocio que el generador no puede inferir del YAML. El generador reserva el hueco con `null` y un TODO. La implementación queda para Fase 3 **dentro del método del agregado**. ⚠️ Si el cálculo requiere consultar una fuente externa (otra entidad, proyección, servicio), usar `source: param` en su lugar — el handler hace la consulta y pasa el resultado como argumento. |
+
+#### `source: derived` vs `source: param` — frontera crítica
+
+| Pregunta | `source: derived` | `source: param` |
+|---|---|---|
+| ¿El agregado puede calcular el valor **solo**, con los campos que ya tiene? | ✅ Sí | ❌ No |
+| ¿Requiere consultar otra entidad, proyección o servicio externo? | ❌ No | ✅ Sí — el handler lo resuelve y lo pasa |
+| ¿Quién implementa la lógica en Fase 3? | El desarrollador, **dentro del método del agregado** | El desarrollador, **en el handler** (busca el valor y lo pasa como argumento) |
+
+**`source: derived` correcto** — cálculo a partir del estado propio del agregado:
+
+```yaml
+- name: discountedPrice
+  type: Money
+  source: derived   # = this.price × (1 - this.discountRate)
+                    # ambos campos viven en el agregado
+                    # la fórmula es lógica interna, el generador emite null + TODO
+```
+
+```java
+// Fase 3 — lógica implementada dentro del propio agregado
+public void applyPromotion(String promotionCode) {
+    // ...
+    raise(new PromotionAppliedEvent(
+        ...
+        this.getPrice().multiply(BigDecimal.ONE.subtract(this.getDiscountRate())) // ← ya no es null
+    ));
+}
+```
+
+**`source: param` correcto** — el valor requiere una consulta externa:
+
+```yaml
+- name: categoryName
+  type: String
+  source: param     # el handler busca el nombre en la proyección y lo pasa como argumento
+                    # el agregado solo guarda categoryId (UUID), no el nombre legible
+```
+
+```java
+// Fase 3 — el handler resuelve la consulta y pasa el valor al agregado
+String categoryName = categoryReadRepository.findNameById(product.getCategoryId());
+product.activate(activatedBy, promotionCode, categoryName);
+
+// En Product.java — recibe el valor como param, sin saber de dónde vino
+public void activate(UUID activatedBy, String promotionCode, String categoryName) {
+    raise(new ProductActivatedEvent(
+        ...,
+        categoryName   // ← source: param, no derived
+    ));
+}
+```
+
+> ❌ **Error común**: declarar `source: derived` para un campo que en realidad proviene de otra
+> entidad o proyección, e implementar la consulta en el handler antes de llamar al método del
+> agregado. Eso es `source: param` — el handler hace la resolución, no el agregado.
+
+---
 
 #### Código Java generado
 
@@ -455,86 +502,213 @@ public record ProductActivatedEvent(
 ) implements DomainEvent {}
 ```
 
-**Método `raise()` en el agregado** (generado cuando `domainMethods[].emits: ProductActivated`):
+**Cómo el generador emite el evento en el agregado** (generado cuando `domainMethods[].emits: ProductActivated`):
+
+El evento **no se devuelve** — se acumula con `raise()` dentro del método de negocio existente (`void`).
+El generador produce el statement `raise(new XxxEvent(...))` e incrusta los argumentos resolviendo
+cada campo de `payload[].source` (ver tabla de resolución más abajo).
+
 ```java
-// En Product.java:
-public ProductActivatedEvent raiseProductActivated(String promotionCode) {
-    return new ProductActivatedEvent(
-        EventMetadata.now("ProductActivated", "1"),  // metadata (si habilitado)
+// En Product.java — el método de negocio es void, no devuelve el evento
+// activatedBy viene como param porque source: auth-context está prohibido en event payload (INT-025);
+// el handler de aplicación lo extrae de SecurityContext y lo pasa como argumento ordinario.
+public void activate(UUID activatedBy, String promotionCode) {
+    // (transición de estado, si aplica)
+    this.status = this.status.transitionTo(ProductStatus.ACTIVE);
+    // derived_from: domainEvents.published.ProductActivated
+    raise(new ProductActivatedEvent(
+        EventMetadata.now("ProductActivated", 1, "catalog"),   // metadata (si events.metadata.enabled = true)
         this.getId(),                      // source: aggregate, field: id
         this.getSku(),                     // source: aggregate, field: sku
         this.getPrice(),                   // source: aggregate, field: price
         Instant.now(),                     // source: timestamp
-        null /* TODO domainEvent(ProductActivated, activatedBy): source=auth-context
-              — populate from SecurityContext in the application handler, not in the aggregate */,
+        activatedBy,                       // source: param (resuelto en el handler desde SecurityContext)
         promotionCode,                     // source: param
         null /* TODO domainEvent(ProductActivated, displayCategory): source=derived — implement projection */
-    );
+    ));
 }
 ```
+
+**Flujo completo de publicación** (tres capas):
+
+```
+1. Aggregate.activate(promotionCode)
+       → raise() acumula el evento en la lista interna _domainEvents
+
+2. repository.save(product)
+       → persiste en base de datos
+
+3. product.pullDomainEvents().forEach(eventPublisher::publishEvent)
+       → vacía _domainEvents y los despacha vía Spring ApplicationEventPublisher
+         (generado en RepositoryImpl, solo cuando el agregado emite eventos)
+```
+
+**Tabla de resolución de argumentos** (`payload[].source`):
+
+| `source` | Argumento generado | Notas |
+|---|---|---|
+| `aggregate` | `this.getId()` / `this.getXxx()` | `field` debe existir en el agregado |
+| `param` | nombre del parámetro del método | `param` debe estar en la firma |
+| `timestamp` | `Instant.now()` | — |
+| `constant` | literal Java del `value` declarado | string → quoted, number/bool → literal |
+| `auth-context` | ❌ **Prohibido** — INT-025 detiene la build | Usar `source: param` en el payload + resolver `SecurityContext` en el handler |
+| `derived` | `null /* TODO ... */` | requiere implementación manual en Fase 3 |
 
 ---
 
-### 2.3 Broker y configuración de publicación
+#### Cómo pasar datos de autenticación a un evento (reemplaza `source: auth-context`)
 
-El bloque `broker` configura cómo el evento se publica en el message broker.
+`source: auth-context` está **prohibido** en `domainEvents.published[].payload[]` (INT-025).
+El patrón correcto es declarar el campo como `source: param` en el payload y resolverlo en el handler.
+Hay **dos caminos** dependiendo del tipo de use case:
+
+---
+
+##### Camino A — use case `create` sin `domainMethods.params` (resolución automática)
+
+Este es el **único caso** en que el generador resuelve `authContext` automáticamente.
+Condición exacta en el código: `isCreate === true && dmParams.length === 0`
+([application-generator.js línea ~1014](../src/generators/application-generator.js)).
+
+Declarar el campo en `uc.input[]` con `source: authContext`:
 
 ```yaml
-broker:
-  partitionKey: productId       # campo del payload usado como clave de partición (Kafka)
-  headers:                       # headers adicionales del mensaje
-    eventType: ProductActivated
-    version: "1"
-    domain: catalog
-  retry:
-    maxAttempts: 3               # intentos de re-publicación si falla el broker
-    backoff: exponential         # exponential o fixed
-    initialMs: 1000              # milisegundos iniciales de backoff
-    maxMs: 10000                 # techo de backoff en milisegundos
-  dlq:
-    afterAttempts: 3             # mover al DLQ tras este número de fallos
-    target: catalog.product.activated.dlq   # nombre de la cola/topic DLQ
+useCases:
+  - id: create-order
+    name: CreateOrder
+    type: command
+    aggregate: Order
+    method: create
+    implementation: full
+    input:
+      - name: customerId
+        type: Uuid
+      - name: createdBy         # ← campo de auth
+        type: Uuid
+        source: authContext     # ← excluido del command record; extraído de SecurityContext en el handler
+
+aggregates:
+  - name: Order
+    domainMethods:
+      - name: create
+        # SIN params declarados → el generador usa uc.input[] para construir los args
+        emits: OrderPlaced
 ```
 
-#### Propiedades de `broker`
+El generador produce en el handler (`implementation: full`):
 
-| Propiedad | Tipo | Descripción |
-|---|---|---|
-| `partitionKey` | camelCase (campo del payload) | Solo Kafka. Campo del payload para calcular la partición. Garantiza ordenamiento por entidad. |
-| `headers` | mapa `{headerName: value}` | Headers del mensaje. `value` puede ser literal o referencia a campo del payload con `{fieldName}`. |
-| `retry.maxAttempts` | integer | Número máximo de intentos de publicación. |
-| `retry.backoff` | `exponential` \| `fixed` | Estrategia de backoff. |
-| `retry.initialMs` | integer | Milisegundos iniciales de espera. Solo para `backoff: exponential`. |
-| `retry.maxMs` | integer | Techo de espera en milisegundos. Solo para `backoff: exponential`. |
-| `dlq.afterAttempts` | integer | Mover al DLQ tras este número de intentos fallidos. |
-| `dlq.target` | string | Nombre del topic/queue DLQ. |
-
-**Código Java generado** — publicación de evento con Outbox:
 ```java
-// En el handler, tras guardar el agregado:
-ProductActivated event = product.raiseProductActivated(command.promotionCode());
-outboxEventPublisher.publish(event, "catalog.product.activated");
-```
-
-**`OutboxEventPublisher.java`** (cuando el outbox está habilitado en `system.yaml`):
-```java
-@Component
-public class OutboxEventPublisher {
-
-    private final OutboxRepository outboxRepository;
-    private final ObjectMapper objectMapper;
-
-    public void publish(Object event, String channel) {
-        String payload = objectMapper.writeValueAsString(event);
-        OutboxEntry entry = OutboxEntry.create(
-            event.getClass().getSimpleName(),
-            channel,
-            payload
-        );
-        outboxRepository.save(entry);
-    }
+// En CreateOrderCommandHandler.java — generado automáticamente
+@Override
+@Transactional
+public void handle(CreateOrderCommand command) {
+    // command.createdBy() NO EXISTE — fue excluido del record
+    // el generador inyecta la extracción de SecurityContext directamente en el callArg:
+    Order order = Order.create(
+        UUID.fromString(command.customerId()),
+        UUID.fromString(SecurityContextHolder.getContext().getAuthentication().getName())
+        //              ↑ source: authContext resuelto automáticamente
+    );
+    orderRepository.save(order);
 }
 ```
+
+> **Restricción real del generador**: este path solo funciona cuando el `domainMethod.create`
+> no tiene `params` declarados. En cuanto `dmParams.length > 0`, el generador usa los
+> `dmParams` como fuente de verdad y `uc.input[].source` es ignorado para el cuerpo.
+
+---
+
+##### Camino B — métodos no-create (p.ej. `activate`) — Fase 3 manual
+
+Para métodos como `activate`, `discontinue`, `update`, etc., el generador **no auto-resuelve**
+`authContext`. El tratamiento real es:
+
+- **`implementation: scaffold`**: el handler emite un comentario TODO si el agregado tiene
+  una propiedad con `source: authContext` (leído de `aggregates[].properties[]`, no de `uc.input[]`).
+  El cuerpo lanza `UnsupportedOperationException`.
+- **`implementation: full`**: el handler mapea los `domainMethods.params` a `command.xxx()`.
+  Si `activatedBy` es un `dmParam`, genera `UUID.fromString(command.activatedBy())` —
+  esperando que venga en el body de la request.
+
+La solución correcta en Fase 3 es que el desarrollador añada `activatedBy` como `dmParam` y
+resuelva la extracción del `SecurityContext` manualmente en el handler usando la clase utilitaria
+generada `SecurityContextUtil`:
+
+```java
+// En ActivateProductCommandHandler.java — Fase 3, implementación manual
+@Override
+@Transactional
+public void handle(ActivateProductCommand command) {
+    Product product = productRepository.findById(UUID.fromString(command.productId()))
+        .orElseThrow(ProductNotFoundError::new);
+
+    // source: auth-context → el desarrollador extrae el claim manualmente
+    // SecurityContextUtil es generado en shared/infrastructure/security/
+    String sub = SecurityContextUtil.currentUserClaim("sub");
+    UUID activatedBy = sub != null ? UUID.fromString(sub) : null;
+
+    product.activate(command.promotionCode(), activatedBy);
+    productRepository.save(product);
+}
+```
+
+Y el agregado recibe `activatedBy` como param ordinario, sin saber de dónde viene:
+
+```java
+// En Product.java — el agregado nunca toca SecurityContext
+public void activate(String promotionCode, UUID activatedBy) {
+    this.status = this.status.transitionTo(ProductStatus.ACTIVE);
+    // derived_from: domainEvents.published.ProductActivated
+    raise(new ProductActivatedEvent(
+        EventMetadata.now("ProductActivated", 1, "catalog"),
+        this.getId(),           // source: aggregate, field: id
+        this.getSku(),          // source: aggregate, field: sku
+        this.getPrice(),        // source: aggregate, field: price
+        Instant.now(),          // source: timestamp
+        activatedBy,            // source: param ← ya no es null (resuelto en el handler)
+        promotionCode,          // source: param
+        null /* TODO displayCategory: source=derived */
+    ));
+}
+```
+
+> **Regla de oro**: `source: auth-context` **no existe** en el payload de un evento — la build
+> falla con INT-025 antes de generar código. El patrón correcto es `source: param` en el payload
+> + el handler resuelve `SecurityContext` y lo pasa al método del dominio como argumento ordinario.
+> El agregado siempre recibe tipos de dominio puros (UUID, String, etc.).
+> `SecurityContextUtil` (generado en `shared/infrastructure/security/`) provee los helpers
+> `currentUserClaim(String claim)` y `hasAnyRole(String... roles)`.
+
+---
+
+### 2.3 Partición de eventos (partitionKey)
+
+El broker de mensajería se selecciona en tiempo de build a través de `system.yaml` — no en el YAML de cada BC. Por eso no existe un bloque `broker:` en `published[]`. La configuración de reintentos y DLQ es por entorno y vive en los archivos de infraestructura (`rabbitmq.yaml` / `kafka.yaml`), no en el diseño del dominio.
+
+La **única** información de publicación que sí pertenece al diseño del evento es la **clave de partición Kafka**: qué campo del payload Kafka debe usar para calcular la partición. Se declara con `partitionKey: true` directamente en el elemento del `payload[]` que debe actuar como clave. Esto garantiza que todos los eventos del mismo agregado (mismo `productId`, mismo `orderId`, etc.) siempre van a la misma partición y por lo tanto mantienen orden.
+
+```yaml
+payload:
+  - name: productId
+    type: Uuid
+    source: aggregate
+    field: id
+    partitionKey: true    # ← Kafka usa este campo para calcular la partición
+                          #   garantiza orden de eventos por producto
+```
+
+#### Reglas
+
+| Regla | Detalle |
+|---|---|
+| Un solo campo por evento | Si más de un campo tiene `partitionKey: true`, el generador emite `GEN-ERROR`. |
+| Tipos válidos | `Uuid`, `String`, `Integer`, `Long`. Otros tipos producen `GEN-WARN`. |
+| Solo Kafka | Si el broker seleccionado en build es RabbitMQ, `partitionKey: true` se ignora silenciosamente. |
+| DLQ por convención | El nombre del DLQ se deriva como `{channel}.dlq`. No hay campo `dlq.target` ni bloque `broker.dlq` en `published[]`. |
+| Retry de publicación | Configurado en los archivos de entorno — no en el YAML del BC. |
+
+> ⚠️ Si un `{bc}.yaml` contiene un bloque `broker:` en `published[]`, el generador emite `GEN-ERROR: schema obsoleto — el bloque broker ya no existe; usar partitionKey: true en el campo del payload`.
 
 ---
 
@@ -574,8 +748,8 @@ domainEvents:
 | `sourceBc` | kebab-case | ✅ | BC que publica este evento. Usado para la validación INT-007 y INT-020. |
 | `channel` | string | no | Canal del broker donde se publica el evento (ej: `catalog.product.activated`). Cuando se declara, el generador lo usa para derivar el BC productor en la topología de colas. |
 | `payload` | lista | no | Subconjunto de campos del payload que este BC necesita. Validación INT-020: todos los campos declarados aquí deben existir en el `published[].payload[]` del BC productor. Si `payload` se omite, se usa el payload completo del evento publicado. |
-| `retry` | objeto | no | Configuración de reintento del consumer. Misma estructura que `broker.retry`. |
-| `dlq` | objeto | no | Configuración de DLQ del consumer. Misma estructura que `broker.dlq`. |
+| `retry` | objeto | no | Configuración de reintento del consumer. |
+| `dlq` | objeto | no | Configuración de DLQ del consumer. Si `target` se omite, el nombre se deriva por convención como `{channel}.dlq`. |
 
 #### Código Java generado
 
@@ -684,6 +858,7 @@ detiene.
 | **INT-022** | error | Campo de `externalSystems[].operations[].request\|response.fields[]` con tipo no escalar que no está declarado en `externalSystems[].schemas`. |
 | **INT-023** | error | Campo dentro de `externalSystems[].schemas[schemaName]` con tipo que no es escalar ni referencia a otro schema del mismo sistema externo. |
 | **INT-024** | error | `auth.type` con valor desconocido. Valores válidos: `api-key`, `bearer`, `oauth2-cc`, `mTLS`, `internal-jwt`, `none`. |
+| **INT-025** | error | Un campo de `domainEvents.published[].payload[]` declara `source: auth-context`. Este origen no está permitido en el payload de eventos: el agregado debe ser agnóstico a la seguridad. Declarar el campo como `source: param`, añadirlo a `domainMethods[].params` y resolver el valor de `SecurityContext` en el handler de aplicación. |
 
 ---
 
@@ -736,6 +911,7 @@ domainEvents:
           type: Uuid
           source: aggregate
           field: id
+          partitionKey: true     # clave de partición Kafka; ignorado en RabbitMQ
         - name: sku
           type: String(50)
           source: aggregate
@@ -749,20 +925,7 @@ domainEvents:
           source: timestamp
         - name: activatedBy
           type: Uuid
-          source: auth-context
-      broker:
-        partitionKey: productId
-        headers:
-          eventType: ProductActivated
-          version: "1"
-        retry:
-          maxAttempts: 3
-          backoff: exponential
-          initialMs: 1000
-          maxMs: 30000
-        dlq:
-          afterAttempts: 3
-          target: catalog.product.activated.dlq
+          source: param          # ← debe ser param; source: auth-context está prohibido en payload (INT-025)
 
     - name: ProductDeactivated
       scope: both                # interno Y hacia el broker
