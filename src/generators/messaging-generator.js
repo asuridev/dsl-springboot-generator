@@ -945,7 +945,11 @@ function buildKafkaTopology(allBcYamls) {
     for (const event of consumed) {
       const eventKebab = toKebabCase(event.name);
       const topicKey   = event.topicKey || `${bcName}-${eventKebab}`;
-      topicMap.set(topicKey, `${bcName}.${eventKebab}`);
+      // Derive producer BC from the first segment of the declared channel.
+      // This ensures consumers subscribe to the same topic the producer publishes to.
+      // Falls back to bcName (consumer) when channel is not declared — preserves prior behaviour.
+      const producerBc = event.channel ? event.channel.split('.')[0] : bcName;
+      topicMap.set(topicKey, `${producerBc}.${eventKebab}`);
     }
 
     // Persistent projections (Phase 3) declare an independent topic key.

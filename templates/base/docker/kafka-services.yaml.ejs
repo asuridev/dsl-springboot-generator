@@ -31,7 +31,7 @@ kafka-ui:
   image: <%= kafkaUiImage %>
   container_name: <%= systemName %>-kafka-ui
   ports:
-    - "8080:8080"
+    - "8090:8080"
   environment:
     KAFKA_CLUSTERS_0_NAME: local
     KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092

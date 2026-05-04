@@ -6,7 +6,8 @@ import <%= packageName %>.<%= moduleName %>.application.events.<%= event.integra
  * MessageBroker — output port (secondary port) for asynchronous messaging.
  *
  * Decouples the application layer from any specific broker technology.
- * Implementations live in infrastructure/adapters/rabbitmqMessageBroker/.
+ * Implementations live in infrastructure/adapters/{brokerName}MessageBroker/
+ * (e.g. kafkaMessageBroker or rabbitmqMessageBroker).
  */
 public interface MessageBroker {
 <% events.forEach(event => { %>

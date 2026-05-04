@@ -10,7 +10,7 @@
 2. [Sección `domainEvents`](#2-sección-domainevents)
    - 2.1 [Eventos publicados (`domainEvents.published`)](#21-eventos-publicados-domainevents-published)
    - 2.2 [Payload de eventos](#22-payload-de-eventos)
-   - 2.3 [Partición de eventos (partitionKey)](#23-partición-de-eventos-partitionkey)
+   - 2.3 [Broker hints (bloque `broker:`)](#23-broker-hints-bloque-broker)
    - 2.4 [Eventos consumidos (`domainEvents.consumed`)](#24-eventos-consumidos-domainevents-consumed)
    - 2.5 [EventMetadata canónico](#25-eventmetadata-canónico)
 3. [Sección `eventDtos`](#3-sección-eventdtos)
@@ -19,6 +19,12 @@
    - 5.1 [`parameters/{env}/rabbitmq.yaml`](#51-parametersenvrabbitmsqyaml)
    - 5.2 [`RabbitMQConfig.java` — beans compartidos](#52-rabbitmqconfigjava--beans-compartidos)
    - 5.3 [`{BcPascal}RabbitMQConfig.java` — topología por BC](#53-bcpascalrabbitmqconfigjava--topología-por-bc)
+6. [Artefactos de infraestructura Kafka generados](#6-artefactos-de-infraestructura-kafka-generados)
+   - 6.1 [`parameters/{env}/kafka.yaml` — conexión y topics](#61-parametersenvkafkayaml--conexión-y-topics)
+   - 6.2 [`KafkaConfig.java` — beans compartidos](#62-kafkaconfigjava--beans-compartidos)
+   - 6.3 [`{BcPascal}KafkaMessageBroker.java` — adaptador publicador](#63-bcpascalkafkamessagebrokerjava--adaptador-publicador)
+   - 6.4 [`{EventName}KafkaListener.java` — adaptador consumidor](#64-eventnamekafkalistenerjava--adaptador-consumidor)
+   - 6.5 [Archivos comunes con RabbitMQ](#65-archivos-comunes-con-rabbitmq)
 
 ---
 
@@ -321,7 +327,6 @@ domainEvents:
           type: Uuid
           source: aggregate
           field: id
-          partitionKey: true    # clave de partición Kafka; solo un campo por evento; ignorado en RabbitMQ
 
         - name: sku
           type: String(50)
@@ -349,6 +354,21 @@ domainEvents:
         - name: displayCategory
           type: String
           source: derived         # generador emite TODO — lógica derivada
+
+      # broker: hints de publicación — todos opcionales; ver §2.3 para reglas completas
+      broker:
+        partitionKey: productId      # string — nombre de un campo declarado en payload[]
+        headers:                     # mapa string→string; inyectado en cada mensaje
+          x-source-bc: catalog
+        retry:                       # validado pero actualmente sin efecto en artefactos generados
+          maxAttempts: 3
+          backoff: exponential       # fixed | exponential
+          initialMs: 500
+          maxMs: 10000
+        dlq:                         # routingKey + queueName se propagan a BcRabbitMQConfig del consumidor
+          routingKey: catalog.product.activated.dead
+          queueName: catalog-activated-poison   # opcional; default = valor de routingKey
+          afterAttempts: 3           # validado pero actualmente sin efecto en artefactos generados
 ```
 
 #### Propiedades de `published`
@@ -359,6 +379,7 @@ domainEvents:
 | `scope` | `internal` \| `integration` \| `both` | no | Determina qué capas reciben el evento. `internal`: solo dentro del BC. `integration`: solo hacia el broker. `both`: ambas. **Default: `both`** cuando se omite. |
 | `channel` | string | no (recomendado) | Canal del broker. Convención: `{bc}.{kebab-event-name-con-puntos}`. Ej: `catalog.product.activated`. Validación INT-018 compara con AsyncAPI. |
 | `payload` | lista | ✅ | Campos del evento. Ver §2.2. |
+| `broker` | objeto | no | Hints de publicación para el broker. Claves válidas: `partitionKey`, `headers`, `retry`, `dlq`. Ver §2.3. |
 | `allowHiddenLeak` | boolean | no | Si `true`, autoriza que el payload exponga campos marcados `hidden: true` en el agregado (INT-021). Se declara **a nivel del evento**, no en campos individuales. Default: `false`. |
 
 ---
@@ -415,7 +436,6 @@ payload:
 | `source` | enum | ✅ | De dónde proviene el valor en runtime. Ver tabla siguiente. |
 | `field` | camelCase | ✅ si `source: aggregate` | Nombre de la propiedad del agregado. Debe existir en `aggregates[].properties`. |
 | `value` | literal | ✅ si `source: constant` | Valor constante a emitir. Si se omite, el generador emite `null /* TODO */`. |
-| `partitionKey` | boolean | no | Si `true`, este campo actúa como clave de partición Kafka. Solo un campo por evento puede tenerlo. Ignorado en RabbitMQ. |
 
 #### Valores de `source`
 
@@ -688,33 +708,76 @@ public void activate(String promotionCode, UUID activatedBy) {
 
 ---
 
-### 2.3 Partición de eventos (partitionKey)
+### 2.3 Broker hints (bloque `broker:`)
 
-El broker de mensajería se selecciona en tiempo de build a través de `system.yaml` — no en el YAML de cada BC. Por eso no existe un bloque `broker:` en `published[]`. La configuración de reintentos y DLQ es por entorno y vive en los archivos de infraestructura (`rabbitmq.yaml` / `kafka.yaml`), no en el diseño del dominio.
-
-La **única** información de publicación que sí pertenece al diseño del evento es la **clave de partición Kafka**: qué campo del payload Kafka debe usar para calcular la partición. Se declara con `partitionKey: true` directamente en el elemento del `payload[]` que debe actuar como clave. Esto garantiza que todos los eventos del mismo agregado (mismo `productId`, mismo `orderId`, etc.) siempre van a la misma partición y por lo tanto mantienen orden.
+El bloque `broker:` es un objeto opcional en `published[]` que permite declarar hints de publicación agnósticos al broker. El generador lo valida estrictamente: cualquier clave no reconocida provoca un `GEN-ERROR` inmediato.
 
 ```yaml
-payload:
-  - name: productId
-    type: Uuid
-    source: aggregate
-    field: id
-    partitionKey: true    # ← Kafka usa este campo para calcular la partición
-                          #   garantiza orden de eventos por producto
+domainEvents:
+  published:
+    - name: ProductActivated
+      scope: integration
+      channel: catalog.product.activated
+      payload:
+        - name: productId
+          type: Uuid
+          source: aggregate
+          field: id
+        - name: sku
+          type: String(50)
+          source: aggregate
+          field: sku
+      broker:
+        partitionKey: productId           # string — nombre del campo en payload[]
+        headers:
+          x-source-bc: catalog
+          x-event-version: "1"
+        retry:
+          maxAttempts: 3
+          backoff: exponential
+          initialMs: 500
+          maxMs: 10000
+        dlq:
+          afterAttempts: 3
+          routingKey: catalog.product.activated.dead
+          queueName: catalog-product-activated-poison   # opcional; default: valor de routingKey
 ```
 
-#### Reglas
+#### Sub-campos del bloque `broker:`
+
+| Clave | Tipo | Descripción | Efecto en generación |
+|---|---|---|---|
+| `partitionKey` | string | Nombre de un campo declarado en `payload[]`. Kafka usa ese campo como clave de partición para garantizar orden por entidad. | Genera `String.valueOf(event.{field}())` como clave en `KafkaMessageBroker.java`. Ignorado en RabbitMQ. |
+| `headers` | mapa string→string | Cabeceras estáticas (o plantillas de string) que se inyectan en cada mensaje publicado. | Genera `record.headers().add(...)` en `KafkaMessageBroker.java` y `message.getMessageProperties().setHeader(...)` en `RabbitMessageBroker.java`. |
+| `retry` | objeto | Configuración de reintentos de publicación. Ver tabla de sub-claves. | **Actualmente validado y almacenado, pero no propagado a ningún artefacto generado.** Reservado para implementación futura. |
+| `dlq` | objeto | Identificación de la Dead Letter Queue. Ver tabla de sub-claves. | `dlq.routingKey` y `dlq.queueName` se propagan a las declaraciones de cola del lado consumidor en `{Bc}RabbitMQConfig.java`. |
+
+##### Sub-claves de `broker.retry`
+
+| Clave | Tipo | Descripción |
+|---|---|---|
+| `maxAttempts` | entero ≥ 1 | Número máximo de intentos (incluye el primero). |
+| `backoff` | `fixed` \| `exponential` | Estrategia de retardo entre reintentos. |
+| `initialMs` | entero ≥ 0 | Retardo inicial en milisegundos. |
+| `maxMs` | entero ≥ 0 | Retardo máximo en milisegundos (para backoff exponencial). |
+
+##### Sub-claves de `broker.dlq`
+
+| Clave | Tipo | Requerido | Descripción |
+|---|---|---|---|
+| `routingKey` | string | no | Routing key que el DLX usará para enrutar mensajes rechazados. Si se omite, el generador deriva el nombre por convención (`{queueKey}`). |
+| `queueName` | string | no | Nombre físico de la DLQ. Si se omite, se usa el valor de `routingKey`. |
+| `afterAttempts` | entero ≥ 1 | no | Número de intentos tras los cuales el mensaje se envía a la DLQ. Validado pero actualmente no propagado a artefactos generados. |
+
+#### Reglas de validación
 
 | Regla | Detalle |
 |---|---|
-| Un solo campo por evento | Si más de un campo tiene `partitionKey: true`, el generador emite `GEN-ERROR`. |
-| Tipos válidos | `Uuid`, `String`, `Integer`, `Long`. Otros tipos producen `GEN-WARN`. |
-| Solo Kafka | Si el broker seleccionado en build es RabbitMQ, `partitionKey: true` se ignora silenciosamente. |
-| DLQ por convención | Si no se declara `broker.dlq`, el nombre de la DLQ se deriva como `${queues.{queueKey}}.dlq` y el routing-key del DLX se usa como routing-key de la DLQ. |
-| Retry de publicación | Configurado en los archivos de entorno — no en el YAML del BC. |
-
-> ⚠️ Si un `{bc}.yaml` contiene un bloque `broker:` en `published[]`, el generador emite `GEN-ERROR: schema obsoleto — el bloque broker ya no existe; usar partitionKey: true en el campo del payload`.
+| Clave desconocida en `broker:` | `GEN-ERROR` — `broker` solo acepta: `partitionKey`, `headers`, `retry`, `dlq`. |
+| `broker.partitionKey` | Debe ser un string que coincida con un `name` declarado en `payload[]`. Si es de otro tipo → `GEN-ERROR`. Si no existe en payload → `GEN-ERROR`. |
+| `broker.headers` | Debe ser un mapa (no lista). Valores convertidos a string automáticamente. |
+| `broker.retry` | Solo acepta: `maxAttempts`, `backoff`, `initialMs`, `maxMs`. Cualquier otra clave → `GEN-ERROR`. |
+| `broker.dlq` | Solo acepta: `afterAttempts`, `routingKey`, `queueName`. Cualquier otra clave → `GEN-ERROR`. |
 
 ---
 
@@ -782,7 +845,6 @@ domainEvents:
           type: Uuid
           source: aggregate
           field: id
-          partitionKey: true
         - name: lines
           type: List[OrderLineSnapshot]   # ← coincide con el tipo de la propiedad del agregado
           source: aggregate
@@ -1374,7 +1436,6 @@ domainEvents:
           type: Uuid
           source: aggregate
           field: id
-          partitionKey: true     # clave de partición Kafka; ignorado en RabbitMQ
         - name: sku
           type: String(50)
           source: aggregate
@@ -1514,6 +1575,49 @@ esta convención; la build no se detiene pero el humano debe corregirlo.
 Cuando el build se ejecuta con `broker: rabbitmq` (declarado en `system.yaml`), el generador
 produce tres tipos de artefactos de configuración. Ninguno requiere declaración adicional en el
 `{bc}.yaml` — se derivan completamente de `domainEvents.published[]` y `domainEvents.consumed[]`.
+
+### Conceptos: DLX y DLQ
+
+**DLQ (Dead Letter Queue)** — Cola de mensajes muertos. Es una queue normal donde van a parar
+los mensajes que no pudieron ser procesados correctamente (errores de negocio, errores de
+deserialización, reintentos agotados). Sirve para inspección, re-procesamiento manual o archivado.
+
+**DLX (Dead Letter Exchange)** — Exchange enrutador de mensajes muertos. No es una queue — es
+un exchange intermedio. Cuando RabbitMQ decide que un mensaje "muere" (la queue lo rechaza con
+`requeue=false` o agota los reintentos), lo envía al DLX. El DLX lo enruta a la DLQ correcta
+usando una routing-key.
+
+```
+Producer
+   │
+   ▼
+Exchange principal  ──routing-key──▶  Queue normal
+                                           │
+                                    basicNack(requeue=false)
+                                    o max-attempts agotado
+                                           │
+                                           ▼
+                                       DLX Exchange  ──routing-key──▶  DLQ
+```
+
+**¿Por qué existe el DLX en lugar de ir directo a la DLQ?**
+El DLX permite flexibilidad de enrutamiento: el mismo DLX puede enrutar distintos tipos de
+mensajes muertos a DLQs diferentes según la routing-key. Si fuera directo queue → DLQ, cada
+queue solo podría tener una DLQ fija sin capacidad de distinguir.
+
+La vinculación se declara en la queue principal mediante el argumento AMQP:
+```java
+QueueBuilder.durable("inventory.order-placed")
+    .withArgument("x-dead-letter-exchange", "orders.events.dlx")       // ← apunta al DLX
+    .withArgument("x-dead-letter-routing-key", "order.placed.dead")    // ← opcional
+    .build();
+```
+Y la DLQ se enlaza al DLX:
+```java
+BindingBuilder.bind(dlqQueue).to(dlxExchange).with("order.placed.dead");
+```
+
+---
 
 ---
 
@@ -1863,3 +1967,255 @@ domainEvents:
 | `broker.dlq.queueName` | Nombre físico de la DLQ declarada. Si se omite, defaultea a `dlq.routingKey`. Si ambos se omiten, se usa `{queueName}.dlq` por convención. | `{ConsumerBc}RabbitMQConfig.java` |
 
 > `dlq.routingKey ≠ dlq.queueName` es el caso avanzado: permite que el DLX enrute con una routing-key específica a una queue con un nombre independiente (por ejemplo, una queue de archivo compartida por varios eventos).
+
+---
+
+## 6. Artefactos de infraestructura Kafka generados
+
+Cuando el build se ejecuta con `broker: kafka` (declarado en `system.yaml`), el generador
+produce los siguientes artefactos. Ninguno requiere declaración adicional en el `{bc}.yaml`
+más allá de `domainEvents.published[]` y `domainEvents.consumed[]`.
+
+> **Diferencia clave respecto a RabbitMQ:** Kafka **no** genera un archivo de configuración
+> de topología por BC (`{BcPascal}RabbitMQConfig.java` no tiene equivalente). Los topics se
+> declaran en un bloque `topics:` plano dentro del YAML de parámetros y Spring los crea
+> automáticamente vía `KafkaAdmin` al arrancar la aplicación.
+
+### 6.1 `parameters/{env}/kafka.yaml` — conexión y topics
+
+**Ruta:** `src/main/resources/parameters/{env}/kafka.yaml`  
+**Template:** `templates/base/resources/parameters/{env}/kafka.yaml.ejs`  
+**Generado:** una vez por proyecto, en los 4 entornos (`local`, `develop`, `test`, `production`).
+
+El generador re-renderiza este archivo en un segundo pase después de procesar todos los BCs,
+inyectando la topología completa de topics derivada de `buildKafkaTopology()`.
+
+#### Diferencias entre entornos
+
+| Entorno | `bootstrap-servers` |
+|---|---|
+| `local` | `localhost:9092` (hardcoded) |
+| `develop` | `${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}` (variable de entorno con fallback) |
+| `test` | `${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}` (variable de entorno con fallback) |
+| `production` | `${KAFKA_BOOTSTRAP_SERVERS}` (variable de entorno obligatoria, sin fallback) |
+
+#### Contenido generado (entorno `local` como referencia)
+
+```yaml
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: {artifactId}-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    listener:
+      ack-mode: manual_immediate
+
+topics:
+  # publicados — clave = {event-kebab}   valor = {bcName}.{event-kebab}
+  product-activated: catalog.product-activated
+
+  # consumidos — clave = {bcName}-{event-kebab}  valor = {producerBcName}.{event-kebab}
+  inventory-order-placed: orders.order-placed
+
+  # proyecciones persistentes — clave = {bcName}-projection-{projKebab}-{eventKebab}
+  catalog-projection-product-summary-product-activated: catalog.product-activated
+```
+
+#### Derivación de claves de topics (`buildKafkaTopology`)
+
+| Origen | Clave generada | Valor generado |
+|---|---|---|
+| `published[]` (scope ≠ `internal`) | `{event-kebab}` | `{bcName}.{event-kebab}` |
+| `published[]` con `channel` declarado | `{channel-último-segmento-kebab}` | valor del `channel` |
+| `consumed[]` | `{bcName}-{event-kebab}` o `consumed[].topicKey` si está declarado | `{producerBc}.{event-kebab}` (primer segmento de `consumed[].channel`) |
+| `projections[]` con `persistent: true` y `source.kind: event` | `{bcName}-projection-{projKebab}-{eventKebab}` | `{sourceBc}.{eventKebab}` |
+
+> `kafka-ui` en el docker-compose generado corre en el puerto **`8090`** del host
+> (`8090:8080`) para evitar conflicto con el puerto `8080` del propio servicio Spring Boot.
+
+> Los `@Value("${topics.{topicNameKebab}}")` en el adaptador `KafkaMessageBroker` y los
+> `@KafkaListener(topics = "${topics.{topicKey}}")` en los listeners resuelven sus valores
+> desde este archivo en tiempo de arranque.
+
+---
+
+### 6.2 `KafkaConfig.java` — beans compartidos
+
+**Ruta:** `src/main/java/{pkg}/shared/infrastructure/configurations/kafkaConfig/KafkaConfig.java`  
+**Template:** `templates/messaging/KafkaConfig.java.ejs`  
+**Generado:** una vez por proyecto (shared), condición: `config.broker === 'kafka'`.
+
+Declara los beans de infraestructura Kafka compartidos por todos los BCs:
+
+```java
+@Configuration
+public class KafkaConfig {
+
+    @Bean
+    public ProducerFactory<String, Object> kafkaProducerFactory(ObjectMapper objectMapper) { ... }
+
+    @Bean
+    public KafkaTemplate<String, Object> kafkaTemplate(ProducerFactory<String, Object> kafkaProducerFactory) { ... }
+
+    @Bean
+    public KafkaAdmin kafkaAdmin() { ... }
+}
+```
+
+| Bean | Tipo | Rol |
+|---|---|---|
+| `kafkaProducerFactory` | `DefaultKafkaProducerFactory<String, Object>` | Serializa valores con `JsonSerializer` (sin `@class` type info) |
+| `kafkaTemplate` | `KafkaTemplate<String, Object>` | Utilizado por todos los `{BcPascal}KafkaMessageBroker` |
+| `kafkaAdmin` | `KafkaAdmin` | Crea topics automáticamente al arrancar si `KafkaAdmin.autoCreate=true` |
+
+> Las definiciones de topics (`NewTopic` beans) **no** se declaran aquí. Se derivan del bloque
+> `topics:` en `kafka.yaml` — Spring Boot auto-crea los topics si el broker lo permite.
+
+---
+
+### 6.3 `{BcPascal}KafkaMessageBroker.java` — adaptador publicador
+
+**Ruta:** `src/main/java/{pkg}/{bc}/infrastructure/adapters/kafkaMessageBroker/{BcPascal}KafkaMessageBroker.java`  
+**Template:** `templates/messaging/KafkaMessageBroker.java.ejs`  
+**Generado:** una vez por BC, solo si el BC tiene eventos publicados con `scope ≠ internal`.
+
+Implementa el puerto de salida `MessageBroker` con un método `publish{EventName}()` por cada
+evento publicado con `publishToBroker: true`.
+
+```java
+@Component("catalogKafkaMessageBroker")
+public class CatalogKafkaMessageBroker implements MessageBroker {
+
+    @Value("${topics.product-activated}")
+    private String productActivatedTopic;
+
+    private final KafkaTemplate<String, Object> kafkaTemplate;
+
+    // Caso básico — sin partitionKey ni headers:
+    @Override
+    public void publishProductActivatedIntegrationEvent(ProductActivatedIntegrationEvent event) {
+        EventEnvelope<ProductActivatedIntegrationEvent> envelope = EventEnvelope.of(
+            productActivatedTopic, event, MDC.get("correlationId")
+        );
+        kafkaTemplate.send(productActivatedTopic, envelope);
+    }
+
+    // Caso con broker.partitionKey: productId — la partition key es el valor del campo:
+    @Override
+    public void publishOrderPlacedIntegrationEvent(OrderPlacedIntegrationEvent event) {
+        String partitionKey = String.valueOf(event.productId());   // derived_from: broker.partitionKey=productId
+        kafkaTemplate.send(orderPlacedTopic, partitionKey, envelope);
+    }
+
+    // Caso con broker.headers — se emite un ProducerRecord con cabeceras:
+    @Override
+    public void publishProductUpdatedIntegrationEvent(ProductUpdatedIntegrationEvent event) {
+        ProducerRecord<String, Object> record = new ProducerRecord<>(productUpdatedTopic, null, envelope);
+        record.headers().add(new RecordHeader("x-source-bc", "catalog".getBytes(StandardCharsets.UTF_8)));
+        kafkaTemplate.send(record);
+    }
+}
+```
+
+#### Lógica de publicación según hints de `broker:`
+
+| `broker` declarado | Llamada generada |
+|---|---|
+| Ninguno | `kafkaTemplate.send(topic, envelope)` |
+| Solo `partitionKey` | `kafkaTemplate.send(topic, partitionKey, envelope)` |
+| Solo `headers` | `kafkaTemplate.send(ProducerRecord)` con `record.headers().add(...)` |
+| `partitionKey` + `headers` | `ProducerRecord` con `key=partitionKey` + headers añadidos |
+
+> `broker.retry` y `broker.dlq` son validados pero **no tienen efecto** en este adaptador
+> para Kafka — no se genera ningún `RetryTemplate` ni configuración de DLQ. Están reservados
+> para una fase futura del generador.
+
+> **Limitación conocida (GAP-KAFKA-3):** Cuando `system.yaml` declara
+> `reliability.outbox: true` junto con `broker: kafka`, el `{BcPascal}DomainEventHandler`
+> generado usa `@Value("${exchanges.*}")` y `@Value("${routing-keys.*}")` — namespaces de
+> propiedades propios de RabbitMQ que **no existen en `kafka.yaml`**. El `OutboxRelay` Kafka
+> usa los fallbacks hardcoded, que apuntan a un exchange inexistente. La combinación
+> `outbox + kafka` produce código que compila pero falla al publicar mensajes en runtime.
+> Workaround: no usar `outbox: true` con `broker: kafka` hasta que este gap sea subsanado.
+
+---
+
+### 6.4 `{EventName}KafkaListener.java` — adaptador consumidor
+
+**Ruta:** `src/main/java/{pkg}/{bc}/infrastructure/kafkaListener/{EventName}KafkaListener.java`  
+**Template:** `templates/messaging/KafkaListener.java.ejs`  
+**Generado:** uno por evento consumido que tenga un use case con `trigger.kind: event`.
+
+```java
+@Component("catalog.ProductActivatedKafkaListener")
+public class ProductActivatedKafkaListener {
+
+    @KafkaListener(topics = "${topics.catalog-product-activated}", groupId = "${spring.kafka.consumer.group-id}")
+    public void handle(ConsumerRecord<String, String> record, Acknowledgment acknowledgment) {
+        EventEnvelope<Map<String, Object>> event = objectMapper.readValue(
+            record.value(), new TypeReference<EventEnvelope<Map<String, Object>>>() {});
+
+        // extracción de campos del payload:
+        UUID productId = objectMapper.convertValue(event.data().get("productId"), UUID.class);
+        String name    = objectMapper.convertValue(event.data().get("name"),      String.class);
+
+        useCaseMediator.dispatch(new ActivateProductCommand(productId, name));
+        acknowledgment.acknowledge();
+    }
+}
+```
+
+#### Clave de topic en el listener
+
+La clave `${topics.{topicKey}}` se resuelve así (en orden de precedencia):
+
+1. `consumed[].topicKey` — si está declarado explícitamente en el YAML.
+2. `{bcName}-{event-kebab}` — derivado automáticamente (e.g. `catalog-product-activated`).
+
+#### Idempotencia y sagas (condicional)
+
+| Condición YAML | Código añadido |
+|---|---|
+| `system.yaml` → `reliability.consumerIdempotency: true` | Inyecta `IdempotencyGuard`; verifica `eventId` antes de despachar |
+| El evento participa en una saga declarada en `system.yaml` | Añade `@SagaStep(...)` + propaga `correlationId` vía `CorrelationContext` |
+
+---
+
+### 6.5 Archivos comunes con RabbitMQ
+
+Los siguientes artefactos se generan **de forma idéntica** independientemente del broker
+seleccionado (Kafka o RabbitMQ):
+
+| Archivo | Ruta | Template |
+|---|---|---|
+| `{EventName}Event.java` | `{bc}/domain/events/` | `messaging/DomainEvent.java.ejs` |
+| `{EventName}IntegrationEvent.java` | `{bc}/application/events/` | `messaging/IntegrationEvent.java.ejs` |
+| `MessageBroker.java` | `{bc}/application/ports/` | `messaging/MessageBroker.java.ejs` |
+| `{BcPascal}DomainEventHandler.java` | `{bc}/application/usecases/` | `messaging/DomainEventHandler.java.ejs` |
+
+> `MessageBroker.java` incluye en su Javadoc la frase  
+> _"Implementations live in infrastructure/adapters/rabbitmqMessageBroker/."_  
+> Esto es un artefacto residual del template. El comentario es cosmético; el bean activo en
+> runtime es siempre el que coincide con el broker configurado en `system.yaml`.
+
+---
+
+### Resumen de artefactos Kafka por tipo de elemento YAML
+
+| Elemento en `{bc}.yaml` | Archivo generado | Condición |
+|---|---|---|
+| `domainEvents.published[]` (scope ≠ `internal`) | `{EventName}Event.java` | Siempre |
+| `domainEvents.published[]` (scope ≠ `internal`) | `{EventName}IntegrationEvent.java` | Siempre |
+| Al menos un evento publicado con `publishToBroker: true` | `MessageBroker.java` (puerto) | Una vez por BC |
+| Al menos un evento publicado con `publishToBroker: true` | `{BcPascal}DomainEventHandler.java` | Una vez por BC |
+| Al menos un evento publicado con `publishToBroker: true` | `{BcPascal}KafkaMessageBroker.java` | Una vez por BC |
+| `domainEvents.consumed[]` + use case `trigger.kind: event` | `{EventName}KafkaListener.java` | Uno por evento consumido con UC |
+| Primer BC procesado (shared) | `KafkaConfig.java` | Una vez por proyecto |
+| Todos los BCs procesados (shared) | `parameters/{env}/kafka.yaml` (×4 entornos) | Una vez por proyecto |
+
