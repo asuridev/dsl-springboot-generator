@@ -29,7 +29,53 @@ function deriveErrorTypeLocal(code) {
 
 // ─── Helper: resolve Java type for a param name ───────────────────────────────
 function resolveParamType(paramName, aggregateProps, childEntities, typeHint, bcYaml) {
-  // 1. Match against aggregate properties
+  // 1. Explicit typeHint declared in YAML always wins — prevents aggregate property
+  //    inference from overriding an intentionally declared param type (e.g. a param
+  //    named "lines" with type "List[OrderLineSnapshot]" when the aggregate has a
+  //    property also named "lines" with type "List[OrderLine]").
+  if (typeHint) {
+    // 1a. List[X] — resolve inner type then wrap in List<>
+    if (isListType(typeHint)) {
+      const innerRaw = getListElementType(typeHint);
+      let innerJavaType;
+      if (bcYaml) {
+        if ((bcYaml.valueObjects || []).some((vo) => vo.name === innerRaw)) {
+          innerJavaType = innerRaw;
+        } else {
+          const enumMatch = /^Enum<(.+)>$/.exec(innerRaw);
+          const resolvedEnum = enumMatch ? enumMatch[1] : innerRaw;
+          if ((bcYaml.enums || []).some((e) => e.name === resolvedEnum)) {
+            innerJavaType = resolvedEnum;
+          }
+        }
+      }
+      if (!innerJavaType) {
+        try {
+          innerJavaType = mapType(innerRaw, {}).javaType;
+        } catch (_) {
+          innerJavaType = innerRaw; // pass through as domain type
+        }
+      }
+      return `List<${innerJavaType}>`;
+    }
+
+    // 1b. Known VO or enum in the BC
+    if (bcYaml) {
+      if ((bcYaml.valueObjects || []).some((vo) => vo.name === typeHint)) return typeHint;
+      const enumMatch = /^Enum<(.+)>$/.exec(typeHint);
+      const resolvedEnum = enumMatch ? enumMatch[1] : typeHint;
+      if ((bcYaml.enums || []).some((e) => e.name === resolvedEnum)) return resolvedEnum;
+    }
+
+    // 1c. Canonical / scalar type
+    try {
+      return mapType(typeHint, {}).javaType;
+    } catch (_) {
+      return typeHint; // pass through as domain type
+    }
+  }
+
+  // 2. Infer from aggregate properties (fallback when no typeHint)
   const aggrProp = (aggregateProps || []).find((p) => p.name === paramName);
   if (aggrProp) {
     try {
@@ -39,7 +85,7 @@ function resolveParamType(paramName, aggregateProps, childEntities, typeHint, bc
     }
   }
 
-  // 2. Match against child entity properties
+  // 3. Infer from child entity properties
   for (const entity of childEntities || []) {
     const entProp = (entity.properties || []).find((p) => p.name === paramName);
     if (entProp) {
@@ -48,22 +94,6 @@ function resolveParamType(paramName, aggregateProps, childEntities, typeHint, bc
       } catch (_) {
         return 'Object';
       }
-    }
-  }
-
-  // 3. Use inline type hint from method signature (e.g. "imageId: Uuid")
-  if (typeHint) {
-    // Check if it's a known value object or enum in the BC
-    if (bcYaml) {
-      if ((bcYaml.valueObjects || []).some((vo) => vo.name === typeHint)) return typeHint;
-      const enumMatch = /^Enum<(.+)>$/.exec(typeHint);
-      const resolvedEnum = enumMatch ? enumMatch[1] : typeHint;
-      if ((bcYaml.enums || []).some((e) => e.name === resolvedEnum)) return resolvedEnum;
-    }
-    try {
-      return mapType(typeHint, {}).javaType;
-    } catch (_) {
-      return typeHint; // pass through as domain type
     }
   }
 
@@ -531,6 +561,25 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
     for (const param of method.params || []) {
       const jt = param.javaType;
       if (jt === 'UUID') continue; // already imported
+
+      // List<X> — add java.util.List and resolve the inner type's import
+      const listInnerMatch = /^List<(.+)>$/.exec(jt);
+      if (listInnerMatch) {
+        imports.add('import java.util.List;');
+        const inner = listInnerMatch[1];
+        if (isValueObjectType(inner, bcYaml)) {
+          imports.add(`import ${pkg}.${bc}.domain.valueobject.${inner};`);
+        } else if (isEnumType(inner, bcYaml)) {
+          imports.add(`import ${pkg}.${bc}.domain.enums.${inner};`);
+        } else {
+          try {
+            const mapped = mapType(inner, {});
+            if (mapped.importHint) imports.add(`import ${mapped.importHint};`);
+          } catch (_) { /* skip unknown inner type */ }
+        }
+        continue;
+      }
+
       if (jt === 'Instant') {
         imports.add('import java.time.Instant;');
       } else if (jt === 'URI') {

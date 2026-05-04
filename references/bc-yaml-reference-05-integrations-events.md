@@ -355,6 +355,7 @@ domainEvents:
 | `scope` | `internal` \| `integration` \| `both` | no | Determina qué capas reciben el evento. `internal`: solo dentro del BC. `integration`: solo hacia el broker. `both`: ambas. **Default: `both`** cuando se omite. |
 | `channel` | string | no (recomendado) | Canal del broker. Convención: `{bc}.{kebab-event-name-con-puntos}`. Ej: `catalog.product.activated`. Validación INT-018 compara con AsyncAPI. |
 | `payload` | lista | ✅ | Campos del evento. Ver §2.2. |
+| `allowHiddenLeak` | boolean | no | Si `true`, autoriza que el payload exponga campos marcados `hidden: true` en el agregado (INT-021). Se declara **a nivel del evento**, no en campos individuales. Default: `false`. |
 
 ---
 
@@ -391,13 +392,15 @@ payload:
     type: Decimal
     source: derived             # generador emite TODO null — lógica computada
 
-  # Campo oculto — solo válido con allowHiddenLeak: true
+  # Campo oculto — requiere allowHiddenLeak: true a nivel del EVENTO (no del campo)
   - name: internalCostBasis
     type: Decimal
     source: aggregate
     field: costBasis            # campo marcado hidden: true en el agregado
-    allowHiddenLeak: true       # INT-021: autoriza explícitamente exponer el campo
 ```
+
+> **`allowHiddenLeak`** se declara a nivel del **evento** (`published[]`), no en el campo individual.
+> Ver §2.1 propiedades de `published`.
 
 #### Propiedades de un campo de payload
 
@@ -409,7 +412,6 @@ payload:
 | `field` | camelCase | ✅ si `source: aggregate` | Nombre de la propiedad del agregado. Debe existir en `aggregates[].properties`. |
 | `value` | literal | ✅ si `source: constant` | Valor constante a emitir. Si se omite, el generador emite `null /* TODO */`. |
 | `partitionKey` | boolean | no | Si `true`, este campo actúa como clave de partición Kafka. Solo un campo por evento puede tenerlo. Ignorado en RabbitMQ. |
-| `allowHiddenLeak` | boolean | no | Si `true`, permite exponer en el evento un campo marcado `hidden: true` en el agregado (INT-021). Default: `false`. |
 
 #### Valores de `source`
 
@@ -418,7 +420,7 @@ payload:
 | `aggregate` | `this.get{Field}()` | El valor proviene directamente del estado del agregado. |
 | `timestamp` | `Instant.now()` | Marca temporal del momento en que ocurre el evento. |
 | `auth-context` | ❌ **No permitido** — la build falla con INT-025 | No es un origen válido en el payload de un evento. El agregado es agnóstico a la seguridad. Declarar el campo como `source: param`, añadirlo a `domainMethods[].params`, y resolver `SecurityContext` en el handler. |
-| `param` | parámetro adicional en la firma de `raise()` | Un valor que se pasa explícitamente al método. Ej: `reason`, `notes`. Requiere que el parámetro exista en la firma del método del agregado. |
+| `param` | parámetro adicional en la firma de `raise()` | Un valor que se pasa explícitamente al método. Ej: `reason`, `notes`. **El parámetro debe existir en `domainMethods[].params[]` del método que emite el evento** — si no, la build falla con INT-026. Usar `param:` para especificar un nombre de parámetro distinto al nombre del campo. |
 | `constant` | valor literal del campo `value` en el payload | Valores fijos. **Requiere declarar `value:` en el campo del payload** (ej: `value: "1"`). Si `value` está ausente, el generador emite un TODO con null. |
 | `derived` | `null /* TODO: source=derived — implement in aggregate */` | El valor se **calcula dentro del propio agregado** a partir de su estado interno, pero la fórmula es lógica de negocio que el generador no puede inferir del YAML. El generador reserva el hueco con `null` y un TODO. La implementación queda para Fase 3 **dentro del método del agregado**. ⚠️ Si el cálculo requiere consultar una fuente externa (otra entidad, proyección, servicio), usar `source: param` en su lugar — el handler hace la consulta y pasa el resultado como argumento. |
 
@@ -712,6 +714,212 @@ payload:
 
 ---
 
+### 2.3b Tipos complejos en el payload — Value Objects y snapshots
+
+El payload de un evento no está limitado a tipos escalares. El generador soporta
+**Value Objects declarados en `valueObjects[]` del mismo BC** y **listas de VOs** como
+campos del payload.
+
+#### Comportamiento verificado del generador
+
+| Tipo en YAML | Java generado | Import generado |
+|---|---|---|
+| `Uuid`, `String`, `Integer`, etc. | tipo Java escalar | según `type-mapper.js` |
+| `Money` | `Money` | `{pkg}.{bc}.domain.valueobject.Money` |
+| `OrderLineSnapshot` (VO del BC) | `OrderLineSnapshot` | `{pkg}.{bc}.domain.valueobject.OrderLineSnapshot` |
+| `List[OrderLineSnapshot]` | `List<OrderLineSnapshot>` | `java.util.List` + import del VO |
+| `List[String]` | `List<String>` | `java.util.List` |
+
+Fuente: `javaTypeForEventField()` en [messaging-generator.js](../src/generators/messaging-generator.js).
+El set `voNames` se construye de `bcYaml.valueObjects` del mismo BC productor (línea 738).
+Tipos desconocidos que no son enum ni VO declarado producen error en `value-object-generator.js`.
+
+#### Patrón: Event-Carried State Transfer con snapshots
+
+Un **snapshot** es un VO inmutable que captura el estado de una entidad **en el momento
+exacto del evento**. Permite que los BC consumidores sean autónomos: reciben todos los
+datos necesarios sin tener que consultar al BC productor.
+
+```yaml
+# En orders.yaml — BC productor
+# REQUISITO: el agregado debe almacenar la propiedad con el mismo tipo VO.
+# source: aggregate emite this.getLines() sin transformación — los tipos deben coincidir.
+
+valueObjects:
+  - name: OrderLineSnapshot
+    immutable: true
+    properties:
+      - name: productId
+        type: Uuid
+      - name: sku
+        type: String(50)
+      - name: quantity
+        type: Integer
+      - name: unitPrice
+        type: Money
+
+aggregates:
+  - name: Order
+    properties:
+      - name: lines
+        type: List[OrderLineSnapshot]   # ← el agregado guarda el VO directamente,
+                                        #   NO List[OrderLine] (entidad mutable)
+    domainMethods:
+      - name: place
+        emits: OrderPlaced
+
+domainEvents:
+  published:
+    - name: OrderPlaced
+      scope: integration
+      channel: orders.order.placed
+      payload:
+        - name: orderId
+          type: Uuid
+          source: aggregate
+          field: id
+          partitionKey: true
+        - name: lines
+          type: List[OrderLineSnapshot]   # ← coincide con el tipo de la propiedad del agregado
+          source: aggregate
+          field: lines                    # generador emite: this.getLines() → List<OrderLineSnapshot> ✅
+        - name: placedAt
+          type: DateTime
+          source: timestamp
+```
+
+> ⚠️ Si el agregado guarda `lines: List[OrderLine]` (entidad con comportamiento) en lugar de
+> `List[OrderLineSnapshot]`, los tipos no coinciden y el código no compila. En ese caso usar
+> `source: param` — ver sección "Patrón de conversión entidad → snapshot" más abajo.
+
+**Java generado:**
+
+```java
+// OrderPlacedEvent.java
+public record OrderPlacedEvent(
+    EventMetadata metadata,
+    UUID orderId,
+    List<OrderLineSnapshot> lines,   // ← import: java.util.List + OrderLineSnapshot
+    Instant placedAt
+) implements DomainEvent {}
+```
+
+```java
+// En Order.java — this.getLines() devuelve List<OrderLineSnapshot> porque el agregado
+// almacena ese tipo directamente. El generador no hace ninguna transformación.
+public void place() {
+    // derived_from: domainEvents.published.OrderPlaced
+    raise(new OrderPlacedEvent(
+        EventMetadata.now("OrderPlaced", 1, "orders"),
+        this.getId(),         // source: aggregate, field: id
+        this.getLines(),      // source: aggregate, field: lines — List<OrderLineSnapshot> ✅
+        Instant.now()         // source: timestamp
+    ));
+}
+```
+
+#### Restricciones verificadas
+
+| Restricción | Detalle |
+|---|---|
+| **El VO debe estar en el mismo BC** | `voNames` se construye de `bcYaml.valueObjects[]` del BC productor. Un tipo de otro BC no es resolvible — el generador lo trata como tipo de dominio desconocido y falla. |
+| **`source: aggregate` solo cuando los tipos coinciden** | Usar `source: aggregate` únicamente si el agregado ya almacena el VO snapshot directamente (`lines: List[OrderLineSnapshot]`). El generador emite `this.getLines()` sin transformación. Si el tipo del agregado es diferente (`List[OrderLine]`), usar `source: param`. |
+| **`source: param` para conversiones entidad → snapshot** | Si el agregado guarda entidades mutables y el evento necesita snapshots, declarar el campo como `source: param` en el evento y como parámetro en `domainMethods[].params[]`. El handler construye los snapshots y los pasa al método del dominio. El agregado los recibe como parámetros ordinarios sin saber cómo se construyeron. Ver patrón completo más abajo. |
+| **`typeHint` explícito en params gana sobre inferencia** | Si `domainMethods[].params[]` declara `type: List[OrderLineSnapshot]`, ese tipo se usa para la firma del método aunque el agregado tenga una propiedad con el mismo nombre y distinto tipo. El generador resuelve el `typeHint` del YAML primero. |
+| **INT-020 no valida estructura del VO** | La validación cruzada solo compara nombres de campos del payload — no entra dentro de la estructura del VO. El BC consumidor puede declarar el mismo tipo en su propio `valueObjects[]` para deserializar con estructura, o tratarlo como `Map<String, Object>` en el listener. |
+
+#### Patrón de conversión entidad → snapshot (Fase 3)
+
+Cuando el agregado guarda `List[OrderLine]` (entidades con comportamiento) pero el evento
+necesita `List[OrderLineSnapshot]` (VOs inmutables para el wire), el agregado **no debe
+hacer esa conversión** — es responsabilidad de presentación. El patrón correcto:
+
+```yaml
+aggregates:
+  - name: Order
+    properties:
+      - name: lines
+        type: List[OrderLine]         # ← entidad mutable con comportamiento de dominio
+    domainMethods:
+      - name: place
+        params:
+          - name: lines
+            type: List[OrderLineSnapshot]   # ← typeHint explícito; gana sobre la prop del agregado
+        emits: OrderPlaced
+
+domainEvents:
+  published:
+    - name: OrderPlaced
+      payload:
+        - name: lines
+          type: List[OrderLineSnapshot]
+          source: param               # ← el handler construye los snapshots y los pasa
+```
+
+**Java generado — el agregado recibe el snapshot como parámetro, no lo construye:**
+
+```java
+// Order.java — firma correcta gracias al typeHint en domainMethods.params
+public void place(List<OrderLineSnapshot> lines) {
+    // derived_from: domainEvents.published.OrderPlaced
+    raise(new OrderPlacedEvent(
+        EventMetadata.now("OrderPlaced", 1, "orders"),
+        this.getId(),
+        lines          // source: param — viene del handler
+    ));
+}
+```
+
+```java
+// PlaceOrderCommandHandler.java — generado con implementation: scaffold
+// El código compila desde el inicio; Fase 3 reemplaza el cuerpo
+@Override
+@Transactional
+public void execute(PlaceOrderCommand command) {
+    // TODO: implement business logic — ver orders-flows.md
+    throw new UnsupportedOperationException("Not implemented yet");
+}
+```
+
+**Fase 3 — el handler implementa la conversión y el código ya compilaba:**
+
+```java
+// PlaceOrderCommandHandler.java — implementado en Fase 3
+@Override
+@Transactional
+public void execute(PlaceOrderCommand command) {
+    Order order = orderRepository.findById(UUID.fromString(command.orderId()))
+        .orElseThrow(OrderNotFoundError::new);
+
+    // El handler convierte entidades → snapshots; el agregado no sabe nada de esto
+    List<OrderLineSnapshot> snapshots = order.getLines().stream()
+        .map(line -> new OrderLineSnapshot(
+            line.getProductId(),
+            line.getSku(),
+            line.getQuantity(),
+            line.getUnitPrice()
+        ))
+        .toList();
+
+    order.place(snapshots);
+    orderRepository.save(order);
+}
+```
+
+> **Regla:** el agregado nunca construye snapshots de sus propias entidades hijas.
+> Eso es lógica de presentación/serialización que pertenece al handler.
+> El agregado solo recibe el snapshot como parámetro y lo pasa al `raise()`.
+
+#### Cuándo usar snapshot vs referencia
+
+| Patrón | Cuándo usarlo |
+|---|---|
+| **Snapshot** (`List[OrderLineSnapshot]`) | El consumidor necesita los datos ahora, sin consultar al productor. Los datos son relevantes en el momento del evento (precio de compra, no precio actual). |
+| **Referencia** (`orderId: Uuid`) | El consumidor puede y debe consultar el estado actual. Los datos cambian y la lectura tardía es correcta. |
+| **Datos escalares planos** | El evento es una notificación delgada; el consumidor decide si necesita más datos. |
+
+---
+
 ### 2.4 Eventos consumidos (`domainEvents.consumed`)
 
 Declara los eventos que este BC recibe del broker y cómo procesa su payload.
@@ -859,6 +1067,7 @@ detiene.
 | **INT-023** | error | Campo dentro de `externalSystems[].schemas[schemaName]` con tipo que no es escalar ni referencia a otro schema del mismo sistema externo. |
 | **INT-024** | error | `auth.type` con valor desconocido. Valores válidos: `api-key`, `bearer`, `oauth2-cc`, `mTLS`, `internal-jwt`, `none`. |
 | **INT-025** | error | Un campo de `domainEvents.published[].payload[]` declara `source: auth-context`. Este origen no está permitido en el payload de eventos: el agregado debe ser agnóstico a la seguridad. Declarar el campo como `source: param`, añadirlo a `domainMethods[].params` y resolver el valor de `SecurityContext` en el handler de aplicación. |
+| **INT-026** | error | Un campo de `domainEvents.published[].payload[]` declara `source: param` pero ningún `domainMethod` que emita ese evento declara un parámetro con el nombre referenciado (`param:` o `name:`). El generador emitiría `null` silenciosamente en el evento publicado, causando pérdida de datos en runtime. Añadir el parámetro a `domainMethods[].params[]` o corregir el nombre. |
 
 ---
 

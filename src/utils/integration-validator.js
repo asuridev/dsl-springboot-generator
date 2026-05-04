@@ -990,6 +990,47 @@ function checkHiddenFieldLeak(bcYamls, _bcIndex, diagnostics) {
   }
 }
 
+function checkEventParamSourceCoverage(bcYamls, diagnostics) {
+  // INT-026 — every payload field with source: param must correspond to a param
+  // declared in at least one domainMethod that emits that event.
+  // If the field is missing from all emitting method signatures, the generator
+  // silently emits null in the raised event, which causes a runtime data loss bug.
+  for (const bc of bcYamls) {
+    // Build map: eventName → Set<paramName> collected from all domainMethods that emit it.
+    const eventParamNames = new Map();
+    for (const agg of bc.aggregates || []) {
+      for (const dm of agg.domainMethods || []) {
+        const paramNames = new Set((dm.params || []).map((p) => p.name).filter(Boolean));
+        for (const evName of dm.emitsList || []) {
+          if (!eventParamNames.has(evName)) eventParamNames.set(evName, new Set());
+          for (const n of paramNames) eventParamNames.get(evName).add(n);
+        }
+      }
+    }
+
+    const published = ((bc.domainEvents || {}).published) || [];
+    for (let i = 0; i < published.length; i++) {
+      const ev = published[i];
+      const paramNames = eventParamNames.get(ev.name) || new Set();
+      for (let p = 0; p < (ev.payload || []).length; p++) {
+        const f = ev.payload[p];
+        if (!f || f.source !== 'param') continue;
+        const pname = f.param || f.name;
+        if (!paramNames.has(pname)) {
+          diagnostics.push({
+            code: 'INT-026',
+            level: 'error',
+            message: `Event "${ev.name}" payload field "${f.name}" declares source: param (resolving to param "${pname}"), ` +
+              `but no domainMethod that emits "${ev.name}" declares a param named "${pname}". ` +
+              `Add the param to domainMethods[].params[] or fix the param/field name.`,
+            location: `${bc.bc}.yaml#/domainEvents/published[${i}]/payload[${p}]`,
+          });
+        }
+      }
+    }
+  }
+}
+
 /**
  * Ejecuta todas las reglas de validación de integraciones.
  *
@@ -1019,6 +1060,7 @@ function validateIntegrationCoherence(system, bcYamls, archDir, asyncApiByBc) {
   }
   checkHiddenFieldLeak(bcYamls, bcIndex, diagnostics);
   checkAuthContextInEventPayload(bcYamls, diagnostics);
+  checkEventParamSourceCoverage(bcYamls, diagnostics);
 
   return diagnostics;
 }
