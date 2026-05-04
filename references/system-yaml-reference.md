@@ -934,7 +934,7 @@ si activar el outbox transaccional y la idempotencia de consumidores.
 
 ```yaml
 infrastructure:
-  messageBroker: rabbitmq    # o: kafka
+  messageBroker: true    # flag: el sistema usa mensajería asíncrona
   reliability:
     outbox: true
     consumerIdempotency: true
@@ -944,26 +944,26 @@ infrastructure:
 
 | Valor | Descripción |
 |---|---|
-| `rabbitmq` | Genera dependencia `spring-boot-starter-amqp`, configuración AMQP, publishers/consumers RabbitMQ. |
-| `kafka` | Genera dependencia `spring-kafka`, configuración Kafka, producers/consumers Kafka. |
-| (ausente) | No se genera infraestructura de mensajería. Los use cases con `trigger.kind: event` generan un TODO. |
+| `true` | El sistema usa mensajería asíncrona. El generador preguntará qué broker usar (RabbitMQ / Kafka) vía CLI al ejecutar `dsl-springboot build`. |
+| (ausente o `false`) | No se genera infraestructura de mensajería. Los use cases con `trigger.kind: event` generan un TODO. |
 
-**Problema que resuelve:** el sistema puede cambiar de broker sin tocar ningún BC YAML.
-La decisión de infraestructura vive en `system.yaml` y el generador abstrae las diferencias.
+> **Principio de agnosticismo:** `system.yaml` es un artefacto de **diseño**, no de infraestructura.
+> La tecnología concreta del broker (RabbitMQ, Kafka, etc.) se elige en la Fase 2 mediante
+> la opción `--broker` del CLI o el prompt interactivo. No se nombra el broker en el YAML de diseño.
 
-**`build.gradle` generado con `messageBroker: rabbitmq`:**
+**`build.gradle` generado con broker `rabbitmq` (elegido en CLI):**
 ```groovy
 implementation 'org.springframework.boot:spring-boot-starter-amqp'
 testImplementation 'org.springframework.amqp:spring-rabbit-test'
 ```
 
-**`build.gradle` generado con `messageBroker: kafka`:**
+**`build.gradle` generado con broker `kafka` (elegido en CLI):**
 ```groovy
 implementation 'org.springframework.kafka:spring-kafka'
 testImplementation 'org.springframework.kafka:spring-kafka-test'
 ```
 
-**`application.yaml` generado con `messageBroker: rabbitmq`** (fragmento, perfil local):
+**`application.yaml` generado con broker `rabbitmq`** (fragmento, perfil local):
 ```yaml
 spring:
   rabbitmq:
@@ -1359,7 +1359,7 @@ integrations:
     notes: ACL isolates domain from gateway model.
 
 infrastructure:
-  messageBroker: rabbitmq
+  messageBroker: true    # flag: el sistema usa mensajería asíncrona
   reliability:
     outbox: true
     consumerIdempotency: true
