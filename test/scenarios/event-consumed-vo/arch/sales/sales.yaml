@@ -1,0 +1,53 @@
+bc: sales
+version: "1.0.0"
+
+valueObjects:
+  - name: OrderLineSnapshot
+    properties:
+      - name: productId
+        type: Uuid
+      - name: quantity
+        type: Integer
+      - name: unitPrice
+        type: Decimal
+        precision: 10
+        scale: 2
+
+aggregates:
+  - name: SalesOrder
+    root: SalesOrder
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: buyerId
+        type: Uuid
+      - name: status
+        type: String
+    domainMethods:
+      - name: place
+        params:
+          - name: lines
+            type: List[OrderLineSnapshot]
+        emits:
+          - OrderPlaced
+
+domainEvents:
+  published:
+    - name: OrderPlaced
+      scope: integration
+      channel: sales.order.placed
+      payload:
+        - name: orderId
+          type: Uuid
+          source: aggregate
+          field: id
+        - name: buyerId
+          type: Uuid
+          source: aggregate
+          field: buyerId
+        - name: lines
+          type: List[OrderLineSnapshot]
+          source: param

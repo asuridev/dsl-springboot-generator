@@ -1,0 +1,63 @@
+bc: ordering
+version: "1.0.0"
+
+# eventDtos: types from external BC event payloads — generated as Java records
+# in application/dtos/incoming/ (not domain/valueobject/).
+eventDtos:
+  - name: OrderLineSnapshot
+    sourceBc: sales
+    properties:
+      - name: productId
+        type: Uuid
+      - name: quantity
+        type: Integer
+      - name: unitPrice
+        type: Decimal
+        precision: 10
+        scale: 2
+
+aggregates:
+  - name: OrderRecord
+    root: OrderRecord
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: buyerId
+        type: Uuid
+      - name: status
+        type: String
+    domainMethods:
+      - name: process
+        params:
+          - name: lines
+            type: List[OrderLineSnapshot]
+
+useCases:
+  - id: process-placed-order
+    name: ProcessPlacedOrder
+    type: command
+    aggregate: OrderRecord
+    trigger:
+      kind: event
+      event: OrderPlaced
+    input:
+      - name: lines
+        type: List[OrderLineSnapshot]
+        source: body
+    method: process
+    implementation: scaffold
+
+domainEvents:
+  consumed:
+    - name: OrderPlaced
+      channel: sales.order.placed
+      payload:
+        - name: orderId
+          type: Uuid
+        - name: buyerId
+          type: Uuid
+        - name: lines
+          type: List[OrderLineSnapshot]

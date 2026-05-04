@@ -569,6 +569,8 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
         const inner = listInnerMatch[1];
         if (isValueObjectType(inner, bcYaml)) {
           imports.add(`import ${pkg}.${bc}.domain.valueobject.${inner};`);
+        } else if ((bcYaml.eventDtos || []).some((d) => d.name === inner)) {
+          imports.add(`import ${pkg}.${bc}.application.dtos.incoming.${inner};`);
         } else if (isEnumType(inner, bcYaml)) {
           imports.add(`import ${pkg}.${bc}.domain.enums.${inner};`);
         } else {
@@ -590,6 +592,8 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
         imports.add('import java.time.LocalDate;');
       } else if (isValueObjectType(jt, bcYaml)) {
         imports.add(`import ${pkg}.${bc}.domain.valueobject.${jt};`);
+      } else if ((bcYaml.eventDtos || []).some((d) => d.name === jt)) {
+        imports.add(`import ${pkg}.${bc}.application.dtos.incoming.${jt};`);
       } else if (isEnumType(jt, bcYaml)) {
         imports.add(`import ${pkg}.${bc}.domain.enums.${jt};`);
       }

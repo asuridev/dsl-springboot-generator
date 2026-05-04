@@ -323,4 +323,116 @@ async function generateValueObjects(bcYaml, config, outputDir) {
   }
 }
 
-module.exports = { generateValueObjects };
+// ─── Event DTO generator ──────────────────────────────────────────────────────
+
+/**
+ * Resolves the Java type for a single eventDtos[].properties[] entry.
+ * Accumulates necessary import statements into the provided Set.
+ *
+ * Resolution order:
+ *  1. List[T] — recursive
+ *  2. Canonical types (via mapType) — Money/isValueObject → domain.valueobject import
+ *  3. Enum<X> wrapper or declared enum
+ *  4. Other eventDto in this BC (same package — no import)
+ *  5. VO from this BC (domain.valueobject import)
+ */
+function resolveEventDtoPropType(prop, bcYaml, config, imports, dtoName) {
+  const type = prop.type || '';
+  const pkg = config.packageName;
+  const bc = bcYaml.bc;
+
+  // 1. List[T]
+  const listMatch = /^List\[(.+)\]$/.exec(type);
+  if (listMatch) {
+    imports.add('import java.util.List;');
+    const inner = resolveEventDtoPropType({ ...prop, type: listMatch[1] }, bcYaml, config, imports, dtoName);
+    return `List<${inner}>`;
+  }
+
+  // 2. Canonical types
+  const head = type.replace(/\(.*\)/, '');
+  if (CANONICAL_TYPES.has(head)) {
+    const mapped = mapType(type, prop);
+    let importHint = mapped.importHint;
+    // Money and other VOs that mapType returns with importHint: null
+    if (!importHint && mapped.isValueObject) {
+      importHint = `${pkg}.${bc}.domain.valueobject.${mapped.javaType}`;
+    }
+    if (importHint) imports.add(`import ${importHint};`);
+    return mapped.javaType;
+  }
+
+  // 3. Enum<X> wrapper
+  const enumWrap = /^Enum<(.+)>$/.exec(type);
+  if (enumWrap) {
+    const enumName = enumWrap[1];
+    imports.add(`import ${pkg}.${bc}.domain.enums.${enumName};`);
+    return enumName;
+  }
+
+  // 3b. Declared enum
+  if (isEnumName(type, bcYaml)) {
+    imports.add(`import ${pkg}.${bc}.domain.enums.${type};`);
+    return type;
+  }
+
+  // 4. Other eventDto in this BC — same package, no import needed
+  if ((bcYaml.eventDtos || []).some((d) => d.name === type)) {
+    return type;
+  }
+
+  // 5. VO from this BC
+  if (isVoName(type, bcYaml)) {
+    imports.add(`import ${pkg}.${bc}.domain.valueobject.${type};`);
+    return type;
+  }
+
+  throw new Error(
+    `[value-object-generator] EventDto "${dtoName}" property "${prop.name}" type "${type}" cannot be resolved. ` +
+    `Declare it under enums[], valueObjects[], eventDtos[], or use a canonical type.`
+  );
+}
+
+/**
+ * Generates Java record classes for each entry in bcYaml.eventDtos[].
+ * Output: {bc}/application/dtos/incoming/{Name}.java
+ */
+async function generateEventDtos(bcYaml, config, outputDir) {
+  const eventDtos = bcYaml.eventDtos || [];
+  if (eventDtos.length === 0) return;
+
+  const bc = bcYaml.bc;
+  const packagePath = toPackagePath(config.packageName);
+  const dtoDir = path.join(
+    outputDir, 'src', 'main', 'java', packagePath, bc, 'application', 'dtos', 'incoming'
+  );
+
+  for (const dto of eventDtos) {
+    const imports = new Set();
+    const fields = [];
+
+    for (const prop of dto.properties || []) {
+      const javaType = resolveEventDtoPropType(prop, bcYaml, config, imports, dto.name);
+      fields.push({ name: prop.name, javaType });
+    }
+
+    const context = {
+      packageName: config.packageName,
+      bc,
+      name: dto.name,
+      sourceBc: dto.sourceBc || null,
+      traceTag: `eventDto:${dto.name}`,
+      imports: [...imports].sort(),
+      fields,
+    };
+
+    const destPath = path.join(dtoDir, `${dto.name}.java`);
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'application', 'EventDto.java.ejs'),
+      destPath,
+      context
+    );
+  }
+}
+
+module.exports = { generateValueObjects, generateEventDtos };

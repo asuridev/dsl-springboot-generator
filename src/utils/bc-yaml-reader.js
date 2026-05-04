@@ -1208,9 +1208,22 @@ function validate(doc, opts = {}) {
   }
 
   for (const ev of (doc.domainEvents || {}).consumed || []) {
-    const ctx = `domainEvents.consumed "${ev.name}"`;
-    validateRetry(ev.retry, ctx);
-    validateDlq(ev.dlq, ctx);
+    // consumed[].retry and consumed[].dlq are infrastructure config, not domain design.
+    // They are ignored by the generator — configure via system.yaml defaults or env files.
+    if (ev.retry != null) {
+      console.warn(
+        `[bc-yaml-reader] GEN-WARN: domainEvents.consumed "${ev.name}": "retry" is ignored ` +
+        `— messaging retry is infrastructure configuration, not domain design. ` +
+        `Remove this field and configure via system.yaml or environment files.`
+      );
+    }
+    if (ev.dlq != null) {
+      console.warn(
+        `[bc-yaml-reader] GEN-WARN: domainEvents.consumed "${ev.name}": "dlq" is ignored ` +
+        `— DLQ configuration is infrastructure, not domain design. ` +
+        `Remove this field and configure via system.yaml or environment files.`
+      );
+    }
   }
 
   // ── 4. readModel validation ────────────────────────────────────────────────

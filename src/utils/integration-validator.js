@@ -990,6 +990,52 @@ function checkHiddenFieldLeak(bcYamls, _bcIndex, diagnostics) {
   }
 }
 
+/**
+ * GEN-WARN: cada campo en consumed[].payload[] cuyo tipo no es escalar y no está
+ * declarado en valueObjects[] ni enums[] del BC consumidor producirá un import
+ * apuntando a una clase inexistente. El código no compilaría.
+ * El diseñador debe re-declarar el VO en valueObjects[] del BC consumidor (Option A).
+ */
+function checkConsumedPayloadTypes(bcYamls, diagnostics) {
+  // Tipos escalares que type-mapper.js resuelve sin necesidad de import de dominio
+  const SCALAR_TYPES = new Set([
+    'String', 'Integer', 'Long', 'Double', 'Float', 'Boolean', 'Decimal',
+    'BigDecimal', 'Uuid', 'DateTime', 'Date', 'LocalDate', 'LocalDateTime',
+    'Instant', 'ZonedDateTime', 'OffsetDateTime', 'LocalTime',
+    'Short', 'Byte', 'Character',
+  ]);
+
+  for (const bc of bcYamls) {
+    const bcName = bc.bc || bc.name || '?';
+    const voNames = new Set((bc.valueObjects || []).map((v) => v.name));
+    const enumNames = new Set((bc.enums || []).map((e) => e.name));
+    const eventDtoNames = new Set((bc.eventDtos || []).map((d) => d.name));
+
+    for (const ev of (bc.domainEvents || {}).consumed || []) {
+      for (const field of (ev.payload || [])) {
+        const rawType = field.type || '';
+        // Unwrap List[T] → T
+        const listMatch = /^List\[(.+)\]$/.exec(rawType);
+        const innerType = listMatch ? listMatch[1] : rawType;
+        // Strip parametrized types like String(200) → String
+        const baseType = innerType.replace(/\(.*\)/, '').trim();
+
+        if (!SCALAR_TYPES.has(baseType) && !voNames.has(baseType) && !enumNames.has(baseType) && !eventDtoNames.has(baseType)) {
+          diagnostics.push({
+            code: 'GEN-WARN-001',
+            level: 'warn',
+            message:
+              `BC "${bcName}" — consumed event "${ev.name}" payload field "${field.name}" ` +
+              `has type "${rawType}" which is not a scalar, enum, valueObject, nor eventDto declared in this BC. ` +
+              `If this is a VO from the producer BC, re-declare it in eventDtos[] of this BC (recommended) or valueObjects[] (Option A).`,
+            location: `${bcName}.domainEvents.consumed[${ev.name}].payload[${field.name}]`,
+          });
+        }
+      }
+    }
+  }
+}
+
 function checkEventParamSourceCoverage(bcYamls, diagnostics) {
   // INT-026 — every payload field with source: param must correspond to a param
   // declared in at least one domainMethod that emits that event.
@@ -1060,6 +1106,7 @@ function validateIntegrationCoherence(system, bcYamls, archDir, asyncApiByBc) {
   }
   checkHiddenFieldLeak(bcYamls, bcIndex, diagnostics);
   checkAuthContextInEventPayload(bcYamls, diagnostics);
+  checkConsumedPayloadTypes(bcYamls, diagnostics);
   checkEventParamSourceCoverage(bcYamls, diagnostics);
 
   return diagnostics;

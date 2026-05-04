@@ -1,0 +1,60 @@
+{
+  "src/main/java/com/test/ordering/application/commands/ProcessPlacedOrderCommand.java": {
+    "_comment": "Command record must have List<OrderLineSnapshot> field from eventDtos (application.dtos.incoming), NOT a domain VO or Request wrapper.",
+    "contains": [
+      "List<OrderLineSnapshot> lines",
+      "com.test.ordering.application.dtos.incoming.OrderLineSnapshot",
+      "java.util.List",
+      "Command"
+    ],
+    "notContains": [
+      "OrderLineSnapshotRequest",
+      "String lines",
+      "UUID",
+      "domain.valueobject.OrderLineSnapshot"
+    ]
+  },
+
+  "src/main/java/com/test/ordering/infrastructure/rabbitListener/OrderPlacedRabbitListener.java": {
+    "_comment": "Listener must extract List<OrderLineSnapshot> via constructCollectionType, pass only to command, no dead orderId/buyerId extractions.",
+    "contains": [
+      "constructCollectionType(List.class, OrderLineSnapshot.class)",
+      "List<OrderLineSnapshot> lines",
+      "new ProcessPlacedOrderCommand(lines)",
+      "java.util.List"
+    ],
+    "notContains": [
+      "orderId",
+      "buyerId",
+      "String lines"
+    ]
+  },
+
+  "src/main/java/com/test/ordering/application/dtos/incoming/OrderLineSnapshot.java": {
+    "_comment": "OrderLineSnapshot declared as eventDto in the consumer BC — generates as a Java record in application.dtos.incoming (not domain.valueobject).",
+    "contains": [
+      "package com.test.ordering.application.dtos.incoming",
+      "public record OrderLineSnapshot",
+      "UUID productId",
+      "Integer quantity",
+      "BigDecimal unitPrice",
+      "eventDto:OrderLineSnapshot",
+      "source_bc: sales"
+    ],
+    "notContains": [
+      "domain.valueobject",
+      "implements",
+      "class OrderLineSnapshot"
+    ]
+  },
+
+  "src/main/java/com/test/sales/domain/valueobject/OrderLineSnapshot.java": {
+    "_comment": "OrderLineSnapshot still exists in the producer BC as a proper domain VO.",
+    "contains": [
+      "OrderLineSnapshot",
+      "productId",
+      "quantity",
+      "unitPrice"
+    ]
+  }
+}

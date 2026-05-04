@@ -1,0 +1,4 @@
+{
+  "description": "Option A: consumed event payload uses a complex VO (List[OrderLineSnapshot]) re-declared in the consumer BC's valueObjects[]. UC declares uc.input[] matching the payload. Verifies command record has List<OrderLineSnapshot> and listener uses constructCollectionType.",
+  "expectFailure": false
+}

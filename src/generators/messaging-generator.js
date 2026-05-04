@@ -71,13 +71,13 @@ function resolvePayloadFromAsyncApi(eventName, asyncApiDoc) {
  * to the domain value object package so the IntegrationEvent can carry the
  * same type without re-declaring it.
  */
-function javaTypeForEventField(payloadField, packageName, moduleName, enumNames = new Set(), voNames = new Set()) {
+function javaTypeForEventField(payloadField, packageName, moduleName, enumNames = new Set(), voNames = new Set(), eventDtoNames = new Set()) {
   const { type } = payloadField;
 
   // List[T]
   const listMatch = /^List\[(.+)\]$/.exec(type);
   if (listMatch) {
-    const inner = javaTypeForEventField({ ...payloadField, type: listMatch[1] }, packageName, moduleName, enumNames, voNames);
+    const inner = javaTypeForEventField({ ...payloadField, type: listMatch[1] }, packageName, moduleName, enumNames, voNames, eventDtoNames);
     return {
       javaType: `List<${inner.javaType}>`,
       importHint: 'java.util.List',
@@ -103,6 +103,15 @@ function javaTypeForEventField(payloadField, packageName, moduleName, enumNames 
       isValueObject: mapped.isValueObject || mapped.isDomainType || false,
     };
   } catch (_) {
+    // eventDto type — resolves to application.dtos.incoming
+    if (eventDtoNames.has(type)) {
+      return {
+        javaType: type,
+        importHint: `${packageName}.${moduleName}.application.dtos.incoming.${type}`,
+        innerImportHint: null,
+        isValueObject: false,
+      };
+    }
     // Unknown/domain type — check if enum or value object
     const isEnum = enumNames.has(type);
     const subPackage = isEnum ? 'enums' : 'valueobject';
@@ -336,26 +345,21 @@ async function generateDomainEventHandler(publishedEventCtxs, packageName, modul
  *   queueKey  — key in rabbitmq.yaml queues section (e.g. orders-cart-checked-out)
  *   payload   — list of { name, type } fields
  */
-async function generateRabbitListener(consumedEvent, packageName, moduleName, listenersDir, enumNames = new Set(), voNames = new Set(), consumerIdempotencyEnabled = false, sagasEnabled = false, sagaSteps = []) {
+async function generateRabbitListener(consumedEvent, packageName, moduleName, listenersDir, enumNames = new Set(), voNames = new Set(), consumerIdempotencyEnabled = false, sagasEnabled = false, sagaSteps = [], eventDtoNames = new Set()) {
   const listenerClassName = `${toPascalCase(consumedEvent.name)}RabbitListener`;
   const commandClassName = `${toPascalCase(consumedEvent.command)}Command`;
   const queueKey = consumedEvent.queueKey || `${moduleName}-${toRoutingKeyKebab(consumedEvent.name)}`;
 
-  const mapField = (p) => {
-    const mapped = Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName, enumNames, voNames));
-    // Commands use String for UUID fields (for validation); normalize to match command signature
-    if (mapped.javaType === 'UUID') {
-      mapped.javaType = 'String';
-      mapped.importHint = null;
-    }
-    return mapped;
-  };
+  const mapField = (p) => Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName, enumNames, voNames, eventDtoNames));
 
-  // fields: ALL payload fields — used for deserialization from the message
-  const fields = (consumedEvent.payload || []).map(mapField);
-  // commandFields: only the fields that map to the command constructor params
-  // (excludes event-only metadata like occurredAt that are not part of the command)
-  const commandFields = (consumedEvent.commandPayload || consumedEvent.payload || []).map(mapField);
+  // When the UC declares uc.input[], extract ONLY those fields (avoids dead-variable warnings).
+  // Fall back to the full event payload when commandPayload is empty (no uc.input[]).
+  const effectivePayload = (consumedEvent.commandPayload && consumedEvent.commandPayload.length > 0)
+    ? consumedEvent.commandPayload
+    : (consumedEvent.payload || []);
+  const fields = effectivePayload.map(mapField);
+  // commandFields = fields: extraction and constructor args are the same set
+  const commandFields = fields;
 
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'messaging', 'RabbitListener.java.ejs'),
@@ -458,10 +462,9 @@ async function generateBcRabbitMQConfig(
       name: ev.name,
       queueKey,
       fieldName,
-      // Phase 4.3 — consumed[].retry / consumed[].dlq overrides apply to the consumer queue.
-      deliveryLimit: ev.retry && ev.retry.maxAttempts ? ev.retry.maxAttempts : null,
-      messageTtlMs:  ev.retry && ev.retry.initialMs   ? ev.retry.initialMs   : null,
-      dlqTarget:     ev.dlq   && ev.dlq.target        ? ev.dlq.target        : null,
+      deliveryLimit: null,
+      messageTtlMs:  null,
+      dlqTarget:     null,
     });
   }
 
@@ -548,13 +551,17 @@ async function generateKafkaMessageBrokerAdapter(publishedEventCtxs, packageName
 /**
  * Generates one {MessageName}KafkaListener.java per consumed event.
  */
-async function generateKafkaListener(consumedEvent, packageName, moduleName, listenersDir, enumNames = new Set(), voNames = new Set(), consumerIdempotencyEnabled = false, sagasEnabled = false, sagaSteps = []) {
+async function generateKafkaListener(consumedEvent, packageName, moduleName, listenersDir, enumNames = new Set(), voNames = new Set(), consumerIdempotencyEnabled = false, sagasEnabled = false, sagaSteps = [], eventDtoNames = new Set()) {
   const listenerClassName = `${toPascalCase(consumedEvent.name)}KafkaListener`;
   const commandClassName  = `${toPascalCase(consumedEvent.command)}Command`;
   const topicKey = consumedEvent.topicKey || `${moduleName}-${toRoutingKeyKebab(consumedEvent.name)}`;
 
-  const fields = (consumedEvent.payload || []).map((p) =>
-    Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName, enumNames, voNames))
+  // When the UC declares uc.input[], extract ONLY those fields (avoids dead-variable warnings).
+  const effectivePayload = (consumedEvent.commandPayload && consumedEvent.commandPayload.length > 0)
+    ? consumedEvent.commandPayload
+    : (consumedEvent.payload || []);
+  const fields = effectivePayload.map((p) =>
+    Object.assign({ name: p.name }, javaTypeForEventField(p, packageName, moduleName, enumNames, voNames, eventDtoNames))
   );
 
   await renderAndWrite(
@@ -639,15 +646,18 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
 
     // If the event already declares its own payload, use it directly.
     if (ev.payload && ev.payload.length > 0) {
-      // Event-triggered commands carry only the aggregate id.
-      // method: describes the aggregate method — extra params like 'reason' are
-      // derived by the handler from context, not forwarded through the command.
-      // Locate the id field in the payload: {aggregateCamelId} → 'id' → first Uuid field.
-      const aggCamelId = `${toCamelCase(uc.aggregate)}Id`;
-      const idField = ev.payload.find((p) => p.name === aggCamelId)
-        || ev.payload.find((p) => p.name === 'id')
-        || ev.payload.find((p) => p.type === 'Uuid');
-      const commandPayload = idField ? [idField] : [];
+      // If the UC declares uc.input[], those fields drive the command record and
+      // therefore the command constructor args the listener must pass.
+      // Convención: uc.input[] field names must match consumed[].payload[] field names
+      // so the listener can extract them from event.data() by name.
+      const ucInputFields = (uc.input || []).filter((i) => i.source !== 'authContext');
+      const commandPayload = ucInputFields.length > 0
+        ? ucInputFields.map((i) => {
+            // find matching type from consumed payload declaration
+            const payloadField = ev.payload.find((p) => p.name === i.name);
+            return { name: i.name, type: payloadField ? payloadField.type : (i.type || 'String') };
+          })
+        : []; // command is empty → listener calls new XyzCommand() with no args
       return {
         name:          ev.name,
         channel:       ev.channel || null,
@@ -699,11 +709,8 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
       return { name: paramName, type: prop ? prop.type : 'String' };
     });
 
-    // Event-triggered commands carry only the aggregate id.
-    // Build a single-field commandPayload with the conventional {aggregateCamelCase}Id name.
-    const aggCamelId = `${toCamelCase(uc.aggregate)}Id`;
-    const commandPayload = [{ name: aggCamelId, type: 'Uuid' }];
-
+    // No payload declared and no uc.input[] — command is empty, listener calls new XyzCommand().
+    // The UC handler resolves what it needs from the aggregate repository using the event metadata.
     return {
       name:          ev.name,
       channel:       ev.channel || null,
@@ -711,8 +718,8 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
       command:       uc.name,
       useCase:       uc.id,
       queueKey,
-      payload:       commandPayload,
-      commandPayload,
+      payload:       [],
+      commandPayload: [],
       // [G15] optional Java boolean expression evaluated on deserialized fields.
       filterExpr:    uc.trigger.filter || null,
     };
@@ -736,6 +743,7 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
 
   const enumNames = new Set((bcYaml.enums || []).map((e) => e.name));
   const voNames = new Set((bcYaml.valueObjects || []).map((v) => v.name));
+  const eventDtoNames = new Set((bcYaml.eventDtos || []).map((d) => d.name));
 
   const metadataEnabled = !(config.events && config.events.metadata && config.events.metadata.enabled === false);
 
@@ -801,10 +809,10 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
 
     if (config.broker === 'kafka') {
       const listenersDir = path.join(bcBase, 'infrastructure', 'kafkaListener');
-      await generateKafkaListener(consumed, packageName, moduleName, listenersDir, enumNames, voNames, consumerIdempotencyEnabled, sagasEnabled, sagaSteps);
+      await generateKafkaListener(consumed, packageName, moduleName, listenersDir, enumNames, voNames, consumerIdempotencyEnabled, sagasEnabled, sagaSteps, eventDtoNames);
     } else {
       const listenersDir = path.join(bcBase, 'infrastructure', 'rabbitListener');
-      await generateRabbitListener(consumed, packageName, moduleName, listenersDir, enumNames, voNames, consumerIdempotencyEnabled, sagasEnabled, sagaSteps);
+      await generateRabbitListener(consumed, packageName, moduleName, listenersDir, enumNames, voNames, consumerIdempotencyEnabled, sagasEnabled, sagaSteps, eventDtoNames);
     }
     listenerCount++;
   }

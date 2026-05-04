@@ -1,6 +1,6 @@
-# Nuevas características de `domainEvents` — Fases 0–4
+# Nuevas características de `domainEvents` — Fases 0–6
 
-Este documento describe las extensiones de schema y los artefactos generados introducidos por las **fases 0–4** del plan de remediación de `domainEvents` (`/memories/session/plan.md`, `analisis/domainEvents-analisi.md`). Todas las adiciones son **opcionales** y **retrocompatibles**: un `bc.yaml` existente que no las declare produce código equivalente al anterior (con la única excepción de la metadata canónica de Fase 1, que ahora se inyecta por defecto y emite una advertencia si el humano declaró `occurredAt` manualmente).
+Este documento describe las extensiones de schema y los artefactos generados introducidos por las **fases 0–6** del plan de remediación de `domainEvents` (`/memories/session/plan.md`, `analisis/domainEvents-analisi.md`). Todas las adiciones son **opcionales** y **retrocompatibles**: un `bc.yaml` existente que no las declare produce código equivalente al anterior (con la única excepción de la metadata canónica de Fase 1, que ahora se inyecta por defecto y emite una advertencia si el humano declaró `occurredAt` manualmente).
 
 | Fase | Tema | Schema añadido |
 |---|---|---|
@@ -8,9 +8,11 @@ Este documento describe las extensiones de schema y los artefactos generados int
 | 1 | Identidad y metadata canónica | `published[].version` |
 | 2 | Validación cross-YAML AsyncAPI | — (validador, sin schema) |
 | 3 | Mapeo explícito de payload | `payload[].source`, `field`, `param`, `value`, `claim`, `derivedFrom`, `expression` |
-| 4 | Scope y broker hints | `published[].scope`, `published[].broker.{partitionKey,headers,retry,dlq}`, `consumed[].{retry,dlq}` |
+| 4 | Scope y broker hints | `published[].scope`, `published[].broker.{partitionKey,headers,retry,dlq}` |
+| 5 | Option A — tipos complejos en `consumed[].payload[]` | `consumed[].payload[].type: List[VO]` / `VO` + `uc.input[]` |
+| 6 | `eventDtos[]` — ubicación arquitectónica correcta para snapshots externos | `eventDtos[].{name,sourceBc,properties[]}` |
 
-Las cinco fases han sido verificadas extremo-a-extremo sobre `test-dsl/` con compilación limpia.
+Las seis fases han sido verificadas extremo-a-extremo con 16/16 tests pasando.
 
 ---
 
@@ -347,10 +349,9 @@ domainEvents:
           target: catalog.product.activated.lost
   consumed:
     - name: StockItemReserved
-      retry:                        # mismos campos que broker.retry
-        maxAttempts: 10
-      dlq:
-        target: orders.stock-reserved.lost
+      channel: inventory.stock-item.reserved
+      payload:
+        - { name: orderId, type: Uuid }
 ```
 
 ### 4.3 `scope` — qué se genera
@@ -458,25 +459,25 @@ public Queue productActivatedDlq() {
 }
 ```
 
-#### Caso E — overrides en consumidor
+#### Caso E — consumidor explícito con channel
 
 ```yaml
 domainEvents:
   consumed:
     - name: PaymentCaptured
+      sourceBc: payments
       channel: payments.payment.captured
-      retry:
-        maxAttempts: 10            # más tolerante que el default global
-      dlq:
-        target: orders.payment-captured.lost
+      payload:
+        - { name: paymentId, type: Uuid }
+        - { name: amount,    type: Money }
 ```
 
-Aplica los mismos `x-delivery-limit`, `x-message-ttl` y `x-dead-letter-routing-key` a la queue del consumidor.
+El generador usa `channel` para derivar el nombre de la cola (`payments-payment-captured`) y documenta el routing key en el Javadoc del listener. La configuración de retry/DLQ se gestiona en `system.yaml` o en los archivos de entorno.
 
 ### 4.5 Limitaciones declaradas
 
-- `retry.backoff` y `retry.maxMs` están reservados pero aún no se traducen a infraestructura. Implementar un retry interceptor por evento exigiría cambios en los listeners (no incluido en Fase 4).
-- Kafka no tiene equivalente declarativo a `x-delivery-limit`/`x-message-ttl` por topic — los hints `retry`/`dlq` aplicados a una BC con `broker: kafka` se ignoran. La gestión queda a cargo del `DefaultErrorHandler` configurado en runtime.
+- `retry.backoff` y `retry.maxMs` en `published[].broker.retry` están reservados pero aún no se traducen a infraestructura.
+- Kafka no tiene equivalente declarativo a `x-delivery-limit`/`x-message-ttl` por topic — los hints `retry`/`dlq` en `published[].broker` se ignoran para BCs con `broker: kafka`. La gestión queda a cargo del `DefaultErrorHandler` configurado en runtime.
 - `x-delivery-limit` requiere un broker compatible (RabbitMQ ≥ 3.10 con `x-queue-type: quorum`). El tipo de queue queda a discreción del operador en `parameters/{env}/rabbitmq.yaml`.
 
 ---
@@ -489,6 +490,127 @@ Un `bc.yaml` escrito antes de estas fases sigue compilando sin cambios. Los úni
 2. **Fase 2**: si tu `bc-async-api.yaml` declaraba mensajes que el `bc.yaml` no exponía (o viceversa), ahora obtienes un INT-016/017. Acción: alinea los dos contratos o elimina el mensaje sobrante.
 3. **Fase 3**: la heurística previa sigue activa cuando no declaras `source`. No requiere migración. Si quieres trazabilidad completa, declara `source` en todos los campos.
 4. **Fase 4**: si no declaras `scope`, todos los eventos son `both` (comportamiento previo). Si no declaras `broker`, no hay headers, ni `partitionKey`, ni queue arguments — comportamiento previo.
+5. **`consumed[].retry` / `consumed[].dlq`** (deprecado): estos campos son ignorados por el generador y emiten un `GEN-WARN`. Configura retry y DLQ en `system.yaml` o en los archivos de entorno. Elimínalos del `bc.yaml`.
+6. **Fase 5 (Option A)**: si un campo en `consumed[].payload[]` tiene un tipo complejo (VO o `List[VO]`) que no está en `valueObjects[]` del BC consumidor, el generador emite `GEN-WARN-001`. Re-declara el VO en `valueObjects[]` del BC consumidor (copia exacta de la definición del BC productor) y declara `uc.input[]` con el campo para que se genere el command record y el listener correctamente.
+
+---
+
+## Fase 5 — Option A: tipos complejos en `consumed[].payload[]`
+
+### 5.1 Qué problema resuelve
+
+Antes de esta fase, `consumed[].payload[]` solo soportaba tipos escalares (`Uuid`, `String`, etc.).
+Un campo de tipo `List[OrderLineSnapshot]` generaba un import a una clase inexistente → código no compila.
+
+La causa raíz: `javaTypeForEventField()` resuelve tipos contra los `valueObjects[]` y `enums[]` del BC
+consumidor solamente. Tipos del BC productor no estaban disponibles.
+
+### 5.2 Solución implementada
+
+**Option A:** el diseñador re-declara el VO en `valueObjects[]` del BC consumidor. El generador lo
+resuelve localmente — no hay dependencia de imports cruzados entre BCs.
+
+**Cambios al generador:**
+
+1. **`messaging-generator.js`** — `commandPayload` se deriva de `uc.input[]` (no del `payload[]` completo).
+   El listener extrae solo los campos de `uc.input[]`, evitando variables sin uso.
+2. **`application-generator.js`** — `buildCommandFields()` para UCs `trigger.kind: event` ya no genera
+   un command vacío cuando `uc.input[]` tiene campos. Los VOs no se envuelven en `Request` wrappers.
+   Los campos `Uuid` se mantienen como `UUID` (no `String`).
+3. **`integration-validator.js`** — Nueva regla `GEN-WARN-001`: emite warning cuando un tipo en
+   `consumed[].payload[]` no es escalar ni está en `valueObjects[]`/`enums[]` del BC consumidor.
+
+### 5.3 Schema añadido / modificado
+
+No se añade schema nuevo. La combinación existente funciona:
+- `consumed[].payload[].type: List[VoName]` — ya existía
+- `uc.input[].type: List[VoName]` — ya existía
+- Condición nueva: el `VoName` debe estar declarado en `valueObjects[]` del mismo BC consumidor
+
+### 5.4 Comportamiento del command generado
+
+| `uc.input[]` | Command record generado | Listener genera |
+|---|---|---|
+| Vacío (o solo `authContext`) | `record XyzCommand() {}` | `new XyzCommand()` sin args |
+| Con campos | `record XyzCommand(List<VO> field, ...)` | Extracción + `new XyzCommand(field, ...)` |
+
+### 5.5 Ejemplo
+
+Ver [§2.4 del reference — Tipos complejos en consumed[].payload[] (Option A)](../references/bc-yaml-reference-05-integrations-events.md) para el YAML completo, código generado y advertencias del validador.
+
+Test de regresión: `test/scenarios/event-consumed-vo/` cubre este caso extremo a extremo con broker RabbitMQ.
+
+---
+
+## Fase 6 — `eventDtos[]`: ubicación arquitectónica correcta para snapshots externos
+
+### 6.1 Problema que resuelve
+
+**Option A** (Fase 5) genera el snapshot del evento en `domain.valueobject`, lo que contamina el
+modelo de dominio propio del BC consumidor con un concepto que pertenece al BC productor.
+
+**Fase 6** introduce `eventDtos[]` como sección separada: los tipos de entrada de eventos externos
+se generan como Java `record` en `{bc}.application.dtos.incoming`, que es la capa correcta en
+arquitectura hexagonal para datos de entrada desconfiados.
+
+### 6.2 Schema
+
+```yaml
+eventDtos:
+  - name: OrderLineSnapshot      # PascalCase — nombre del record Java
+    sourceBc: sales              # documentación; no genera validación INT-*
+    properties:
+      - name: productId
+        type: Uuid
+      - name: quantity
+        type: Integer
+      - name: unitPrice
+        type: Decimal
+        precision: 10
+        scale: 2
+```
+
+Los tipos en `properties[]` se resuelven en este orden:
+1. Tipos canónicos (`Uuid` → `UUID`, `Decimal` → `BigDecimal`, `Money` → `Money` con import, …)
+2. `Enum<X>` o enum declarado en `enums[]` → `domain.enums`
+3. Otro `eventDto` del mismo BC (mismo paquete — sin import)
+4. VO declarado en `valueObjects[]` del mismo BC → `domain.valueobject`
+
+### 6.3 Artefactos generados
+
+| Archivo | Tipo |
+|---|---|
+| `application/dtos/incoming/{Name}.java` | Java `record` — data carrier puro |
+
+Ejemplo:
+```java
+package com.example.ordering.application.dtos.incoming;
+
+import java.math.BigDecimal;
+import java.util.UUID;
+
+// derived_from: eventDto:OrderLineSnapshot
+// source_bc: sales
+public record OrderLineSnapshot(UUID productId, Integer quantity, BigDecimal unitPrice) {}
+```
+
+El command record y el listener importan desde `application.dtos.incoming`:
+```java
+import com.example.ordering.application.dtos.incoming.OrderLineSnapshot;
+public record ProcessPlacedOrderCommand(@NotNull List<OrderLineSnapshot> lines) implements Command {}
+```
+
+### 6.4 Compatibilidad
+
+- **Backward compatible**: `bc.yaml` sin `eventDtos[]` genera igual que antes.
+- `valueObjects[]` sigue siendo válido (Option A no se elimina).
+- GEN-WARN-001 ahora también acepta `eventDtos[]` como tipo conocido, no emite warning.
+
+### 6.5 Ejemplo
+
+Ver [§2.4 del reference — `eventDtos[]`](../references/bc-yaml-reference-05-integrations-events.md) para el YAML completo y código generado.
+
+Test de regresión: `test/scenarios/event-consumed-vo/` fue migrado de Option A a `eventDtos[]`.
 
 ---
 
@@ -532,10 +654,8 @@ domainEvents:
   consumed:
     - name: StockItemReserved
       channel: inventory.stock-item.reserved
-      retry:
-        maxAttempts: 10
-      dlq:
-        target: catalog.stock-reserved.lost
+      payload:
+        - { name: orderId, type: Uuid }
 ```
 
 Con este YAML el generador produce:
@@ -543,5 +663,5 @@ Con este YAML el generador produce:
 - `MessageBroker.publishProductActivatedIntegrationEvent(...)` y su adaptador con headers + partitionKey.
 - Queue `catalog.product-activated` con TTL 60 s, delivery limit 5 y DLQ a `catalog.product.activated.lost`.
 - `ProductPriceRecalculatedEvent` (record interno, sin integration event ni adaptador broker).
-- Consumer queue para `StockItemReserved` con delivery limit 10 y DLQ a `catalog.stock-reserved.lost`.
+- Consumer queue para `StockItemReserved` con queue durable y binding al exchange del productor.
 - Trazabilidad completa: cada `raise()` y cada bean lleva su comentario `derived_from`.

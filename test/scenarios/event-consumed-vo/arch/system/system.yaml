@@ -1,0 +1,35 @@
+system:
+  name: test-consumed-vo-system
+  description: Test system for Option A — complex VO in consumed event payload.
+  domainType: core
+
+boundedContexts:
+  - name: sales
+    type: core
+    purpose: Manages orders and publishes lifecycle events.
+    aggregates:
+      - name: SalesOrder
+        root: SalesOrder
+        entities: []
+
+  - name: ordering
+    type: supporting
+    purpose: Processes orders. Reacts to sales events with complex payload.
+    aggregates:
+      - name: OrderRecord
+        root: OrderRecord
+        entities: []
+
+integrations:
+  - from: sales
+    to: ordering
+    pattern: event
+    channel: message-broker
+    contracts:
+      - name: OrderPlaced
+        channel: sales.order.placed
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

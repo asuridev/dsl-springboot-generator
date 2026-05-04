@@ -437,12 +437,12 @@ function projectionsUsedByAggregate(agg, bcYaml) {
   return [...result.values()];
 }
 
-function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Set(), bcYaml = null) {
+function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Set(), bcYaml = null, eventDtoNames = new Set()) {
   // List[T] — recursive inner type resolution
   const listDtoMatch = /^List\[(.+)\]$/.exec(type);
   if (listDtoMatch) {
     imports.add('java.util.List');
-    const innerJavaType = javaTypeForDto(listDtoMatch[1], packageName, moduleName, imports, voNames, bcYaml);
+    const innerJavaType = javaTypeForDto(listDtoMatch[1], packageName, moduleName, imports, voNames, bcYaml, eventDtoNames);
     return `List<${innerJavaType}>`;
   }
   // [G8] Range[T] — declarative range filter. Carried as Range<T> from the
@@ -451,7 +451,7 @@ function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Se
   const rangeDtoMatch = /^Range\[(.+)\]$/.exec(type);
   if (rangeDtoMatch) {
     imports.add(`${packageName}.shared.application.dtos.Range`);
-    const innerJavaType = javaTypeForDto(rangeDtoMatch[1], packageName, moduleName, imports, voNames, bcYaml);
+    const innerJavaType = javaTypeForDto(rangeDtoMatch[1], packageName, moduleName, imports, voNames, bcYaml, eventDtoNames);
     return `Range<${innerJavaType}>`;
   }
   // [G8] SearchText — wire-level String. The Specification builder consumes
@@ -514,6 +514,11 @@ function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Se
     const enumName = enumMatch[1];
     imports.add(`${packageName}.${moduleName}.domain.enums.${enumName}`);
     return enumName;
+  }
+  // eventDto type — incoming DTO from an external BC
+  if (eventDtoNames.has(type)) {
+    imports.add(`${packageName}.${moduleName}.application.dtos.incoming.${type}`);
+    return type;
   }
   // Value object
   if (voNames.has(type)) {
@@ -662,14 +667,19 @@ function buildRequiredAnnotation(javaType, imports) {
 
 // ─── Command fields ───────────────────────────────────────────────────────────
 
-function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(), bcYaml = null) {
+function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(), bcYaml = null, eventDtoNames = new Set()) {
   const imports = new Set();
   const fields = [];
   const voRequestsNeeded = new Set();
   const propMap = buildAggPropertyMap(agg);
 
-  // Event-triggered commands carry no external inputs in the command record
-  if (uc.trigger && uc.trigger.kind === 'event') {
+  // Event-triggered commands: if uc.input[] is empty, the command record is empty too
+  // (the listener calls new XyzCommand() with no args and the handler resolves what it
+  // needs from the aggregate repository). If uc.input[] is declared, those fields ARE
+  // included in the command record — they come from the consumed event payload via the
+  // listener. In that case we fall through to the normal field-building loop below.
+  const isEventTriggered = !!(uc.trigger && uc.trigger.kind === 'event');
+  if (isEventTriggered && !(uc.input || []).some((i) => i.source !== 'authContext')) {
     return { fields, imports: [...imports].sort(), voRequestsNeeded };
   }
 
@@ -697,7 +707,7 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
       ? (bcYaml && bcYaml.valueObjects || []).find((v) => v.name === listInnerVoName)
       : null;
 
-    if (listInnerVoDef && (listInnerVoDef.properties || []).length > 1) {
+    if (!isEventTriggered && listInnerVoDef && (listInnerVoDef.properties || []).length > 1) {
       // ── List[MultiPropVO] (e.g. List[Topics]) — emit List<{VoName}Request> with @Valid ──
       imports.add('java.util.List');
       imports.add('jakarta.validation.Valid');
@@ -714,7 +724,7 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
     // Look up VO definition for any type that matches a declared valueObject
     const voDefinition = (bcYaml && bcYaml.valueObjects || []).find((v) => v.name === rawType);
 
-    if (voDefinition && (voDefinition.properties || []).length > 1) {
+    if (!isEventTriggered && voDefinition && (voDefinition.properties || []).length > 1) {
       // ── Multi-property VO (e.g. Money) — emit one nested {VoName}Request field with @Valid ──
       const requestType = `${rawType}Request`;
       imports.add('jakarta.validation.Valid');
@@ -746,7 +756,11 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
       fields.push({ type: mapped.javaType, name: input.name, annotations: [...requiredAnnotations, ...mergedAnnotations] });
     } else {
       // ── Primitive, enum, Uuid, or unknown type ──
-      const javaType = javaTypeForCommand(rawType, packageName, moduleName, imports, voNames, bcYaml);
+      // Event-triggered: use javaTypeForDto (Uuid → UUID, keeps domain VO types)
+      // HTTP-triggered: use javaTypeForCommand (Uuid → String, for handler conversion)
+      const javaType = isEventTriggered
+        ? javaTypeForDto(rawType, packageName, moduleName, imports, voNames, bcYaml, eventDtoNames)
+        : javaTypeForCommand(rawType, packageName, moduleName, imports, voNames, bcYaml);
       const propDef = propMap.get(input.name);
 
       // 1. Required annotation (@NotBlank / @NotNull)
@@ -1609,9 +1623,9 @@ async function generateApplicationMapper(agg, moduleName, packageName, bcDir, vo
   );
 }
 
-async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames = new Set(), bcYaml = null) {
+async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames = new Set(), bcYaml = null, eventDtoNames = new Set()) {
   const ucClassName = toPascalCase(uc.name);
-  const { fields, imports, voRequestsNeeded } = buildCommandFields(uc, agg, packageName, moduleName, voNames, bcYaml);
+  const { fields, imports, voRequestsNeeded } = buildCommandFields(uc, agg, packageName, moduleName, voNames, bcYaml, eventDtoNames);
   // [G4] command return type: when uc.returns is declared, the record implements
   // ReturningCommand<R> instead of Command. Reuses query return-type resolution
   // (Page[X], List[X], <AggName>Response → <AggName>ResponseDto, bare DTO).
@@ -2377,6 +2391,7 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
   const repoMethods = normalizeRepoMethods(bcYaml.repositories || []);
   const allUseCases = bcYaml.useCases || [];
   const voNames = new Set((bcYaml.valueObjects || []).map((vo) => vo.name));
+  const eventDtoNames = new Set((bcYaml.eventDtos || []).map((d) => d.name));
 
   // Build map of internal API operations: operationId → { opSpec, components }
   const internalOpsMap = new Map();
@@ -2553,7 +2568,7 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
           // come from uc.input[]), but a dedicated handler that injects every
           // aggregate's repository and emits the steps[] orchestration with
           // application-level compensation.
-          const voRequestsNeeded = await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml);
+          const voRequestsNeeded = await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml, eventDtoNames);
           await generateMultiAggregateCommandHandler(uc, moduleName, packageName, bcDir, bcYaml, errorMap);
           for (const voName of voRequestsNeeded) {
             if (!generatedVoRequests.has(voName)) {
@@ -2562,7 +2577,7 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
             }
           }
         } else {
-          const voRequestsNeeded = await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml);
+          const voRequestsNeeded = await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml, eventDtoNames);
           await generateCommandHandler(uc, agg, moduleName, packageName, bcDir, errorMap, bcYaml, repoMethods);
           for (const voName of voRequestsNeeded) {
             if (!generatedVoRequests.has(voName)) {

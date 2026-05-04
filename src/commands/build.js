@@ -10,7 +10,7 @@ const { readSystemYaml, validateArchDirectory } = require('../utils/system-yaml-
 const { generateBaseProject, generateBrokerTopologyYaml } = require('../generators/base-project-generator');
 const { generateDockerFiles } = require('../generators/docker-generator');
 const { generateEnums } = require('../generators/enum-generator');
-const { generateValueObjects } = require('../generators/value-object-generator');
+const { generateValueObjects, generateEventDtos } = require('../generators/value-object-generator');
 const { generateAggregates } = require('../generators/aggregate-generator');
 const { generateJpaEntities } = require('../generators/jpa-entity-generator');
 const { generateRepositories } = require('../generators/repository-generator');
@@ -288,6 +288,7 @@ async function buildCommand(options = {}) {
     for (const bcYaml of allBcYamls) {
       await generateEnums(bcYaml, resolvedConfig, outputDir);
       await generateValueObjects(bcYaml, resolvedConfig, outputDir);
+      await generateEventDtos(bcYaml, resolvedConfig, outputDir);
       await generateAggregates(bcYaml, resolvedConfig, outputDir);
     }
     domainSpinner.succeed(`Domain layer generated for ${allBcYamls.length} bounded context(s)`);

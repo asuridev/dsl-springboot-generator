@@ -1,0 +1,8 @@
+package <%- packageName %>.<%= bc %>.application.dtos.incoming;
+<% if (imports.length > 0) { %>
+<% imports.forEach(imp => { %><%- imp %>
+<% }); %>
+<% } %>
+// derived_from: <%= traceTag %>
+<% if (sourceBc) { %>// source_bc: <%= sourceBc %>
+<% } %>public record <%= name %>(<%= fields.map(f => f.javaType + ' ' + f.name).join(', ') %>) {}

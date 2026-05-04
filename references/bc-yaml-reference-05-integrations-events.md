@@ -13,7 +13,7 @@
    - 2.3 [Partición de eventos (partitionKey)](#23-partición-de-eventos-partitionkey)
    - 2.4 [Eventos consumidos (`domainEvents.consumed`)](#24-eventos-consumidos-domainevents-consumed)
    - 2.5 [EventMetadata canónico](#25-eventmetadata-canónico)
-3. [Validaciones cruzadas (INT-*)](#3-validaciones-cruzadas-int-)
+3. [Sección `eventDtos`](#3-sección-eventdtos)
 4. [Ejemplos completos](#4-ejemplos-completos)
 
 ---
@@ -927,9 +927,11 @@ Declara los eventos que este BC recibe del broker y cómo procesa su payload.
 ```yaml
 domainEvents:
   consumed:
-    - name: ProductActivated      # nombre del evento (debe coincidir con el publicado)
-      sourceBc: catalog           # BC que publica este evento (para validación INT-007)
-      payload:                    # subconjunto de campos relevantes para este BC
+    - name: ProductActivated      # PascalCase — nombre del evento publicado por el BC fuente
+      sourceBc: catalog           # kebab-case — BC que publica este evento (INT-007)
+      channel: catalog.product.activated  # canal AsyncAPI del evento publicado (opcional pero recomendado)
+
+      payload:                    # campos del evento que este BC necesita — subconjunto del published[]
         - name: productId
           type: Uuid
         - name: sku
@@ -937,15 +939,7 @@ domainEvents:
         - name: price
           type: Money
 
-      retry:
-        maxAttempts: 5
-        backoff: exponential
-        initialMs: 500
-        maxMs: 30000
-
-      dlq:
-        afterAttempts: 5
-        target: inventory.product-activated.dlq
+      acknowledgeOnly: true       # solo si el BC se suscribe sin lógica de dominio
 ```
 
 #### Propiedades de `consumed`
@@ -953,47 +947,303 @@ domainEvents:
 | Propiedad | Tipo | Requerido | Descripción |
 |---|---|---|---|
 | `name` | PascalCase | ✅ | Nombre del evento. Debe estar declarado en `domainEvents.published[]` del BC `sourceBc` (validación INT-007). |
-| `sourceBc` | kebab-case | ✅ | BC que publica este evento. Usado para la validación INT-007 y INT-020. |
-| `channel` | string | no | Canal del broker donde se publica el evento (ej: `catalog.product.activated`). Cuando se declara, el generador lo usa para derivar el BC productor en la topología de colas. |
-| `payload` | lista | no | Subconjunto de campos del payload que este BC necesita. Validación INT-020: todos los campos declarados aquí deben existir en el `published[].payload[]` del BC productor. Si `payload` se omite, se usa el payload completo del evento publicado. |
-| `retry` | objeto | no | Configuración de reintento del consumer. |
-| `dlq` | objeto | no | Configuración de DLQ del consumer. Si `target` se omite, el nombre se deriva por convención como `{channel}.dlq`. |
+| `sourceBc` | kebab-case | ✅ | BC que publica este evento. Usado para la validación INT-007 y INT-020. En el código generado aparece en el Javadoc del listener. |
+| `channel` | string | no | Canal del broker donde se publica el evento (ej: `catalog.product.activated`). Cuando se declara, el generador lo usa en el Javadoc del listener y para derivar el routing key en la topología RabbitMQ. Si se omite, el nombre de la cola/topic se deriva como `{bc}-{event-kebab}`. |
+| `payload` | lista | no | Subconjunto de campos del evento que este BC necesita. Validación INT-020: todos los campos declarados aquí deben existir en el `published[].payload[]` del BC productor. **Si `payload` se omite, el generador deriva los campos desde los `params` del `domainMethod` que invoca el use case asociado** — no toma el payload completo del evento publicado. |
+| `acknowledgeOnly` | boolean | no | Si `true`, el BC se suscribe al canal sin lógica de dominio: no se genera command ni handler, solo el canal `subscribe` en el AsyncAPI. Candidatos típicos: confirmaciones de compensación de saga que el BC solo necesita registrar. |
 
-#### Código Java generado
+> **`retry` y `dlq` NO se configuran en `consumed[]`** — son preocupaciones de infraestructura, no de diseño de dominio.
+> Configura el número de reintentos, TTL y DLQ en `system.yaml` (defaults de infraestructura) o en los archivos de entorno (`application-{env}.yml`).
+> El listener generado lanza `RuntimeException` para errores de infraestructura, delegando el retry a la política de cola del broker.
 
-**`ProductActivatedRabbitListener.java`** (o `ProductActivatedKafkaListener.java` según broker):
+#### Artefactos generados
+
+El generador produce **un listener por evento consumido** (uno por broker). La clase generada
+difiere según el broker seleccionado en `system.yaml`.
+
+#### Listener RabbitMQ — `{EventName}RabbitListener.java`
+
+**Package:** `{pkg}.{bc}.infrastructure.rabbitListener`
+
+**Annotation principal:** `@RabbitListener(queues = "${queues.{queueKey}}")`
+- `queueKey` se deriva como `{bc}-{event-name-kebab}` (ej: `inventory-product-activated`)
+- Si `channel` está declarado en `consumed[]`, el routing key de la cola se alinea con el canal
+
+**Firma del método `handle`:**
+```java
+@RabbitListener(queues = "${queues.inventory-product-activated}")
+public void handle(Message message, Channel channel) throws IOException
+```
+
+**Patrón de ACK real:**
+| Escenario | Código |
+|---|---|
+| Éxito | `channel.basicAck(deliveryTag, false)` |
+| Error de deserialización (fatal) | `channel.basicNack(deliveryTag, false, false)` → DLQ inmediato |
+| `DomainException` (error de negocio) | `channel.basicNack(deliveryTag, false, false)` → DLQ inmediato |
+| `RuntimeException` (error de infraestructura) | `throw e` → política de retry de RabbitMQ |
+| Evento duplicado (idempotencia activa) | `channel.basicAck(deliveryTag, false)` → skip silencioso |
+| Filtro no coincide (`trigger.filter`) | `channel.basicAck(deliveryTag, false)` → skip silencioso |
+
+**Ejemplo completo generado** (BC `inventory`, evento `ProductActivated`, broker RabbitMQ):
+
 ```java
 package com.canastaShop.inventory.infrastructure.rabbitListener;
 
-// derived_from: domainEvents.consumed[name=ProductActivated, sourceBc=catalog]
-@Component
+import com.canastaShop.inventory.application.commands.CreateStockItemCommand;
+import com.canastaShop.shared.domain.customExceptions.DomainException;
+import com.canastaShop.shared.infrastructure.configurations.useCaseConfig.UseCaseMediator;
+import com.canastaShop.shared.infrastructure.eventEnvelope.EventEnvelope;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.rabbitmq.client.Channel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.amqp.core.Message;
+import org.springframework.amqp.rabbit.annotation.RabbitListener;
+import org.springframework.stereotype.Component;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * RabbitMQ listener for queue ${queues.inventory-product-activated}.
+ * Consumes events produced by: catalog.
+ * Dispatches to use case: CreateStockItem.
+ * derived_from: domainEvents.consumed.ProductActivated
+ */
+@Component("inventory.ProductActivatedRabbitListener")
 public class ProductActivatedRabbitListener {
+
+    private static final Logger log = LoggerFactory.getLogger(ProductActivatedRabbitListener.class);
 
     private final UseCaseMediator useCaseMediator;
     private final ObjectMapper objectMapper;
 
+    public ProductActivatedRabbitListener(UseCaseMediator useCaseMediator, ObjectMapper objectMapper) {
+        this.useCaseMediator = useCaseMediator;
+        this.objectMapper = objectMapper;
+    }
+
     @RabbitListener(queues = "${queues.inventory-product-activated}")
     public void handle(Message message, Channel channel) throws IOException {
-        EventEnvelope<Map<String, Object>> event = objectMapper.readValue(
+        long deliveryTag = message.getMessageProperties().getDeliveryTag();
+
+        // Deserializar el mensaje
+        EventEnvelope<Map<String, Object>> event;
+        try {
+            event = objectMapper.readValue(
                 message.getBody(),
                 new TypeReference<EventEnvelope<Map<String, Object>>>() {});
+        } catch (JsonProcessingException e) {
+            log.error("Fatal deserialization error — sending to DLQ: {}", e.getMessage());
+            channel.basicNack(deliveryTag, false, false);
+            return;
+        }
 
-        Map<String, Object> payload = event.payload();
-        CreateStockItemCommand command = new CreateStockItemCommand(
-            (String) payload.get("productId"),
-            (String) payload.get("sku")
-        );
-        useCaseMediator.send(command);
-        channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
+        // Extraer campos del payload
+        UUID productId = objectMapper.convertValue(event.data().get("productId"), UUID.class);
+        String sku     = objectMapper.convertValue(event.data().get("sku"),       String.class);
+
+        // Despachar command
+        try {
+            useCaseMediator.dispatch(new CreateStockItemCommand(productId, sku));
+            channel.basicAck(deliveryTag, false);
+        } catch (DomainException e) {
+            log.error("Domain error — sending to DLQ immediately. queue={}, error={}",
+                message.getMessageProperties().getConsumerQueue(), e.getMessage(), e);
+            channel.basicNack(deliveryTag, false, false);
+        } catch (RuntimeException e) {
+            log.warn("Infrastructure error — will retry. queue={}, error={}",
+                message.getMessageProperties().getConsumerQueue(), e.getMessage(), e);
+            throw e;
+        }
     }
 }
 ```
 
-> **El consumer sabe qué use case activar** a través de la referencia `trigger.kind: event`
-> en el use case correspondiente. El generador vincula automáticamente el consumer con
-> el handler del use case derivando el `command` del use case cuyo `trigger.consumes`
-> coincide con el `name` del evento consumido. No se genera un record separado para
-> deserialización: el listener usa `EventEnvelope<Map<String, Object>>` con Jackson.
+> **Puntos clave del código real:**
+> - `event.data()` — no `event.payload()`. El envelope separa metadatos (`event.metadata()`) de datos (`event.data()`).
+> - `objectMapper.convertValue(event.data().get("fieldName"), Type.class)` — extracción tipada campo a campo, **no** cast directo.
+> - `useCaseMediator.dispatch()` — no `.send()` ni `.execute()`.
+> - El `@Component` lleva el nombre calificado: `"{bc}.{ListenerClassName}"`.
+> - El listener **no** implementa retry manual — el retry lo gestiona la política de cola RabbitMQ configurada por `BcRabbitMQConfig`.
+
+#### Listener Kafka — `{EventName}KafkaListener.java`
+
+**Package:** `{pkg}.{bc}.infrastructure.kafkaListener`
+
+**Annotation principal:** `@KafkaListener(topics = "${topics.{topicKey}}", groupId = "${spring.kafka.consumer.group-id}")`
+- `topicKey` se deriva igual que `queueKey`: `{bc}-{event-name-kebab}`
+
+**Firma del método `handle`:**
+```java
+@KafkaListener(topics = "${topics.inventory-product-activated}", groupId = "${spring.kafka.consumer.group-id}")
+public void handle(ConsumerRecord<String, String> record, Acknowledgment acknowledgment)
+```
+
+**Patrón de ACK real:**
+| Escenario | Código |
+|---|---|
+| Éxito | `acknowledgment.acknowledge()` — commit manual del offset |
+| Error de deserialización (fatal) | `acknowledgment.acknowledge()` → skip silencioso (no retry infinito) |
+| Error al despachar | Sin `acknowledge()` → el offset no avanza; el broker reentrega |
+| Evento duplicado (idempotencia activa) | `acknowledgment.acknowledge()` → skip silencioso |
+
+**Diferencias respecto a RabbitMQ:**
+- El segundo parámetro es `Acknowledgment acknowledgment` (Spring Kafka), no `Channel channel` (AMQP).
+- La fuente del mensaje es `record.value()` (String), no `message.getBody()` (byte[]).
+- No hay soporte de `trigger.filter` en el template Kafka — solo en RabbitMQ.
+- No hay `DomainException`/`RuntimeException` split: cualquier excepción deja el offset sin comprometer.
+
+#### Convención de nombres de cola / topic
+
+| BC | Evento | Queue/Topic key derivado | Property reference |
+|---|---|---|---|
+| `inventory` | `ProductActivated` | `inventory-product-activated` | `${queues.inventory-product-activated}` / `${topics.inventory-product-activated}` |
+| `orders` | `CartCheckedOut` | `orders-cart-checked-out` | `${queues.orders-cart-checked-out}` |
+| `catalog` | `CategoryDeactivated` | `catalog-category-deactivated` | `${queues.catalog-category-deactivated}` |
+
+El generador infiere el key como `{bc}-{eventNameKebab}` si no está declarado explícitamente en `consumed[]`.
+
+#### Vinculación con el use case (`trigger.kind: event`)
+
+El generador determina el command a instanciar buscando el UC con `trigger.kind: event` cuyo
+`trigger.event` (o `trigger.consumes`) coincide con el `name` del evento consumido.
+
+- El nombre del command es `{UC.name}Command` (ej: UC `CreateStockItem` → `CreateStockItemCommand`).
+
+**Dos comportamientos según `uc.input[]`:**
+
+| Caso | Comportamiento |
+|---|---|
+| UC **sin** `uc.input[]` (o solo campos `source: authContext`) | Command es `record XyzCommand() {}` (vacío). El listener llama `new XyzCommand()` sin argumentos. El handler resuelve lo que necesita desde el repositorio usando los IDs disponibles en el contexto del evento. |
+| UC **con** `uc.input[]` | Los campos declarados en `uc.input[]` (excepto `source: authContext`) definen los campos del command record. El listener extrae **solo** esos campos del `event.data()` y los pasa al constructor. |
+
+Cuando `uc.input[]` está declarado:
+- La extracción en el listener se limita a los campos de `uc.input[]` — no hay variables extraídas sin usar.
+- Los tipos se resuelven contra los `valueObjects[]` y `enums[]` del BC consumidor.
+- Los campos `Uuid` se mantienen como `UUID` en el command record (no se convierten a `String`).
+- Los campos `List[VO]` usan `constructCollectionType(List.class, VO.class)` para deserialización.
+
+Si `payload` se omite del `consumed[]` **y** `uc.input[]` también está ausente, el generador intenta
+derivar el payload desde los `params` del `domainMethod` del UC — si no puede resolverlos, el command
+queda vacío.
+
+> **Recomendación:** Para UCs que necesitan datos del evento, declarar siempre `payload[]` en
+> `consumed[]` y `uc.input[]` en el use case. Esto hace explícito el contrato y produce código compilable.
+
+#### Tipos complejos en `consumed[].payload[]` — `eventDtos[]` (recomendado)
+
+La forma **arquitectónicamente correcta** de consumir un tipo de snapshot del productor es declararlo
+en la sección `eventDtos[]` del BC consumidor. Esto genera un Java `record` en
+`{bc}.application.dtos.incoming` — que es la capa correcta para datos de entrada externos, sin
+contaminar `domain.valueobject` con conceptos del BC productor.
+
+```yaml
+# BC consumidor: ordering.yaml
+eventDtos:
+  - name: OrderLineSnapshot      # nombre del record Java
+    sourceBc: sales              # documentación; no genera validación INT-*
+    properties:
+      - name: productId
+        type: Uuid
+      - name: quantity
+        type: Integer
+      - name: unitPrice
+        type: Decimal
+        precision: 10
+        scale: 2
+
+useCases:
+  - id: process-placed-order
+    name: ProcessPlacedOrder
+    type: command
+    trigger:
+      kind: event
+      event: OrderPlaced
+    input:
+      - name: lines
+        type: List[OrderLineSnapshot]   # resuelve contra eventDtos[]
+        source: body
+    implementation: scaffold
+
+domainEvents:
+  consumed:
+    - name: OrderPlaced
+      channel: sales.order.placed
+      payload:
+        - name: lines
+          type: List[OrderLineSnapshot]   # resuelve contra eventDtos[]
+```
+
+**Código generado — EventDto record:**
+```java
+// application/dtos/incoming/OrderLineSnapshot.java
+package com.example.ordering.application.dtos.incoming;
+
+import java.math.BigDecimal;
+import java.util.UUID;
+
+// derived_from: eventDto:OrderLineSnapshot
+// source_bc: sales
+public record OrderLineSnapshot(UUID productId, Integer quantity, BigDecimal unitPrice) {}
+```
+
+**Código generado — command record:**
+```java
+// ProcessPlacedOrderCommand.java
+import com.example.ordering.application.dtos.incoming.OrderLineSnapshot;
+import java.util.List;
+
+public record ProcessPlacedOrderCommand(
+    @NotNull List<OrderLineSnapshot> lines
+) implements Command {}
+```
+
+**Código generado — listener:**
+```java
+List<OrderLineSnapshot> lines = objectMapper.convertValue(
+    event.data().get("lines"),
+    objectMapper.getTypeFactory().constructCollectionType(List.class, OrderLineSnapshot.class));
+
+useCaseMediator.dispatch(new ProcessPlacedOrderCommand(lines));
+```
+
+#### Propiedades de `eventDtos[]`
+
+| Campo | Requerido | Descripción |
+|---|---|---|
+| `name` | ✅ | Nombre PascalCase del record Java. |
+| `sourceBc` | No | Nombre del BC productor. Solo documentación — no genera validación. |
+| `properties[]` | ✅ | Propiedades del record. Misma estructura que `valueObjects[].properties[]`. |
+| `properties[].name` | ✅ | Nombre camelCase del campo Java. |
+| `properties[].type` | ✅ | Tipo canónico, enum, otro eventDto (mismo BC), o VO del dominio propio. |
+
+**Resolución de tipos en `eventDtos[].properties[]`:**
+1. Tipos canónicos (`Uuid`, `String`, `Decimal`, `Money`, …) → via `mapType()`
+2. `Enum<X>` o enum declarado en `enums[]` → importa desde `domain.enums`
+3. Nombre de otro `eventDto` de este BC (mismo paquete) → sin import
+4. VO declarado en `valueObjects[]` de este BC → importa desde `domain.valueobject`
+
+> **Nota:** Los `eventDtos[]` generan Java `record` sin lógica de negocio.
+> No implementan ninguna interfaz de dominio. Son data carriers puros.
+
+#### Alternativa legacy — Option A (desaconsejada)
+
+La alternativa anterior consistía en re-declarar el tipo en `valueObjects[]`.
+Esto generaba un `final class` en `domain.valueobject`, que es arquitectónicamente incorrecto
+(el snapshot externo contamina el modelo de dominio propio).
+
+Option A sigue siendo compatible (no hay breaking change), pero **se recomienda migrar
+a `eventDtos[]`** en diseños nuevos.
+
+> **GEN-WARN-001:** Si un tipo en `consumed[].payload[]` no es escalar, enum, valueObject ni
+> eventDto del BC consumidor, el generador emite un warning con instrucciones para declararlo
+> en `eventDtos[]` (recomendado) o `valueObjects[]` (Option A). El código generado
+> tendrá imports rotos si no se corrige.
 
 ---
 
@@ -1159,14 +1409,6 @@ domainEvents:
           type: Uuid
         - name: deactivatedAt
           type: DateTime
-      retry:
-        maxAttempts: 5
-        backoff: exponential
-        initialMs: 500
-        maxMs: 60000
-      dlq:
-        afterAttempts: 5
-        target: catalog.category-deactivated.dlq
 ```
 
 ### Ejemplo 3: Use case activado por evento (vinculación con `trigger.kind: event`)
@@ -1209,7 +1451,7 @@ domainEvents:
           type: Money
 ```
 
-El generador produce el consumer listener que extrae los campos del evento y los
+El generador produce el consumer listener que extrae los campos de `uc.input[]` del evento y los
 convierte en los parámetros del command:
 
 ```java
@@ -1221,16 +1463,24 @@ public class ProductActivatedRabbitListener {
 
     @RabbitListener(queues = "${queues.inventory-product-activated}")
     public void handle(Message message, Channel channel) throws IOException {
+        long deliveryTag = message.getMessageProperties().getDeliveryTag();
+
         EventEnvelope<Map<String, Object>> event = objectMapper.readValue(
                 message.getBody(),
                 new TypeReference<EventEnvelope<Map<String, Object>>>() {});
 
-        Map<String, Object> payload = event.payload();
-        CreateStockItemCommand command = new CreateStockItemCommand(
-            (String) payload.get("stockItemId")
-        );
-        useCaseMediator.send(command);
-        channel.basicAck(message.getMessageProperties().getDeliveryTag(), false);
+        // extrae solo los campos de uc.input[]
+        String productId = objectMapper.convertValue(event.data().get("productId"), String.class);
+        String sku       = objectMapper.convertValue(event.data().get("sku"),       String.class);
+
+        try {
+            useCaseMediator.dispatch(new CreateStockItemCommand(productId, sku));
+            channel.basicAck(deliveryTag, false);
+        } catch (DomainException e) {
+            channel.basicNack(deliveryTag, false, false);
+        } catch (RuntimeException e) {
+            throw e;
+        }
     }
 }
 ```
