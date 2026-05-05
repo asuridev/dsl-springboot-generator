@@ -898,13 +898,24 @@ function buildRabbitMQTopology(allBcYamls) {
     // to the source BC's exchange. Independent of domainEvents.consumed[].
     for (const proj of (bcYaml.projections || [])) {
       if (proj.persistent !== true || !proj.source || proj.source.kind !== 'event') continue;
-      const eventKebab = toKebabCase(proj.source.event);
       const projKebab  = toKebabCase(proj.name);
+      // Primary source
+      const eventKebab = toKebabCase(proj.source.event);
       const queueKey   = `${bcName}-projection-${projKebab}-${eventKebab}`;
       queueMap.set(queueKey, `${bcName}.${queueKey}`);
       rkMap.set(queueKey,    eventKebab.replace(/-/g, '.'));
       if (proj.source.from && !exchangeMap.has(proj.source.from)) {
         exchangeMap.set(proj.source.from, `${proj.source.from}.events`);
+      }
+      // Additional sources (partial updaters)
+      for (const src of (proj.additionalSources || [])) {
+        const srcEventKebab = toKebabCase(src.event);
+        const srcQueueKey   = `${bcName}-projection-${projKebab}-${srcEventKebab}`;
+        queueMap.set(srcQueueKey, `${bcName}.${srcQueueKey}`);
+        rkMap.set(srcQueueKey, srcEventKebab.replace(/-/g, '.'));
+        if (src.from && !exchangeMap.has(src.from)) {
+          exchangeMap.set(src.from, `${src.from}.events`);
+        }
       }
     }
   }
@@ -956,11 +967,19 @@ function buildKafkaTopology(allBcYamls) {
     // Persistent projections (Phase 3) declare an independent topic key.
     for (const proj of (bcYaml.projections || [])) {
       if (proj.persistent !== true || !proj.source || proj.source.kind !== 'event') continue;
-      const eventKebab = toKebabCase(proj.source.event);
       const projKebab  = toKebabCase(proj.name);
+      // Primary source
+      const eventKebab = toKebabCase(proj.source.event);
       const topicKey   = `${bcName}-projection-${projKebab}-${eventKebab}`;
       const sourceBc   = proj.source.from || bcName;
       topicMap.set(topicKey, `${sourceBc}.${eventKebab}`);
+      // Additional sources (partial updaters)
+      for (const src of (proj.additionalSources || [])) {
+        const srcEventKebab = toKebabCase(src.event);
+        const srcTopicKey   = `${bcName}-projection-${projKebab}-${srcEventKebab}`;
+        const srcBc         = src.from || bcName;
+        topicMap.set(srcTopicKey, `${srcBc}.${srcEventKebab}`);
+      }
     }
   }
 

@@ -892,6 +892,7 @@ function validate(doc, opts = {}) {
   const RESERVED_PROJECTION_SUFFIX = /(Dto|Response|Request|Payload)$/;
   const ALLOWED_PROJECTION_PROP_KEYS = new Set([
     'name', 'type', 'required', 'description', 'example', 'serializedName', 'derivedFrom',
+    'precision', 'scale',
   ]);
   const projectionNames = new Set();
   for (const proj of doc.projections || []) {
@@ -903,9 +904,47 @@ function validate(doc, opts = {}) {
     if (!Array.isArray(proj.properties) || proj.properties.length === 0) {
       fail(`Projection "${proj.name}" must declare at least one property under "properties".`);
     }
-    if (proj.source != null) {
+    if (proj.source != null && !proj.persistent) {
+      // For non-persistent projections, source is a string like "aggregate:Product"
       if (typeof proj.source !== 'string' || !/^(aggregate|readModel):[A-Z][A-Za-z0-9_]*$/.test(proj.source)) {
         fail(`Projection "${proj.name}" has invalid "source" value "${proj.source}". Expected "aggregate:<Name>" or "readModel:<Name>".`);
+      }
+    }
+    // ── additionalSources validation (persistent projections only) ──────────
+    if (proj.additionalSources != null) {
+      if (!proj.persistent) {
+        fail(`Projection "${proj.name}" declares "additionalSources" but is not persistent. "additionalSources" is only valid when persistent: true.`);
+      }
+      if (!Array.isArray(proj.additionalSources) || proj.additionalSources.length === 0) {
+        fail(`Projection "${proj.name}" "additionalSources" must be a non-empty array.`);
+      }
+      const propNames = new Set((proj.properties || []).map((p) => p.name));
+      for (let si = 0; si < proj.additionalSources.length; si++) {
+        const src = proj.additionalSources[si];
+        const sloc = `additionalSources[${si}]`;
+        if (!src || typeof src !== 'object') {
+          fail(`Projection "${proj.name}" ${sloc} must be a mapping.`);
+        }
+        if (src.kind !== 'event') {
+          fail(`Projection "${proj.name}" ${sloc}: "kind" must be "event".`);
+        }
+        if (!src.event || typeof src.event !== 'string') {
+          fail(`Projection "${proj.name}" ${sloc}: "event" is required and must be a PascalCase string.`);
+        }
+        if (!src.from || typeof src.from !== 'string') {
+          fail(`Projection "${proj.name}" ${sloc}: "from" is required and must be a kebab-case BC name.`);
+        }
+        if (!Array.isArray(src.updatesFields) || src.updatesFields.length === 0) {
+          fail(`Projection "${proj.name}" ${sloc}: "updatesFields" is required and must be a non-empty array of property names.`);
+        }
+        for (const fieldName of src.updatesFields) {
+          if (fieldName === proj.keyBy) {
+            fail(`Projection "${proj.name}" ${sloc}: "updatesFields" cannot include the keyBy field "${proj.keyBy}". The primary key is never partially updated.`);
+          }
+          if (!propNames.has(fieldName)) {
+            fail(`Projection "${proj.name}" ${sloc}: "updatesFields" references "${fieldName}" which is not declared in properties[].`);
+          }
+        }
       }
     }
     for (const prop of proj.properties) {

@@ -1,0 +1,6 @@
+openapi: "3.0.3"
+info:
+  title: Orders API
+  version: "1.0.0"
+  description: Minimal public OpenAPI for multi-source projection test scenario.
+paths: {}

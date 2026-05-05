@@ -271,6 +271,69 @@ async function generateProjectionUpdaters(allBcYamls, system, config, outputDir)
         sourceFromBc: proj.source.from,
         sourceEvent: proj.source.event,
       });
+
+      // ── Additional sources (partial updaters) ──────────────────────────
+      const partialTplName = broker === 'kafka'
+        ? 'ProjectionPartialUpdaterKafka.java.ejs'
+        : 'ProjectionPartialUpdaterRabbit.java.ejs';
+
+      for (const src of (proj.additionalSources || [])) {
+        const partialQueueKey = projectionQueueKey(bcName, proj.name, src.event);
+        const partialEventPascal = src.event; // already PascalCase in YAML
+        const partialEventKebab = toKebabCase(src.event);
+
+        // Build the set of fields this partial updater touches
+        const updatesFieldsSet = new Set(src.updatesFields);
+        const updatesFieldsData = nonKeyFields.filter((f) => updatesFieldsSet.has(f.name));
+
+        // Compute imports needed only for the partial fields
+        const partialImports = new Set();
+        partialImports.add('java.time.Instant');
+        if (keyImport) partialImports.add(keyImport);
+        for (const f of updatesFieldsData) {
+          const origProp = properties.find((p) => p.name === f.name);
+          if (origProp) {
+            const mapped = resolveJpaField(origProp, proj.name, bcName);
+            if (mapped.importHint) partialImports.add(mapped.importHint);
+          }
+        }
+
+        await renderAndWrite(
+          path.join(TEMPLATES_DIR, 'infrastructure', 'projections', partialTplName),
+          path.join(bcDir, 'infrastructure', 'projectionUpdaters',
+            `${proj.name}On${partialEventPascal}ProjectionUpdater.java`),
+          {
+            packageName,
+            moduleName: bcName,
+            projectionName: proj.name,
+            queueKey: partialQueueKey,
+            keyByField: proj.keyBy,
+            keyByFieldCap: capitalize(proj.keyBy),
+            keyJavaType,
+            sourceFromBc: src.from,
+            sourceEvent: src.event,
+            sourceEventPascal: partialEventPascal,
+            sourceEventKebab: partialEventKebab,
+            updatesFields: src.updatesFields,
+            updatesFieldsData,
+            upsertStrategy,
+            versionField,
+            versionJavaType,
+            versionFieldCap,
+            needsBigDecimal: updatesFieldsData.some((f) => f.javaType === 'BigDecimal') || keyJavaType === 'BigDecimal',
+            needsLocalDate: updatesFieldsData.some((f) => ['LocalDate', 'LocalDateTime'].includes(f.javaType)),
+            needsUUID: keyJavaType === 'UUID' || updatesFieldsData.some((f) => f.javaType === 'UUID'),
+          }
+        );
+
+        persistentProjections.push({
+          bcName,
+          projectionName: proj.name,
+          queueKey: partialQueueKey,
+          sourceFromBc: src.from,
+          sourceEvent: src.event,
+        });
+      }
     }
   }
 

@@ -99,6 +99,24 @@ function consumedNames(bcYaml) {
   return new Set(((bcYaml && bcYaml.domainEvents && bcYaml.domainEvents.consumed) || []).map((e) => e.name));
 }
 
+/**
+ * Returns the set of event names that the BC consumes via persistent projections
+ * (both primary source and additionalSources entries).
+ */
+function projectionConsumedNames(bcYaml) {
+  const names = new Set();
+  for (const proj of ((bcYaml && bcYaml.projections) || [])) {
+    if (proj.persistent !== true) continue;
+    if (proj.source && proj.source.kind === 'event' && proj.source.event) {
+      names.add(proj.source.event);
+    }
+    for (const src of (proj.additionalSources || [])) {
+      if (src.event) names.add(src.event);
+    }
+  }
+  return names;
+}
+
 function inboundOpNames(bcYaml) {
   const set = new Set();
   for (const ib of (bcYaml && bcYaml.integrations && bcYaml.integrations.inbound) || []) {
@@ -152,8 +170,8 @@ function checkSystemIntegrations(system, bcIndex, archDir, externalNames, diagno
             location: loc,
           });
         }
-        // INT-002
-        if (toBc && !toConsumed.has(eventName)) {
+        // INT-002: consumed via domainEvents.consumed[] OR via persistent projections
+        if (toBc && !toConsumed.has(eventName) && !projectionConsumedNames(toBc).has(eventName)) {
           diagnostics.push({
             code: 'INT-002',
             level: 'error',
@@ -388,6 +406,29 @@ function checkPersistentProjections(bcYamls, bcIndex, diagnostics) {
             level: 'error',
             message: `Persistent projection "${p.name}" keyBy="${p.keyBy}" is not declared in properties[].`,
             location: `${loc}/keyBy`,
+          });
+        }
+      }
+
+      // INT-012: each additionalSources entry must reference a published event in its <from> BC
+      for (let si = 0; si < (p.additionalSources || []).length; si++) {
+        const src = p.additionalSources[si];
+        const sloc = `${loc}/additionalSources[${si}]`;
+        if (!src || src.kind !== 'event' || !src.event || !src.from) continue; // bc-yaml-reader already caught structural errors
+        const srcBc = bcIndex.get(src.from);
+        if (!srcBc) {
+          diagnostics.push({
+            code: 'INT-012',
+            level: 'error',
+            message: `Persistent projection "${p.name}" additionalSources[${si}] sources from unknown BC "${src.from}".`,
+            location: `${sloc}/from`,
+          });
+        } else if (!publishedNames(srcBc).has(src.event)) {
+          diagnostics.push({
+            code: 'INT-012',
+            level: 'error',
+            message: `Persistent projection "${p.name}" additionalSources[${si}] sources event "${src.event}" but ${src.from}.yaml does not publish it.`,
+            location: `${sloc}/event`,
           });
         }
       }

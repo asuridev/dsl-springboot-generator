@@ -1,0 +1,3 @@
+{
+  "description": "Multi-source persistent projection: a projection in 'orders' BC is kept up-to-date by two events from 'catalog' — ProductActivated (primary, full upsert) and ProductPriceChanged (additional source, partial update of price only). Validates that the generator produces one full ProjectionUpdater, one partial ProjectionUpdater, a single SQL table, and both queue/topic entries in broker configuration."
+}
