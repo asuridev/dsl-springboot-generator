@@ -287,6 +287,14 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   const internalJwtEnabled  = hasAnyInternalJwt(system, allBcYamls);
   const mtlsEnabled         = hasAnyMtls(system, allBcYamls);
 
+  // ── Inbound auth server (JWT resource server) ────────────────────────
+  // derived_from: system.yaml#/infrastructure/authServer + dsl-springboot.json#/authProvider
+  const authProvider     = config.authProvider || null;
+  const authProviderMeta = authProvider
+    ? params.authProviders.find((p) => p.id === authProvider) || null
+    : null;
+  const authServerEnabled = !!authProviderMeta;
+
   // Derive artifact id from system name (kebab-case)
   const artifactId = systemName;
   // groupId: everything before the last dot in packageName, or packageName itself
@@ -352,7 +360,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'base', 'resources', `application-${env}.yaml.ejs`),
       path.join(resourcesDir, `application-${env}.yaml`),
-      { hasMessaging, hasHttpIntegrations, broker: brokerId, resilienceEnabled, oauth2ClientEnabled, mtlsEnabled, env }
+      { hasMessaging, hasHttpIntegrations, broker: brokerId, resilienceEnabled, oauth2ClientEnabled, mtlsEnabled, authServerEnabled, env }
     );
   }
 
@@ -412,6 +420,15 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
         path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'mtls.yaml.ejs'),
         path.join(paramDir, 'mtls.yaml'),
         {}
+      );
+    }
+
+    // auth-server.yaml (only when an inbound auth provider is configured)
+    if (authServerEnabled) {
+      await renderAndWrite(
+        path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'auth-server.yaml.ejs'),
+        path.join(paramDir, 'auth-server.yaml'),
+        { env, authProviderMeta }
       );
     }
 
@@ -587,7 +604,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'shared', 'configurations', 'securityConfig', 'SecurityConfig.java.ejs'),
     path.join(securityConfigDir, 'SecurityConfig.java'),
-    { packageName }
+    { packageName, authServerEnabled, authProviderMeta }
   );
 
   // ── Shared: SecurityContextUtil (G3) ──────────────────────────────────────
@@ -602,6 +619,14 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
     path.join(securityUtilDir, 'SecurityContextUtil.java'),
     { packageName }
   );
+
+  if (authServerEnabled) {
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'shared', 'infrastructure', 'security', 'JwtAuthConverter.java.ejs'),
+      path.join(securityUtilDir, 'JwtAuthConverter.java'),
+      { packageName, authProviderMeta }
+    );
+  }
 
   // ── Shared: SwaggerConfig ─────────────────────────────────────────────────
 

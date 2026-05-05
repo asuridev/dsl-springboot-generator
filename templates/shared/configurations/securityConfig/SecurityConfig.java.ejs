@@ -1,5 +1,6 @@
 package <%= packageName %>.shared.infrastructure.configurations.securityConfig;
 
+import java.util.List;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -13,8 +14,10 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
-
-import java.util.List;
+<% if (authServerEnabled) { -%>
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import <%= packageName %>.shared.infrastructure.security.JwtAuthConverter;
+<% } -%>
 
 @EnableWebSecurity
 @EnableMethodSecurity
@@ -29,6 +32,11 @@ public class SecurityConfig {
 
     @Value("#{'${cors.allowedHeaders}'.split(',')}")
     private List<String> allowedHeaders;
+<% if (authServerEnabled) { -%>
+
+    @Value("${auth.jwks-uri}")
+    private String jwksUri;
+<% } -%>
 
     private List<String> trimmed(List<String> list) {
         return list.stream().map(String::trim).toList();
@@ -36,12 +44,30 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        http.csrf(AbstractHttpConfigurer::disable)
-                .cors(Customizer.withDefaults())
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+        http
+            .csrf(AbstractHttpConfigurer::disable)
+            .cors(Customizer.withDefaults())
+            .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+<% if (authServerEnabled) { -%>
+            .authorizeHttpRequests(auth -> auth
+                    .requestMatchers("/actuator/health/**", "/swagger-ui/**", "/api-docs/**").permitAll()
+                    .anyRequest().authenticated())
+            .oauth2ResourceServer(oauth2 -> oauth2
+                    .jwt(jwt -> jwt
+                            .jwkSetUri(jwksUri)
+                            .jwtAuthenticationConverter(jwtAuthenticationConverter())));
+<% } else { -%>
+            .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
+<% } -%>
         return http.build();
     }
+<% if (authServerEnabled) { -%>
+
+    @Bean
+    public JwtAuthenticationConverter jwtAuthenticationConverter() {
+        return new JwtAuthConverter().converter();
+    }
+<% } -%>
 
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {

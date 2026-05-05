@@ -490,17 +490,40 @@ Define el tipo de retorno de un use case.
 - id: UC-PRD-002
   type: command
   returns: Uuid             # command record implementa ReturningCommand<UUID>
+
+# Comando que devuelve el precio calculado
+- id: UC-PRD-003
+  type: command
+  returns: Decimal          # command record implementa ReturningCommand<BigDecimal>
 ```
 
 | Valor | Java generado | Notas |
 |---|---|---|
-| Projection / VO / tipo canónico | `T` | Retorno directo. |
+| Nombre de projection / VO | `T` | Se usa el nombre tal cual como clase Java. Aplica en queries y commands. |
+| Tipo canónico escalar | Ver tabla abajo | `Uuid`, `Decimal`, `Integer`, etc. El generador convierte al tipo Java correcto e importa el stdlib correspondiente. Aplica en queries y commands. |
 | `List[T]` | `List<T>` | Lista completa, sin paginación. |
 | `Page[T]` | `PagedResponse<T>` | El generador detecta `returns.startsWith("Page[")`. Combinar con el bloque `pagination` para controlar `defaultSize`, `maxSize` y `sortable`. |
 | `Optional[T]` | `Optional<T>` en handler → `ResponseEntity<T>` en controller | Controller responde 200 si el handler devuelve valor, 404 si `Optional.empty()`. Solo válido en queries. |
 | `BinaryStream` | `ResponseEntity<Resource>` | Solo válido en queries. El controller genera `application/octet-stream`. |
 | (commands sin `returns`) | `void` | Command record implementa `Command`; handler implementa `CommandHandler<C>`. |
-| (commands con `returns: T`) | `T` | Command record implementa `ReturningCommand<T>`; handler implementa `ReturningCommandHandler<C, T>`. `Uuid` es la convención habitual para retornar el ID del recurso creado. |
+| (commands con `returns: T`) | `T` | Command record implementa `ReturningCommand<T>`; handler implementa `ReturningCommandHandler<C, T>`. Cualquier tipo canónico escalar o nombre de DTO/projection es válido. `Uuid` es la convención habitual para retornar el ID del recurso creado. |
+
+### Tipos canónicos escalares como `returns`
+
+Cuando `returns` es un tipo canónico escalar el generador produce el tipo Java correcto e incluye el import del stdlib. No se genera ningún import de DTO del BC.
+
+| Tipo YAML | Java generado | Import |
+|---|---|---|
+| `Uuid` | `UUID` | `java.util.UUID` |
+| `Integer` | `Integer` | — |
+| `Long` | `Long` | — |
+| `Decimal` | `BigDecimal` | `java.math.BigDecimal` |
+| `Boolean` | `Boolean` | — |
+| `Date` | `LocalDate` | `java.time.LocalDate` |
+| `DateTime` | `Instant` | `java.time.Instant` |
+| `Duration` | `Duration` | `java.time.Duration` |
+| `String` / `Text` / `Email` | `String` | — |
+| `Url` | `URI` | `java.net.URI` |
 
 **`BinaryStream` generado en controller:**
 ```java

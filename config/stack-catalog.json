@@ -54,6 +54,14 @@
       "testDependency": "testImplementation 'org.springframework.kafka:spring-kafka-test'"
     }
   ],
+  "authProviders": [
+    {
+      "id": "keycloak",
+      "label": "Keycloak",
+      "rolesClaimName": "realm_access.roles",
+      "principalClaimName": "preferred_username"
+    }
+  ],
   "dockerImages": {
     "postgres": "postgres:16-alpine",
     "mysql": "mysql:8.0",

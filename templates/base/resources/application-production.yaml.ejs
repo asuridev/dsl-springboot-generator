@@ -8,6 +8,9 @@ spring:
 <%- resilienceEnabled ? '      - "classpath:parameters/production/resilience.yaml"' : '' %>
 <%- oauth2ClientEnabled ? '      - "classpath:parameters/production/oauth2.yaml"' : '' %>
 <%- mtlsEnabled ? '      - "classpath:parameters/production/mtls.yaml"' : '' %>
+<% if (authServerEnabled) { -%>
+      - "classpath:parameters/production/auth-server.yaml"
+<% } -%>
 
 springdoc:
   swagger-ui:

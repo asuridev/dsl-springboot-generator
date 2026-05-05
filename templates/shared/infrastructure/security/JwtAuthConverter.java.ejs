@@ -1,0 +1,33 @@
+package <%= packageName %>.shared.infrastructure.security;
+
+import org.springframework.core.convert.converter.Converter;
+import org.springframework.security.authentication.AbstractAuthenticationToken;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
+
+/**
+ * Converts an incoming JWT into a Spring Security {@link AbstractAuthenticationToken},
+ * mapping provider-specific roles to standard Spring {@code ROLE_} granted authorities.
+ *
+ * Provider: <%= authProviderMeta.id %>
+ * Roles claim: <%= authProviderMeta.rolesClaimName %>
+ * Principal claim: <%= authProviderMeta.principalClaimName %>
+ */
+public class JwtAuthConverter {
+
+    /**
+     * Builds a {@link JwtAuthenticationConverter} pre-configured for this provider.
+     * Called by {@code SecurityConfig.jwtAuthenticationConverter()}.
+     */
+    public JwtAuthenticationConverter converter() {
+        JwtGrantedAuthoritiesConverter authoritiesConverter = new JwtGrantedAuthoritiesConverter();
+        authoritiesConverter.setAuthoritiesClaimName("<%= authProviderMeta.rolesClaimName %>");
+        authoritiesConverter.setAuthorityPrefix("ROLE_");
+
+        JwtAuthenticationConverter jwtConverter = new JwtAuthenticationConverter();
+        jwtConverter.setJwtGrantedAuthoritiesConverter(authoritiesConverter);
+        jwtConverter.setPrincipalClaimName("<%= authProviderMeta.principalClaimName %>");
+        return jwtConverter;
+    }
+}

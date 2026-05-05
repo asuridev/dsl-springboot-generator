@@ -86,6 +86,7 @@ async function promptConfig(systemName, system) {
   const defaultDb = params.databases.find((db) => db.id === 'postgresql') || params.databases[0];
 
   const needsBroker = !!(system.infrastructure && system.infrastructure.messageBroker);
+  const needsAuthServer = !!system.authServer;
 
   const questions = [
     {
@@ -131,6 +132,16 @@ async function promptConfig(systemName, system) {
     });
   }
 
+  if (needsAuthServer) {
+    questions.push({
+      type: 'list',
+      name: 'authProvider',
+      message: 'Authorization server provider:',
+      choices: params.authProviders.map((p) => ({ name: p.label, value: p.id })),
+      default: params.authProviders[0].id,
+    });
+  }
+
   const answers = await inquirer.prompt(questions);
 
   return {
@@ -139,6 +150,7 @@ async function promptConfig(systemName, system) {
     springBootVersion: answers.springBootVersion,
     database: answers.database,
     broker: needsBroker ? (answers.broker || null) : null,
+    authProvider: needsAuthServer ? (answers.authProvider || null) : null,
     systemName,
   };
 }
@@ -173,7 +185,7 @@ async function buildCommand(options = {}) {
     let config;
     if (await configExists()) {
       config = await readConfig();
-      logger.info(`Using saved configuration (${config.packageName}, Java ${config.javaVersion}, Spring Boot ${config.springBootVersion}, DB: ${config.database || 'postgresql'}, Broker: ${config.broker || 'none'})`);
+      logger.info(`Using saved configuration (${config.packageName}, Java ${config.javaVersion}, Spring Boot ${config.springBootVersion}, DB: ${config.database || 'postgresql'}, Broker: ${config.broker || 'none'}, Auth: ${config.authProvider || 'none'})`);
     } else {
       config = await promptConfig(system.name, system);
       await writeConfig(config);

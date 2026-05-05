@@ -53,6 +53,7 @@ async function readSystemYaml() {
       })),
     })),
     infrastructure: doc.infrastructure || {},
+    authServer: !!(doc.infrastructure && doc.infrastructure.authServer),
     integrations: doc.integrations || [],
     externalSystems: doc.externalSystems || [],
     // Phase 4 — choreographed sagas (optional). Pass-through when absent → [].
