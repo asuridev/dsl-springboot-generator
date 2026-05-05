@@ -990,37 +990,87 @@ public void execute(PlaceOrderCommand command) {
 
 Declara los eventos que este BC recibe del broker y cómo procesa su payload.
 
+El generador acepta **dos formas** para cada entrada de `consumed[]`. La forma que aplica se determina por la presencia o ausencia del campo `command:`.
+
+---
+
+#### Forma A — Lightweight (derivada del use case)
+
+El generador busca un UC con `trigger.kind: event` cuyo `trigger.consumes` (o alias `trigger.event`) coincide con el `name`. A partir de ese UC deriva automáticamente el `command`, el `useCase`, el `producer` y el `filterExpr`. Esta es la forma habitual.
+
 ```yaml
 domainEvents:
   consumed:
-    - name: ProductActivated      # PascalCase — nombre del evento publicado por el BC fuente
-      sourceBc: catalog           # kebab-case — BC que publica este evento (INT-007)
-      channel: catalog.product.activated  # canal AsyncAPI del evento publicado (opcional pero recomendado)
-
-      payload:                    # campos del evento que este BC necesita — subconjunto del published[]
+    - name: ProductActivated          # requerido
+      sourceBc: catalog               # para validaciones INT-007 / INT-020
+      channel: catalog.product.activated  # opcional pero recomendado
+      payload:                        # subconjunto del published[].payload[] del productor
         - name: productId
           type: Uuid
         - name: sku
           type: String(50)
         - name: price
           type: Money
-
-      acknowledgeOnly: true       # solo si el BC se suscribe sin lógica de dominio
+# El generador busca: useCases[trigger.kind=event, trigger.consumes=ProductActivated]
+# y de ese UC deriva: command = uc.name, useCase = uc.id, filterExpr = uc.trigger.filter
 ```
 
-#### Propiedades de `consumed`
+**Qué pasa si no existe un UC con `trigger.kind: event` para este evento:**
+El generador emite un `warn` y NO genera listener. El evento queda en la topología RabbitMQ/Kafka (cola declarada) pero sin handler Java.
 
-| Propiedad | Tipo | Requerido | Descripción |
-|---|---|---|---|
-| `name` | PascalCase | ✅ | Nombre del evento. Debe estar declarado en `domainEvents.published[]` del BC `sourceBc` (validación INT-007). |
-| `sourceBc` | kebab-case | ✅ | BC que publica este evento. Usado para la validación INT-007 y INT-020. En el código generado aparece en el Javadoc del listener. |
-| `channel` | string | no | Canal del broker donde se publica el evento (ej: `catalog.product.activated`). Cuando se declara, el generador lo usa en el Javadoc del listener y para derivar el routing key en la topología RabbitMQ. Si se omite, el nombre de la cola/topic se deriva como `{bc}-{event-kebab}`. |
-| `payload` | lista | no | Subconjunto de campos del evento que este BC necesita. Validación INT-020: todos los campos declarados aquí deben existir en el `published[].payload[]` del BC productor. **Si `payload` se omite, el generador deriva los campos desde los `params` del `domainMethod` que invoca el use case asociado** — no toma el payload completo del evento publicado. |
-| `acknowledgeOnly` | boolean | no | Si `true`, el BC se suscribe al canal sin lógica de dominio: no se genera command ni handler, solo el canal `subscribe` en el AsyncAPI. Candidatos típicos: confirmaciones de compensación de saga que el BC solo necesita registrar. |
+---
 
-> **`retry` y `dlq` NO se configuran en `consumed[]`** — son preocupaciones de infraestructura, no de diseño de dominio.
-> Configura el número de reintentos, TTL y DLQ en `system.yaml` (defaults de infraestructura) o en los archivos de entorno (`application-{env}.yml`).
-> El listener generado lanza `RuntimeException` para errores de infraestructura, delegando el retry a la política de cola del broker.
+#### Forma B — Full form (declaración explícita)
+
+Cuando `command:` está presente, el generador usa la entrada tal cual **sin buscar ningún UC**.
+Útil cuando el listener debe existir sin un UC formal (p.ej. adaptadores legados, handlers de compensación de saga sin UC propio).
+
+```yaml
+domainEvents:
+  consumed:
+    - name: OrderPlaced               # requerido
+      command: ReserveStock           # requerido para activar forma B
+                                      # → genera ReserveStockCommand + ReserveStockRabbitListener
+      producer: orders                # opcional — aparece en Javadoc del listener
+      useCase: UC-INV-010             # opcional — aparece en Javadoc del listener (fallback: command)
+      sourceBc: orders                # solo validación INT-020; no afecta código generado
+      channel: orders.order.placed    # opcional — usado en topología y Javadoc
+      queueKey: inventory-order-placed  # opcional — default: {bc}-{event-kebab}
+      filterExpr: "fields.get(\"status\").equals(\"CONFIRMED\")"  # opcional — guard en el listener
+      payload:
+        - name: orderId
+          type: Uuid
+        - name: items
+          type: List[OrderLineSnapshot]
+```
+
+---
+
+#### Tabla completa de propiedades de `consumed[]`
+
+| Propiedad | Forma | Leída por | Requerido | Descripción |
+|---|---|---|---|---|
+| `name` | A y B | generador + validador | ✅ | Nombre del evento (PascalCase). Genera `{Name}RabbitListener` / `{Name}KafkaListener`. Debe estar declarado en `published[]` del BC productor (INT-007). |
+| `command` | **B** | generador | ✅ en forma B | Nombre del use case **sin** el sufijo `Command`. Genera `{Command}Command` y el listener que lo despacha. Su presencia activa la forma B. |
+| `producer` | **B** | generador | no | Nombre del BC productor. Solo aparece en el Javadoc del listener: `Consumes events produced by: {producer}`. Default: `'unknown'`. En forma A se deriva del primer segmento de `channel` (`channel.split('.')[0]`). |
+| `useCase` | **B** | generador | no | ID o nombre del UC para el Javadoc del listener: `Dispatches to use case: {useCase}`. Fallback: valor de `command`. En forma A se toma de `uc.id`. |
+| `sourceBc` | A y B | **solo validador** | no | BC que publica el evento. Lo lee `integration-validator.js` para INT-007 (el evento debe estar en `published[]` del BC declarado) e INT-020 (los campos del payload deben ser subconjunto del payload del publicador). **No afecta ningún archivo Java generado.** Alias aceptado: `from`. |
+| `channel` | A y B | generador + topología | no | Canal AsyncAPI. En topología RabbitMQ se usa para derivar el routing key. En forma A: el generador deriva `producer` como el primer segmento (`orders.order.placed` → `orders`). Si se omite, canal se deriva como `{eventKebab}`. |
+| `queueKey` | A y B | generador (RabbitMQ) | no | Key de la cola en `rabbitmq.yaml` y en la property `${queues.{queueKey}}` del listener. Default: `{bc}-{event-name-kebab}` (ej: `inventory-order-placed`). |
+| `topicKey` | A y B | generador (Kafka) | no | Equivalente de `queueKey` para Kafka. Property `${topics.{topicKey}}`. Default: mismo cálculo que `queueKey`. |
+| `payload` | A y B | generador | no | Campos del evento que el listener extrae de `event.data()`. Cada campo genera una línea de extracción tipada en el listener. Si se omite en forma A, el generador intenta derivar los campos desde `uc.input[]` o desde los `params` del `domainMethod`. Si tampoco hay `uc.input[]`, el command queda vacío (`new XyzCommand()` sin args). |
+| `filterExpr` | **B** | generador | no | Expresión Java booleana evaluada sobre los campos extraídos. Si la expresión es `false`, el listener hace `basicAck` sin despachar el command (skip silencioso). En forma A se deriva de `uc.trigger.filter`. |
+
+> **Propiedades ignoradas con GEN-WARN:**
+> - `retry:` — emite `[bc-yaml-reader] GEN-WARN: ... "retry" is ignored`. Configura en `system.yaml` o archivos de entorno.
+> - `dlq:` — emite `[bc-yaml-reader] GEN-WARN: ... "dlq" is ignored`. Configura en `system.yaml` o archivos de entorno.
+
+> **`sourceBc` vs `producer` — distinción crítica:**
+> | Campo | Quién lo lee | Dónde aparece |
+> |---|---|---|
+> | `sourceBc` | `integration-validator.js` | Validaciones INT-007 e INT-020. **No aparece en código Java.** |
+> | `producer` | `messaging-generator.js` | Javadoc del listener: `Consumes events produced by: {producer}`. |
+> Si quieres ambos comportamientos, declara los dos campos con el mismo valor.
 
 #### Artefactos generados
 
@@ -1320,23 +1370,30 @@ incluye automáticamente un componente `EventMetadata` como primer campo del rec
 Este componente es un record canónico compartido por todos los eventos del sistema.
 
 ```java
-// EventMetadata.java (generado como clase compartida)
+// shared/domain/EventMetadata.java (generado como clase compartida)
 public record EventMetadata(
     UUID eventId,           // UUID v4 único por instancia de evento
     String eventType,       // nombre del evento (e.g. "ProductActivated")
-    String eventVersion,    // versión del contrato (e.g. "1")
+    int eventVersion,       // versión del contrato como entero (e.g. 1)
     Instant occurredAt,     // Instant.now() en el momento del raise()
-    UUID correlationId,     // ID de correlación de la traza distribuida
-    UUID causationId        // ID del command/query que causó el evento
+    String sourceBc,        // bounded context que generó el evento (e.g. "catalog")
+    String correlationId,   // ID de correlación — String, propagado por la capa de mensajería
+    String causationId      // ID del evento/command causante — String, propagado por la capa de mensajería
 ) {
-    public static EventMetadata now(String eventType, String version) {
+    /**
+     * Usado por los agregados al hacer raise().
+     * correlationId y causationId se dejan en null — la capa de mensajería
+     * (DomainEventHandler) los propaga desde el contexto ambient antes de publicar.
+     */
+    public static EventMetadata now(String eventType, int eventVersion, String sourceBc) {
         return new EventMetadata(
             UUID.randomUUID(),
             eventType,
-            version,
+            eventVersion,
             Instant.now(),
-            MDC.get("correlationId") != null ? UUID.fromString(MDC.get("correlationId")) : null,
-            MDC.get("causationId") != null ? UUID.fromString(MDC.get("causationId")) : null
+            sourceBc,
+            null,   // correlationId: propagado por DomainEventHandler desde MDC
+            null    // causationId:   propagado por DomainEventHandler desde MDC
         );
     }
 }
@@ -1346,7 +1403,15 @@ public record EventMetadata(
 > los mismos nombres que los del `EventMetadata` canónico (`eventId`, `eventType`,
 > `eventVersion`, `occurredAt`, `correlationId`, `causationId`), el generador emite una
 > advertencia de deprecación y filtra esos campos del payload para evitar duplicados.
-> La información ya está en `EventMetadata`.
+> La información ya está en `EventMetadata`. Nota: `sourceBc` no está en la lista de filtrado
+> porque el payload raramente declara un campo con ese nombre; se mantiene si se declara.
+
+> **Dos clases EventMetadata:** el generador produce dos records con este nombre en paquetes distintos.
+> `shared.domain.EventMetadata` — adjuntado al DomainEvent (levantado por el agregado), usa `now()` para capturar
+> el instante del evento. `shared.infrastructure.eventEnvelope.EventMetadata` — adjuntado al EventEnvelope
+> (formato wire), usa `create(String eventType, String correlationId)` y tiene campos `eventId: String`,
+> `timestamp: String`, `source: String`. Son clases distintas; la documentación de esta sección cubre
+> la de dominio.
 
 ---
 
@@ -1369,7 +1434,7 @@ detiene.
 | **INT-009** | error | Operación declarada en `bc.integrations.outbound[type=externalSystem]` no coincide con ninguna en `externalSystems[name=target].operations[].name`. |
 | **INT-010** | error | Una projection con `persistent: true` debe declarar `source.kind: event` y el evento debe estar publicado por el BC `source.from`. |
 | **INT-011** | error | Una projection persistente debe declarar `keyBy` apuntando a una propiedad existente. |
-| **INT-012** | error | Cada `step.triggeredBy` en una saga debe estar publicado por algún BC. |
+| **INT-012** | error | Dos usos: (1) `additionalSources` de una projection persistente debe referenciar un evento publicado por el BC `from` declarado. (2) Cada `step.triggeredBy` en una saga debe ser el evento trigger de la saga o estar publicado por algún BC. |
 | **INT-013** | error | `saga.trigger.event` debe estar en `domainEvents.published[]` del BC `saga.trigger.bc`. |
 | **INT-014** | error | `saga.step.onSuccess` / `step.onFailure` deben estar publicados por el BC del step. `step.compensation` debe estar publicado por algún BC. |
 | **INT-015** | error | Una integración HTTP con `auth.type: oauth2-cc` debe declarar `tokenEndpoint` y `credentialKey`. |
@@ -1384,6 +1449,7 @@ detiene.
 | **INT-024** | error | `auth.type` con valor desconocido. Valores válidos: `api-key`, `bearer`, `oauth2-cc`, `mTLS`, `internal-jwt`, `none`. |
 | **INT-025** | error | Un campo de `domainEvents.published[].payload[]` declara `source: auth-context`. Este origen no está permitido en el payload de eventos: el agregado debe ser agnóstico a la seguridad. Declarar el campo como `source: param`, añadirlo a `domainMethods[].params` y resolver el valor de `SecurityContext` en el handler de aplicación. |
 | **INT-026** | error | Un campo de `domainEvents.published[].payload[]` declara `source: param` pero ningún `domainMethod` que emita ese evento declara un parámetro con el nombre referenciado (`param:` o `name:`). El generador emitiría `null` silenciosamente en el evento publicado, causando pérdida de datos en runtime. Añadir el parámetro a `domainMethods[].params[]` o corregir el nombre. |
+| **INT-027** | warn | Una projection persistente declara `upsertStrategy: versionGuarded` pero el evento fuente (primary o additionalSources) no incluye el campo de versión en su `payload[]`. El guard degeneraría silenciosamente a `lastWriteWins` en runtime. Añadir el campo de versión al evento o cambiar la estrategia. |
 
 ---
 
