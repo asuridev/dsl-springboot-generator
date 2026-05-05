@@ -498,18 +498,18 @@ El fragmento completo del método `handle()` generado para un listener que parti
 
 ```java
 @RabbitListener(queues = "${queues.inventory-payment-confirmed}")
-@SagaStep(saga = "OrderFulfillmentSaga", order = 1, event = "PaymentConfirmed", role = SagaStep.Role.SUCCESS)
+@SagaStep(saga = "OrderFulfillmentSaga", order = 0, event = "PaymentConfirmed", role = SagaStep.Role.TRIGGER)
 public void handle(Message message, Channel channel) throws IOException {
     long deliveryTag = message.getMessageProperties().getDeliveryTag();
 
     EventEnvelope<Map<String, Object>> event;
     try {
         event = objectMapper.readValue(
-            new String(message.getBody()),
+            message.getBody(),
             new TypeReference<EventEnvelope<Map<String, Object>>>() {});
     } catch (JsonProcessingException e) {
-        log.error("Fatal deserialization error — skipping message: {}", e.getMessage());
-        channel.basicAck(deliveryTag, false);
+        log.error("Fatal deserialization error — sending to DLQ: {}", e.getMessage());
+        channel.basicNack(deliveryTag, false, false);
         return;
     }
 
@@ -518,14 +518,23 @@ public void handle(Message message, Channel channel) throws IOException {
     CorrelationContext.set(correlationId);
 
     // ... dispatch al use case ...
-    // CorrelationContext se limpia implícitamente al terminar el thread del listener
+    try {
+        useCaseMediator.dispatch(new ReserveStockCommand(/* campos */);
+        channel.basicAck(deliveryTag, false);
+    } catch (DomainException e) {
+        channel.basicNack(deliveryTag, false, false);
+    } catch (RuntimeException e) {
+        throw e;
+    } finally {
+        CorrelationContext.clear();   // ← generado cuando sagasEnabled=true
+    }
 }
 ```
 
-> **Nota sobre limpieza del contexto:** el generador **no** inserta `CorrelationContext.clear()`
-> en el `finally` del listener. Se asume que el thread del listener no se reutiliza para otra
-> petición con un correlationId diferente en el mismo ciclo de vida. Si el broker usa thread
-> pools con reuse, añadir manualmente el `finally { CorrelationContext.clear(); }`.
+> **Limpieza del contexto:** el generador **sí inserta** `CorrelationContext.clear()` en un bloque
+> `finally` dentro del método `handle()`, **cuando `sagasEnabled=true`**. El bloque `finally` garantiza
+> que el `ThreadLocal` se limpia incluso si el dispatch lanza una excepción, independientemente
+> del resultado del ACK/NACK. Ver fragmento completo a continuación.
 
 ### 6.4 `DomainEventHandler` — handler de eventos publicados
 
@@ -904,8 +913,16 @@ public class OrderPlacedRabbitListener {
         CorrelationContext.set(correlationId);
 
         // dispatch al use case ReserveStockCommand
-        useCaseMediator.dispatch(new ReserveStockCommand(/* campos del evento */));
-        channel.basicAck(deliveryTag, false);
+        try {
+            useCaseMediator.dispatch(new ReserveStockCommand(/* campos del evento */));
+            channel.basicAck(deliveryTag, false);
+        } catch (DomainException e) {
+            channel.basicNack(deliveryTag, false, false);
+        } catch (RuntimeException e) {
+            throw e;
+        } finally {
+            CorrelationContext.clear();   // ← generado cuando sagasEnabled=true
+        }
     }
 }
 ```
@@ -1047,9 +1064,9 @@ compensation:
   triggeredBy: StockReservationFailed
 ```
 
-### 10.5 `CorrelationContext.clear()` sí se genera en los listeners
+### 10.5 `CorrelationContext.clear()` en el bloque `finally` de los listeners
 
-Contrariamente a lo que podría esperarse, el generador **sí inserta** `CorrelationContext.clear()` en un bloque `finally` dentro del método `handle()` de los listeners, **cuando `sagasEnabled=true`**.
+El generador **sí inserta** `CorrelationContext.clear()` en un bloque `finally` dentro del método `handle()` de los listeners, **cuando `sagasEnabled=true`**. Aplica tanto a `RabbitListener.java.ejs` como a `KafkaListener.java.ejs`.
 
 Fragmento real del template `RabbitListener.java.ejs`:
 
