@@ -3,7 +3,7 @@
 const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toCamelCase, toPackagePath } = require('../utils/naming');
-const { mapType } = require('../utils/type-mapper');
+const { mapType, resolveCanonicalReturnType } = require('../utils/type-mapper');
 const { mapDslValidations, mergeAnnotations } = require('../utils/validation-mapper');
 const { mapRule } = require('../utils/domain-rule-mapper');
 const { getOutboundHttpBcNames } = require('./outbound-http-generator');
@@ -903,6 +903,9 @@ function buildQueryReturnType(uc, agg, repoMethods) {
   // [G24] Optional[SomeDto] → Optional<SomeDto>
   const optMatch = /^Optional\[(.+)\]$/.exec(raw);
   if (optMatch) return `Optional<${normalize(optMatch[1])}>`;
+  // [G4] canonical scalar return type (Uuid→UUID, Decimal→BigDecimal, etc.)
+  const canonical = resolveCanonicalReturnType(raw);
+  if (canonical) return canonical.javaType;
   // Bare DTO name (e.g. ProductResponse → ProductResponseDto)
   return normalize(raw);
 }
@@ -1646,7 +1649,13 @@ async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap
     if (baseDto === 'BulkResult' || baseDto === 'JobReference') {
       cmdImports.push(`${packageName}.shared.application.dtos.${baseDto}`);
     } else {
-      cmdImports.push(`${packageName}.${moduleName}.application.dtos.${baseDto}`);
+      // [G4] canonical scalar return type — import stdlib, not BC DTO.
+      const canonicalReturn = resolveCanonicalReturnType(uc.returns);
+      if (canonicalReturn) {
+        if (canonicalReturn.importHint) cmdImports.push(canonicalReturn.importHint);
+      } else {
+        cmdImports.push(`${packageName}.${moduleName}.application.dtos.${baseDto}`);
+      }
     }
   }
   await renderAndWrite(
@@ -1738,7 +1747,13 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
     if (baseDto === 'BulkResult' || baseDto === 'JobReference') {
       extraImports.push(`${packageName}.shared.application.dtos.${baseDto}`);
     } else {
-      extraImports.push(`${packageName}.${moduleName}.application.dtos.${baseDto}`);
+      // [G4] canonical scalar return type — import stdlib, not BC DTO.
+      const canonicalReturn = resolveCanonicalReturnType(uc.returns);
+      if (canonicalReturn) {
+        if (canonicalReturn.importHint) extraImports.push(canonicalReturn.importHint);
+      } else {
+        extraImports.push(`${packageName}.${moduleName}.application.dtos.${baseDto}`);
+      }
     }
     // For implementation: full + returns the auto-generated body has no return stmt;
     // emit a TODO so the developer knows to map the result. The scaffold branch

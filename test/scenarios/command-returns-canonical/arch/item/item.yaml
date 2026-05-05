@@ -1,0 +1,71 @@
+bc: item
+version: "1.0.0"
+
+aggregates:
+  - name: Item
+    root: Item
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(100)
+        required: true
+      - name: price
+        type: Decimal
+        precision: 10
+        scale: 2
+
+useCases:
+  - id: create-item
+    name: CreateItem
+    type: command
+    aggregate: Item
+    returns: Uuid
+    trigger:
+      kind: http
+      operationId: createItem
+    input:
+      - name: name
+        type: String(100)
+        source: body
+        required: true
+      - name: price
+        type: Decimal
+        source: body
+        required: true
+    implementation: scaffold
+
+  - id: calculate-item-price
+    name: CalculateItemPrice
+    type: command
+    aggregate: Item
+    returns: Decimal
+    trigger:
+      kind: http
+      operationId: calculateItemPrice
+    input:
+      - name: itemId
+        type: Uuid
+        source: path
+        required: true
+      - name: quantity
+        type: Integer
+        source: body
+        required: true
+    implementation: scaffold
+
+errors:
+  - code: ITEM_NOT_FOUND
+    httpStatus: 404
+    description: Item not found.
+
+repositories:
+  - aggregate: Item
+    methods:
+      - name: save
+        signature: "save(Item): Item"
+      - name: findById
+        signature: "findById(Uuid): Item?"

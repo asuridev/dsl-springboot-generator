@@ -1,0 +1,57 @@
+openapi: "3.0.3"
+info:
+  title: Item API
+  version: "1.0.0"
+  description: API for item management — canonical return types scenario.
+paths:
+  /items:
+    post:
+      operationId: createItem
+      summary: Create a new item and return its generated ID.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                price:
+                  type: number
+      responses:
+        "200":
+          description: The UUID of the created item.
+          content:
+            application/json:
+              schema:
+                type: string
+                format: uuid
+
+  /items/{itemId}/price:
+    post:
+      operationId: calculateItemPrice
+      summary: Calculate the price for a quantity of an item.
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                quantity:
+                  type: integer
+      responses:
+        "200":
+          description: The calculated price as a decimal.
+          content:
+            application/json:
+              schema:
+                type: number

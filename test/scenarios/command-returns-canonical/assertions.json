@@ -1,0 +1,67 @@
+{
+  "src/main/java/com/test/item/application/commands/CreateItemCommand.java": {
+    "_comment": "returns: Uuid must produce ReturningCommand<UUID> with java.util.UUID import — not dtos.UUID",
+    "contains": [
+      "ReturningCommand<UUID>",
+      "import java.util.UUID"
+    ],
+    "notContains": [
+      "ReturningCommand<Uuid>",
+      "com.test.item.application.dtos.UUID",
+      "application.dtos.Uuid"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/usecases/CreateItemCommandHandler.java": {
+    "_comment": "Handler handle() method must return UUID, import java.util.UUID — not dtos.UUID",
+    "contains": [
+      "public UUID handle",
+      "import java.util.UUID"
+    ],
+    "notContains": [
+      "com.test.item.application.dtos.UUID",
+      "application.dtos.Uuid"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/commands/CalculateItemPriceCommand.java": {
+    "_comment": "returns: Decimal must produce ReturningCommand<BigDecimal> with java.math.BigDecimal import",
+    "contains": [
+      "ReturningCommand<BigDecimal>",
+      "import java.math.BigDecimal"
+    ],
+    "notContains": [
+      "ReturningCommand<Decimal>",
+      "com.test.item.application.dtos.BigDecimal",
+      "application.dtos.Decimal"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/usecases/CalculateItemPriceCommandHandler.java": {
+    "_comment": "Handler handle() method must return BigDecimal, import java.math.BigDecimal — not dtos.BigDecimal",
+    "contains": [
+      "public BigDecimal handle",
+      "import java.math.BigDecimal"
+    ],
+    "notContains": [
+      "com.test.item.application.dtos.BigDecimal",
+      "application.dtos.Decimal"
+    ]
+  },
+
+  "src/main/java/com/test/item/infrastructure/rest/controllers/item/v1/ItemV1Controller.java": {
+    "_comment": "Controller methods must use the correct Java return types and not import phantom BC DTOs",
+    "contains": [
+      "UUID createItem",
+      "BigDecimal calculateItemPrice",
+      "import java.util.UUID",
+      "import java.math.BigDecimal"
+    ],
+    "notContains": [
+      "Uuid createItem",
+      " Decimal calculateItemPrice",
+      "com.test.item.application.dtos.UUID",
+      "com.test.item.application.dtos.BigDecimal"
+    ]
+  }
+}

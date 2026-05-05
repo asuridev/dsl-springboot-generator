@@ -114,12 +114,11 @@ trigger:
 ```java
 @PostMapping("/products")
 @ResponseStatus(HttpStatus.CREATED)
-public ResponseEntity<ProductSummary> createProduct(
-    @RequestBody @Valid CreateProductRequest request) {
+public void createProduct(
+    @Valid @RequestBody CreateProductCommand command) {
 
-    CreateProductCommand command = mapper.toCommand(request);
-    UUID productId = mediator.send(command);
-    return ResponseEntity.created(URI.create("/products/" + productId)).build();
+    log.info("createProduct");
+    useCaseMediator.dispatch(command);
 }
 ```
 
@@ -250,7 +249,7 @@ input:
 | Propiedad | Tipo | Requerido | Descripción |
 |---|---|---|---|
 | `name` | camelCase | ✅ | Nombre del parámetro. Campo del command/query record. |
-| `type` | tipo canónico | ✅ | Tipo del parámetro. |
+| `type` | tipo canónico | ✅ | Tipo del parámetro. Ver tabla de tipos canónicos a continuación. |
 | `source` | enum | ✅ | De dónde proviene el valor. Ver tabla siguiente. |
 | `required` | boolean | no | Si `true`: `@NotNull` en el command/query. Default: `false`. |
 | `default` | valor | no | Valor por defecto cuando no se provee. Solo válido para `source: query`. |
@@ -259,19 +258,45 @@ input:
 | `headerName` | string | ✅ si `source: header` | Nombre del header HTTP (e.g. `X-Tenant-Id`). |
 | `partName` | string | no | Nombre de la parte multipart. Solo si `source: multipart`. |
 | `maxSize` | `{N}{B\|KB\|MB\|GB}` | no | Tamaño máximo del archivo. Solo si `source: multipart`. |
-| `contentTypes` | lista MIME | no | MIME types aceptados. Solo si `source: multipart`. |
+| `contentTypes` | lista MIME | no | MIME types aceptados. Solo si `source: multipart`. El generador no valida los valores: cualquier string MIME es aceptado (p. ej. `image/png`, `image/jpeg`, `application/pdf`). Se genera en el controller un guard `Set.of(...).contains(file.getContentType())` con los tipos declarados. |
 | `fields` | lista camelCase | ✅ si `type: SearchText` | Propiedades del agregado sobre las que se aplica la búsqueda LIKE. Deben existir en el agregado. |
+
+### Tipos canónicos permitidos en `input[].type`
+
+| Tipo YAML | Java generado | Notas |
+|---|---|---|
+| `Uuid` | `String` (command) / `UUID` (handler) | En commands HTTP se serializa como `String`; el handler convierte con `UUID.fromString`. |
+| `String` | `String` | — |
+| `String(n)` | `String` + `@Size(max = n)` | Limita longitud. |
+| `Text` | `String` | Sin límite de longitud; equivalente a `String` para inputs. |
+| `Integer` | `Integer` | — |
+| `Long` | `Long` | — |
+| `Decimal` | `BigDecimal` | Admite `precision` y `scale` opcionales. |
+| `Boolean` | `Boolean` | — |
+| `Date` | `LocalDate` | — |
+| `DateTime` | `Instant` | — |
+| `Duration` | `Duration` | — |
+| `Email` | `String` + `@Email` | — |
+| `Url` | `URI` | — |
+| `Money` | `Money` (value object) | `@Valid @Embedded`. |
+| `File` | `MultipartFile` | Solo válido con `source: multipart`. |
+| `SearchText` | `String` | Marcador semántico: exige `fields[]` y genera un Specification LIKE en el repositorio. Se transmite como `String` en el record. |
+| `Range[T]` | `Range<T>` | Rango numérico/temporal. `T` debe ser un tipo canónico simple (p. ej. `Range[Decimal]`, `Range[Integer]`, `Range[Date]`). |
+| `List[T]` | `List<T>` | Lista de valores del tipo `T`. |
+| `Enum<X>` | `X` (enum de dominio) | Referencia a un enum declarado en `enums[]`. |
+
+> **Tipos prohibidos** — el generador falla si se usan: `string`, `int`, `number`, `float`, `bool`, `date` (minúscula), `timestamp`, `any`, `object`, `bigint`, o `varchar(n)`.
 
 ### Valores de `source`
 
 | Valor | Genera en el controller | Genera en el command/query |
 |---|---|---|
-| `body` | `@RequestBody @Valid RequestDto` | Campo del record |
-| `path` | `@PathVariable UUID productId` | Campo del record |
+| `body` | `@RequestBody @Valid {Name}Command command` | Campo del record |
+| `path` | `@PathVariable String {name}` | Campo del record (String; el handler convierte con `UUID.fromString`) |
 | `query` | `@RequestParam(required=false) String status` | Campo del record |
-| `authContext` | Inyección desde `SecurityContextHolder` | Campo del record (tipo Uuid) |
-| `header` | `@RequestHeader("X-Tenant-Id") UUID tenantId` | Campo del record |
-| `multipart` | `@RequestPart("file") MultipartFile image` | Campo del record (tipo MultipartFile) |
+| `authContext` | **Ninguno** — no se extrae en el controller | **No se incluye** en el command record; se inyecta dentro del handler desde `SecurityContextHolder` |
+| `header` | `@RequestHeader("X-Tenant-Id") String tenantId` | Campo del record |
+| `multipart` | `@RequestPart("file") MultipartFile image` | Campo del record (tipo `MultipartFile`) |
 
 > **Restricción:** `source: multipart` y `source: body` son mutuamente excluyentes en
 > el mismo use case (Spring no puede mezclar `@RequestPart` y `@RequestBody`).
@@ -284,32 +309,36 @@ Para el use case `CreateProduct`:
 ```java
 package com.canastaShop.catalog.application.commands;
 
-import java.util.UUID;
+import java.math.BigDecimal;
 
+// Nota: los campos Uuid se mapean a String en commands HTTP;
+// el handler convierte con UUID.fromString(command.categoryId()).
+// Los campos con source: authContext no aparecen en el record.
 public record CreateProductCommand(
     String sku,
     String name,
     BigDecimal priceAmount,
     String priceCurrency,
-    UUID categoryId,
-    UUID currentUserId   // source: authContext
-) {}
+    String categoryId
+) implements Command {}
 ```
 
-**`CreateProductHandler.java`:**
+**`CreateProductCommandHandler.java`:**
 ```java
-@Component
-@Transactional
-public class CreateProductHandler implements CommandHandler<CreateProductCommand, UUID> {
+@ApplicationComponent
+public class CreateProductCommandHandler implements CommandHandler<CreateProductCommand> {
 
     private final ProductRepository productRepository;
     private final CategoryRepository categoryRepository;
 
     @Override
-    public UUID execute(CreateProductCommand command) {
-        // lookups / fkValidations
-        Category category = categoryRepository.findById(command.categoryId())
-            .orElseThrow(ProductCategoryNotFoundError::new);
+    @Transactional
+    @LogExceptions
+    public void handle(CreateProductCommand command) {
+        // fkValidations
+        if (categoryRepository.findById(UUID.fromString(command.categoryId())).isEmpty()) {
+            throw new ProductCategoryNotFoundError();
+        }
 
         // domainRule(PRD-RULE-002): uniqueness PRE-CHECK
         if (productRepository.findBySku(command.sku()).isPresent()) {
@@ -317,16 +346,14 @@ public class CreateProductHandler implements CommandHandler<CreateProductCommand
         }
 
         // domainRule(PRD-RULE-004): crossAggregateConstraint
-        if (category.getStatus() != CategoryStatus.ACTIVE) {
-            throw new ProductCategoryNotActiveError();
-        }
+        // TODO: implement business logic — ver catalog-flows.md
 
         // invoke domain method
         Product product = Product.create(command.sku(), command.name(),
-            new Money(command.priceAmount(), command.priceCurrency()), command.categoryId());
+            new Money(command.priceAmount(), command.priceCurrency()),
+            UUID.fromString(command.categoryId()));
 
         productRepository.save(product);
-        return product.getId();
     }
 }
 ```
@@ -335,8 +362,8 @@ public class CreateProductHandler implements CommandHandler<CreateProductCommand
 
 **Problema que resuelve:** el handler necesita saber quién ejecuta la operación (para
 auditoría, ownership, o lógica de negocio) pero no quiere depender del contexto de
-seguridad directamente. Con `source: authContext`, el generador extrae el claim del JWT
-en el controller y lo pasa como parámetro explícito del command.
+seguridad directamente. Con `source: authContext`, el campo se **excluye del command record** y
+se inyecta dentro del handler desde `SecurityContextHolder`.
 
 ```yaml
 input:
@@ -346,20 +373,15 @@ input:
     required: true
 ```
 
-**Generado en el controller:**
-```java
-@PostMapping("/products")
-public ResponseEntity<?> createProduct(
-    @RequestBody @Valid CreateProductRequest request,
-    @AuthenticationPrincipal JwtAuthenticationToken token) {
+> **Comportamiento real:**
+> - El campo `authContext` **NO aparece en el controller** ni en el constructor del command record.
+> - En handlers con `implementation: scaffold`, el generador emite un comentario `// TODO (authContext): inject UUID currentUserId from SecurityContextHolder.getContext().getAuthentication()`.
+> - En handlers con `implementation: full` (method: create), el generador resuelve el valor directamente en el handler:
 
-    UUID currentUserId = UUID.fromString(token.getTokenAttributes().get("userId").toString());
-    CreateProductCommand command = new CreateProductCommand(
-        request.sku(), request.name(), request.priceAmount(), request.priceCurrency(),
-        request.categoryId(), currentUserId
-    );
-    // ...
-}
+```java
+// En el handler (NO en el controller):
+UUID currentUserId = UUID.fromString(
+    SecurityContextHolder.getContext().getAuthentication().getName());
 ```
 
 ### `type: SearchText` con `fields`
@@ -417,14 +439,13 @@ public record SearchProductsQuery(
 **En el controller:**
 ```java
 @GetMapping("/products")
-public Page<ProductSummary> searchProducts(
+public PagedResponse<ProductSummary> searchProducts(
     @RequestParam(required = false) String searchTerm,
     @RequestParam(required = false) BigDecimal priceRangeMin,
     @RequestParam(required = false) BigDecimal priceRangeMax) {
 
-    Range<BigDecimal> priceRange = new Range<>(priceRangeMin, priceRangeMax);
-    SearchProductsQuery query = new SearchProductsQuery(searchTerm, priceRange);
-    // ...
+    log.info("searchProducts");
+    return useCaseMediator.dispatch(new SearchProductsQuery(searchTerm, new Range<>(priceRangeMin, priceRangeMax)));
 }
 ```
 
@@ -445,29 +466,41 @@ Define el tipo de retorno de un use case.
   type: query
   returns: List[ProductSummary]
 
-# Query que devuelve una página
+# Query paginada — Page[T] es obligatorio para que el generador produzca PagedResponse<T>
 - id: UC-PRD-012
   type: query
-  returns: ProductSummary   # cuando pagination está declarado, se envuelve en Page<T>
+  returns: Page[ProductSummary]   # Page[T] → PagedResponse<T>; combinar con bloque pagination
+
+# Query que devuelve un resultado opcional (200 si existe, 404 si no)
+- id: UC-PRD-013
+  type: query
+  returns: Optional[ProductDetail]
 
 # Query que descarga un archivo binario
 - id: UC-PRD-020
   type: query
   returns: BinaryStream
 
-# Comando que devuelve el ID del nuevo recurso (convención: Uuid)
+# Comando sin retorno (default: void)
 - id: UC-PRD-001
   type: command
-  returns: Uuid             # opcional; por convención se retorna el ID
+  # sin returns → void; command record implementa Command
+
+# Comando que devuelve el ID del nuevo recurso
+- id: UC-PRD-002
+  type: command
+  returns: Uuid             # command record implementa ReturningCommand<UUID>
 ```
 
 | Valor | Java generado | Notas |
 |---|---|---|
 | Projection / VO / tipo canónico | `T` | Retorno directo. |
 | `List[T]` | `List<T>` | Lista completa, sin paginación. |
+| `Page[T]` | `PagedResponse<T>` | El generador detecta `returns.startsWith("Page[")`. Combinar con el bloque `pagination` para controlar `defaultSize`, `maxSize` y `sortable`. |
+| `Optional[T]` | `Optional<T>` en handler → `ResponseEntity<T>` en controller | Controller responde 200 si el handler devuelve valor, 404 si `Optional.empty()`. Solo válido en queries. |
 | `BinaryStream` | `ResponseEntity<Resource>` | Solo válido en queries. El controller genera `application/octet-stream`. |
-| `Uuid` | `UUID` | Retorna el ID del recurso creado. |
-| (cuando `pagination` está declarado) | `Page<T>` | `returns` declara el tipo del elemento; el generador añade `Page<>`. |
+| (commands sin `returns`) | `void` | Command record implementa `Command`; handler implementa `CommandHandler<C>`. |
+| (commands con `returns: T`) | `T` | Command record implementa `ReturningCommand<T>`; handler implementa `ReturningCommandHandler<C, T>`. `Uuid` es la convención habitual para retornar el ID del recurso creado. |
 
 **`BinaryStream` generado en controller:**
 ```java
@@ -515,18 +548,19 @@ authorization:
 
 **Con solo `rolesAnyOf`:**
 ```java
-@PreAuthorize("hasAnyRole('ROLE_ADMIN', 'ROLE_CATALOG_MANAGER')")
+// El prefijo ROLE_ se elimina automáticamente al generar la expresión:
+@PreAuthorize("hasAnyRole('ADMIN', 'CATALOG_MANAGER')")
 @PostMapping("/products")
-public ResponseEntity<?> createProduct(...) { ... }
+public void createProduct(...) { ... }
 ```
 
 **Con `ownership`:**
 ```java
 // En el handler, tras cargar el agregado:
-UUID currentUserId = command.currentUserId(); // source: authContext
-if (!product.getOwnerId().equals(currentUserId)
-    && !SecurityUtils.hasAnyRole("ROLE_ADMIN")) {
-    throw new AccessDeniedException("You are not the owner of this resource");
+// [G3] Ownership guard — derived_from: useCases[UC-PRD-004].authorization
+if (!Objects.equals(String.valueOf(product.ownerId()), SecurityContextUtil.currentUserClaim("userId"))
+    && !SecurityContextUtil.hasAnyRole("ADMIN")) {
+    throw new ForbiddenException();
 }
 ```
 
@@ -545,6 +579,7 @@ completa de `Pageable` + `Page<T>`.
 - id: UC-PRD-012
   name: SearchProducts
   type: query
+  returns: Page[ProductSummary]   # obligatorio para PagedResponse<T>; el bloque pagination controla el comportamiento
   pagination:
     defaultSize: 20         # tamaño de página por defecto (default: 20)
     maxSize: 100            # tamaño máximo permitido (default: 100)
@@ -556,6 +591,8 @@ completa de `Pageable` + `Page<T>`.
       field: createdAt      # campo de ordenación por defecto (debe estar en sortable)
       direction: DESC       # ASC o DESC (default: ASC)
 ```
+
+> **Cómo funciona la paginación:** `returns: Page[T]` activa `PagedResponse<T>` como tipo de retorno. El bloque `pagination` añade `page/size/sortBy/sortDirection` al Query record, genera los `@RequestParam` correspondientes en el controller y emite el guard de whitelist para `sortBy`. Sin `returns: Page[T]`, el bloque `pagination` añade los campos pero el tipo de retorno no cambia.
 
 ### Propiedades de `pagination`
 
@@ -575,36 +612,30 @@ completa de `Pageable` + `Page<T>`.
 public record SearchProductsQuery(
     String searchTerm,
     ProductStatus status,
-    Pageable pageable   // ← inyectado por el generador cuando pagination está declarado
+    int page,           // ← generado automáticamente por el generador cuando pagination está declarado
+    int size,
+    String sortBy,
+    String sortDirection
 ) {}
 ```
 
 **Controller:**
 ```java
 @GetMapping("/products")
-public Page<ProductSummary> searchProducts(
+public PagedResponse<ProductSummary> searchProducts(
     @RequestParam(required = false) String searchTerm,
     @RequestParam(required = false) ProductStatus status,
-    @PageableDefault(size = 20, sort = "createdAt", direction = Sort.Direction.DESC)
-    @SortDefault.SortDefaults({
-        @SortDefault(sort = "createdAt", direction = Sort.Direction.DESC)
-    })
-    Pageable pageable) {
+    @RequestParam(defaultValue = "0") int page,
+    @RequestParam(defaultValue = "20") int size,
+    @RequestParam(defaultValue = "createdAt") String sortBy,
+    @RequestParam(defaultValue = "DESC") String sortDirection) {
 
-    // Validar campo de ordenación
-    Set<String> allowedSortFields = Set.of("name", "price", "createdAt");
-    pageable.getSort().forEach(order -> {
-        if (!allowedSortFields.contains(order.getProperty())) {
-            throw new InvalidSortFieldError();
-        }
-    });
-
-    // Validar tamaño máximo
-    if (pageable.getPageSize() > 100) {
-        pageable = PageRequest.of(pageable.getPageNumber(), 100, pageable.getSort());
+    log.info("searchProducts");
+    // [G7] Sortable whitelist guard
+    if (!java.util.Set.of("name", "price", "createdAt").contains(sortBy)) {
+        throw new BadRequestException("sortBy must be one of: name, price, createdAt");
     }
-
-    return mediator.send(new SearchProductsQuery(searchTerm, status, pageable));
+    return useCaseMediator.dispatch(new SearchProductsQuery(searchTerm, status, page, size, sortBy, sortDirection));
 }
 ```
 
@@ -642,39 +673,43 @@ ya procesados y devuelve la misma respuesta.
 
 ### Código Java generado
 
-**`PlaceOrderHandler.java`** (fragmento):
+**`PlaceOrderCommandHandler.java`** (fragmento):
 ```java
-@Component
-@Transactional
-public class PlaceOrderHandler implements CommandHandler<PlaceOrderCommand, UUID> {
+@ApplicationComponent
+public class PlaceOrderCommandHandler implements CommandHandler<PlaceOrderCommand> {
 
     @Override
-    public UUID execute(PlaceOrderCommand command) {
-        // [G2] idempotency check — derived_from: idempotency.header=Idempotency-Key
-        // El handler está envuelto por IdempotencyFilter en el controller
-        // ...
+    @Transactional
+    @LogExceptions
+    public void handle(PlaceOrderCommand command) {
+        // TODO: implement business logic — ver orders-flows.md
+        throw new UnsupportedOperationException("Not implemented yet");
     }
 }
 ```
 
 **Controller** (anotación generada):
 ```java
-@Idempotent(header = "Idempotency-Key", ttl = "PT24H", storage = IdempotencyStorage.DATABASE)
+@Idempotent(header = "Idempotency-Key", ttl = "PT24H")
 @PostMapping("/orders")
-public ResponseEntity<?> placeOrder(...) { ... }
+public void placeOrder(...) { ... }
 ```
 
-**Tabla de base de datos generada** (si `storage: database`):
+> **Nota:** el atributo `storage` del YAML es reconocido por el lector pero actualmente no se traslada al atributo `storage` de la anotación generada. La anotación `@Idempotent` solo incluye `header` y `ttl`.
+
+**Tabla de base de datos generada** (Flyway migration `V3__request_idempotency.sql`):
 ```sql
 CREATE TABLE IF NOT EXISTS idempotency_request (
-    idempotency_key VARCHAR(255)  NOT NULL,
-    operation       VARCHAR(200)  NOT NULL,
-    response_body   TEXT,
-    http_status     INTEGER       NOT NULL,
-    created_at      TIMESTAMPTZ   NOT NULL DEFAULT now(),
-    expires_at      TIMESTAMPTZ   NOT NULL,
-    PRIMARY KEY (idempotency_key, operation)
+    key                   VARCHAR(255)  NOT NULL PRIMARY KEY,
+    request_hash          VARCHAR(128)  NOT NULL,
+    response_status       INTEGER       NOT NULL,
+    response_body         BYTEA,
+    response_content_type VARCHAR(128),
+    expires_at            TIMESTAMP     NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_idempotency_request_expires_at
+    ON idempotency_request (expires_at);
 ```
 
 ---
@@ -715,32 +750,40 @@ handler de bulk que itera y delega en el command handler individual.
 **`BulkActivateProductsCommand.java`:**
 ```java
 public record BulkActivateProductsCommand(
-    List<ActivateProductCommand> items
-) {}
+    @Valid @NotEmpty @Size(max = 500) List<ActivateProductCommand> items
+) implements ReturningCommand<BulkResult> {
+}
 ```
 
-**`BulkActivateProductsHandler.java`:**
+**`BulkActivateProductsCommandHandler.java`:**
 ```java
-@Component
-@Transactional
-public class BulkActivateProductsHandler
-    implements CommandHandler<BulkActivateProductsCommand, BulkResult> {
+@ApplicationComponent
+public class BulkActivateProductsCommandHandler
+    implements ReturningCommandHandler<BulkActivateProductsCommand, BulkResult> {
 
-    private final ActivateProductHandler itemHandler;
+    private final UseCaseMediator useCaseMediator;
+
+    public BulkActivateProductsCommandHandler(@Lazy UseCaseMediator useCaseMediator) {
+        this.useCaseMediator = useCaseMediator;
+    }
 
     @Override
-    public BulkResult execute(BulkActivateProductsCommand command) {
-        List<BulkItemResult> results = new ArrayList<>();
-        for (ActivateProductCommand item : command.items()) {
+    @Transactional
+    @LogExceptions
+    public BulkResult handle(BulkActivateProductsCommand command) {
+        List<ActivateProductCommand> items = command.items();
+        List<BulkResult.BulkError> errors = new ArrayList<>();
+        int successCount = 0;
+        for (int i = 0; i < items.size(); i++) {
             try {
-                itemHandler.execute(item);
-                results.add(BulkItemResult.success(item.productId()));
-            } catch (Exception e) {
-                results.add(BulkItemResult.failure(item.productId(), e.getMessage()));
+                useCaseMediator.dispatch(items.get(i));
+                successCount++;
+            } catch (DomainException ex) {
+                errors.add(new BulkResult.BulkError(i, ex.getClass().getSimpleName(), ex.getMessage()));
                 // onItemError: continue → registra el error y sigue
             }
         }
-        return new BulkResult(results);
+        return new BulkResult(successCount, errors);
     }
 }
 ```
@@ -775,47 +818,77 @@ puede esperar (segundos o minutos). Con `async`, el cliente recibe inmediatament
 #### Modo `jobTracking`
 
 El generador produce:
-1. Un endpoint que crea el job y devuelve `202 Accepted` con el `jobId`
-2. Un endpoint de consulta de estado (si `statusEndpoint` está declarado)
-3. Una entidad JPA `AsyncJob` para persistir el estado del job
-4. Un `@Async` handler que ejecuta la operación y actualiza el estado
+1. Un endpoint que crea el job y devuelve `202 Accepted` con el `jobId` y la URI de estado
+2. Un handler que persiste una fila `PENDING` en `async_job` y retorna `JobReference(jobId)`
+3. Una entidad JPA `AsyncJobJpa` en el módulo `shared` (compartida por todos los BCs)
+4. Un TODO para que el desarrollador implemente el worker que procesa los jobs
 
 **Código Java generado** — endpoint de inicio:
 ```java
 @PostMapping("/products/bulk-import")
-@ResponseStatus(HttpStatus.ACCEPTED)
-public AsyncJobResponse bulkImportProducts(
-    @RequestBody @Valid BulkImportProductsRequest request) {
+public ResponseEntity<JobReference> bulkImportProducts(
+    @Valid @RequestBody BulkImportProductsCommand command) {
 
-    UUID jobId = mediator.send(new BulkImportProductsCommand(request.fileUrl()));
-    return new AsyncJobResponse(jobId, "/jobs/" + jobId);
+    log.info("bulkImportProducts");
+    JobReference reference = useCaseMediator.dispatch(command);
+    URI location = URI.create("/jobs/" + reference.jobId());
+    return ResponseEntity.accepted().location(location).body(reference);
 }
 ```
 
-**Tabla `async_job`** (generada con Flyway):
+**Handler generado:**
+```java
+@Override
+@Transactional
+@LogExceptions
+public JobReference handle(BulkImportProductsCommand command) {
+    // [G10] Persist a PENDING job row; the actual work is performed by
+    // a worker (out of scope for the generator).
+    UUID jobId = UUID.randomUUID();
+    Instant now = Instant.now();
+    AsyncJobJpa job = AsyncJobJpa.builder()
+            .id(jobId)
+            .type("BulkImportProducts")
+            .status(AsyncJobStatus.PENDING)
+            .createdAt(now)
+            .updatedAt(now)
+            .build();
+    asyncJobRepository.save(job);
+    // TODO useCase(UC-CAT-050, async): implement worker that picks up
+    //      PENDING async_job rows of type="BulkImportProducts", transitions
+    //      them to RUNNING/SUCCEEDED/FAILED and writes the result.
+    return new JobReference(jobId);
+}
+```
+
+**Tabla `async_job`** (generada con Flyway, migration `V4__async_job.sql`):
 ```sql
 CREATE TABLE IF NOT EXISTS async_job (
-    id          UUID         PRIMARY KEY,
-    type        VARCHAR(200) NOT NULL,
-    status      VARCHAR(20)  NOT NULL DEFAULT 'PENDING',  -- PENDING, RUNNING, DONE, FAILED
-    input       JSONB,
-    result      JSONB,
-    error       TEXT,
-    created_at  TIMESTAMPTZ  NOT NULL DEFAULT now(),
-    updated_at  TIMESTAMPTZ  NOT NULL DEFAULT now()
+    id          UUID          NOT NULL PRIMARY KEY,
+    type        VARCHAR(128)  NOT NULL,
+    status      VARCHAR(16)   NOT NULL,
+    payload     BYTEA,
+    result      BYTEA,
+    created_at  TIMESTAMP     NOT NULL,
+    updated_at  TIMESTAMP     NOT NULL
 );
 ```
 
 #### Modo `fireAndForget`
 
 El generador produce el mismo endpoint de inicio, pero sin tabla `async_job`. El handler
-se ejecuta en background y no hay forma de consultar el resultado.
+genera un TODO para que el desarrollador implemente el offload asincrónico (via `@Async`,
+mensajero, etc.). El controller responde `202 Accepted` en cuanto el método retorna.
 
 ```java
-@Async
-public void execute(BulkImportProductsCommand command) {
-    // TODO: implement fire-and-forget logic
-    throw new UnsupportedOperationException("Not implemented yet");
+@Override
+@Transactional
+@LogExceptions
+public void handle(BulkImportProductsCommand command) {
+    // TODO useCase(UC-CAT-050, async): offload the work to an @Async
+    //      method, a Spring @Scheduled job, or a message-broker
+    //      consumer. The controller responds 202 Accepted as soon as
+    //      this method returns.
 }
 ```
 
@@ -867,7 +940,8 @@ Cuando el use case carga un único agregado por ID y necesita lanzar un error si
 
 Genera en el handler:
 ```java
-Product product = productRepository.findById(command.productId())
+// El campo es String en el command record (Uuid se mapea a String en commands HTTP):
+Product product = productRepository.findById(UUID.fromString(command.productId()))
     .orElseThrow(ProductNotFoundError::new);
 ```
 
@@ -901,16 +975,13 @@ Para use cases que cargan varios agregados y necesitan errores distintos por cad
 
 **Código Java generado:**
 ```java
-Order order = orderRepository.findById(command.orderId())
+// Lookup primario (el que tiene loadAggregate:true o el primero de lookups[]):
+Order order = orderRepository.findById(UUID.fromString(command.orderId()))
     .orElseThrow(OrderNotFoundError::new);
 
-Product product = productRepository.findById(command.productId())
-    .orElseThrow(ProductNotFoundError::new);
-
-OrderItem item = order.getItems().stream()
-    .filter(i -> i.getId().equals(command.itemId()))
-    .findFirst()
-    .orElseThrow(OrderItemNotFoundError::new);
+// Lookups adicionales — se generan como TODO enriquecido con la clase exacta:
+// TODO useCase(UC-ORD-010, lookup:productId): productRepository.findById(UUID.fromString(command.productId())).orElseThrow(ProductNotFoundError::new);
+// TODO useCase(UC-ORD-010, lookup:itemId): locate the Order.items entry matching command.itemId() and throw new OrderItemNotFoundError() if missing.
 ```
 
 > **`lookups` y `notFoundError` son mutuamente excluyentes.** Si se declaran ambos,
@@ -944,21 +1015,21 @@ fkValidations:
 | `param` | camelCase | ✅ | Nombre del input que contiene el ID del agregado a verificar. |
 | `error` | SCREAMING_SNAKE | ✅ | Error si el registro no existe. Alias: `notFoundError`. |
 | `bc` | kebab-case | no | BC propietario del repositorio. Si se omite, se asume el BC actual. |
-| `conditional` | expresión Java | no | La validación solo se ejecuta si esta expresión es `true`. |
+| `conditional` | expresión Java | no | **Declarado en el schema YAML pero no implementado por el generador.** El campo es aceptado sin error pero no genera ningún `if` condicional en el handler. |
 
 **Código Java generado:**
 ```java
-// fkValidation: Category
-if (!categoryRepository.existsById(command.categoryId())) {
+// fkValidation mismo BC — usa findById().isEmpty()
+if (categoryRepository.findById(UUID.fromString(command.categoryId())).isEmpty()) {
     throw new CategoryNotFoundError();
 }
 
-// fkValidation: Supplier (condicional)
-if (command.categoryId() != null) {
-    if (!supplierRepository.existsById(command.supplierId())) {
-        throw new SupplierNotFoundError();
-    }
+// fkValidation cross-BC sin local read model — usa ServicePort.exists{Aggregate}(UUID)
+if (!suppliersServicePort.existsSupplier(UUID.fromString(command.supplierId()))) {
+    throw new SupplierNotFoundError();
 }
+// Nota: el campo `conditional` no genera un if-guard. El validador se emite
+// siempre, independientemente de la expresión declarada en el YAML.
 ```
 
 ---
@@ -1090,10 +1161,12 @@ Sin este patrón, el handler tendría que cargar ambos manualmente sin una guía
 **Código Java generado:**
 ```java
 @Override
-public void execute(ConfirmOrderAndPaymentCommand command) {
-    Order order = orderRepository.findById(command.orderId())
+@Transactional
+@LogExceptions
+public void handle(ConfirmOrderAndPaymentCommand command) {
+    Order order = orderRepository.findById(UUID.fromString(command.orderId()))
         .orElseThrow(OrderNotFoundError::new);
-    Payment payment = paymentRepository.findById(command.paymentId())
+    Payment payment = paymentRepository.findById(UUID.fromString(command.paymentId()))
         .orElseThrow(PaymentNotFoundError::new);
 
     try {
@@ -1129,7 +1202,7 @@ Controla si el generador produce el método `execute()` completo o solo un scaff
 
 | Valor | Descripción |
 |---|---|
-| `scaffold` | El método `execute()` genera `// TODO` + `throw new UnsupportedOperationException()`. Para use cases con lógica de negocio compleja. |
+| `scaffold` | El método `handle()` genera `// TODO` + `throw new UnsupportedOperationException()`. Para use cases con lógica de negocio compleja. |
 | `full` | El generador intenta producir implementación completa (para CRUD simple). |
 | (ausente) | Equivalente a `full` para operaciones simples; para operaciones complejas el generador emite TODO donde no puede inferir la lógica. |
 
@@ -1150,7 +1223,9 @@ Controla si el generador produce el método `execute()` completo o solo un scaff
 **Handler con `implementation: scaffold`:**
 ```java
 @Override
-public UUID execute(PlaceOrderCommand command) {
+@Transactional
+@LogExceptions
+public void handle(PlaceOrderCommand command) {
     // TODO: implement business logic — ver orders-flows.md
     throw new UnsupportedOperationException("Not implemented yet");
 }
@@ -1159,10 +1234,12 @@ public UUID execute(PlaceOrderCommand command) {
 **Handler con `implementation: full`** (para un query simple):
 ```java
 @Override
-public ProductDetail execute(GetProductByIdQuery query) {
-    Product product = productRepository.findById(query.productId())
+@Transactional
+@LogExceptions
+public ProductDetail handle(GetProductByIdQuery query) {
+    Product product = productRepository.findById(UUID.fromString(query.productId()))
         .orElseThrow(ProductNotFoundError::new);
-    return mapper.toProductDetail(product);
+    return productApplicationMapper.toProductDetail(product);
 }
 ```
 

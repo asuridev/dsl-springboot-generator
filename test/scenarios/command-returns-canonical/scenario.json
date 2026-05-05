@@ -1,0 +1,4 @@
+{
+  "description": "Canonical primitive types (Uuid, Decimal) as returns on commands produce correct Java types (UUID, BigDecimal) — not treated as DTO class names.",
+  "expectFailure": false
+}

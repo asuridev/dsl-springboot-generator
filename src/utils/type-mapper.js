@@ -312,4 +312,36 @@ function getListElementType(type) {
   return m ? m[1] : null;
 }
 
-module.exports = { mapType, mapToPostgres, mapToOpenApiFormat, PROHIBITED_TYPES, isListType, getListElementType };
+/**
+ * Resolves a canonical DSL return type to its Java equivalent.
+ * Used by generators to resolve `returns:` on use cases to the correct
+ * Java type without treating it as a BC DTO class name.
+ *
+ * Returns { javaType, importHint } for known scalar canonical types,
+ * or null for non-canonical types (DTO names, enum references, etc.).
+ *
+ * Does NOT handle structural types (Page[T], List[T], Optional[T]) or
+ * BinaryStream — those are matched upstream before this function is called.
+ *
+ * @param {string} type - Canonical DSL type (e.g. "Uuid", "Decimal")
+ * @returns {{ javaType: string, importHint: string|null } | null}
+ */
+function resolveCanonicalReturnType(type) {
+  switch (type) {
+    case 'Uuid':     return { javaType: 'UUID',       importHint: 'java.util.UUID' };
+    case 'Integer':  return { javaType: 'Integer',    importHint: null };
+    case 'Long':     return { javaType: 'Long',       importHint: null };
+    case 'Decimal':  return { javaType: 'BigDecimal', importHint: 'java.math.BigDecimal' };
+    case 'Boolean':  return { javaType: 'Boolean',    importHint: null };
+    case 'Date':     return { javaType: 'LocalDate',  importHint: 'java.time.LocalDate' };
+    case 'DateTime': return { javaType: 'Instant',    importHint: 'java.time.Instant' };
+    case 'Duration': return { javaType: 'Duration',   importHint: 'java.time.Duration' };
+    case 'String':   return { javaType: 'String',     importHint: null };
+    case 'Text':     return { javaType: 'String',     importHint: null };
+    case 'Email':    return { javaType: 'String',     importHint: null };
+    case 'Url':      return { javaType: 'URI',        importHint: 'java.net.URI' };
+    default:         return null;
+  }
+}
+
+module.exports = { mapType, mapToPostgres, mapToOpenApiFormat, PROHIBITED_TYPES, isListType, getListElementType, resolveCanonicalReturnType };

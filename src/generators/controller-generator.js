@@ -3,7 +3,7 @@
 const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toCamelCase, toPackagePath } = require('../utils/naming');
-const { mapType } = require('../utils/type-mapper');
+const { mapType, resolveCanonicalReturnType } = require('../utils/type-mapper');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -406,6 +406,9 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
           if (paged2) return `PagedResponse<${normalizeInner(paged2[1])}>`;
           const list2 = /^List\[(.+)\]$/.exec(uc.returns);
           if (list2) return `List<${normalizeInner(list2[1])}>`;
+          // [G4] canonical scalar return type (Uuid→UUID, Decimal→BigDecimal, etc.)
+          const canonical = resolveCanonicalReturnType(uc.returns);
+          if (canonical) return canonical.javaType;
           return normalizeInner(uc.returns);
         })()
       : 'void';
@@ -554,6 +557,7 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
     isCommand: !isQuery,
     isScaffold,
     returnType,
+    rawReturns: uc.returns,
     pathVarNames,
     queryParamsList: controllerQueryParams,
     headerParamsList,
@@ -713,6 +717,9 @@ function buildInternalOperation(uc, internalApiOp, commonPrefix, agg, repoMethod
           if (paged) return `PagedResponse<${normalizeInner(paged[1])}>`;
           const list = /^List\[(.+)\]$/.exec(uc.returns);
           if (list) return `List<${normalizeInner(list[1])}>`;
+          // [G4] canonical scalar return type (Uuid→UUID, Decimal→BigDecimal, etc.)
+          const canonical = resolveCanonicalReturnType(uc.returns);
+          if (canonical) return canonical.javaType;
           return normalizeInner(uc.returns);
         })()
       : responseSchemaName
@@ -785,6 +792,7 @@ function buildInternalOperation(uc, internalApiOp, commonPrefix, agg, repoMethod
     isCommand,
     isScaffold: true,
     returnType,
+    rawReturns: uc.returns,
     pathVarNames: pathParams,
     queryParamsList: internalQueryParamsList,
     headerParamsList: [],
@@ -991,7 +999,13 @@ function buildControllerImports(operations, packageName, moduleName, bcYaml = nu
         imports.add('org.springframework.core.io.Resource');
         imports.add('org.springframework.http.MediaType');
       } else {
-        imports.add(`${packageName}.${moduleName}.application.dtos.${baseDtoType}`);
+        // [G4] canonical scalar return type — import stdlib, not BC DTO.
+        const canonicalReturn = resolveCanonicalReturnType(op.rawReturns);
+        if (canonicalReturn) {
+          if (canonicalReturn.importHint) imports.add(canonicalReturn.importHint);
+        } else {
+          imports.add(`${packageName}.${moduleName}.application.dtos.${baseDtoType}`);
+        }
       }
     }
     // [G4] commands with returns: import the response DTO and any wrappers.
@@ -1015,7 +1029,13 @@ function buildControllerImports(operations, packageName, moduleName, bcYaml = nu
         if (baseDtoType === 'BulkResult' || baseDtoType === 'JobReference') {
           imports.add(`${packageName}.shared.application.dtos.${baseDtoType}`);
         } else {
-          imports.add(`${packageName}.${moduleName}.application.dtos.${baseDtoType}`);
+          // [G4] canonical scalar return type — import stdlib, not BC DTO.
+          const canonicalReturn = resolveCanonicalReturnType(op.rawReturns);
+          if (canonicalReturn) {
+            if (canonicalReturn.importHint) imports.add(canonicalReturn.importHint);
+          } else {
+            imports.add(`${packageName}.${moduleName}.application.dtos.${baseDtoType}`);
+          }
         }
       }
     }
