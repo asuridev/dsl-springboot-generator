@@ -30,6 +30,7 @@ function buildDockerContext(resolvedConfig, dockerImages) {
     databasePassword: 'postgres',
     javaVersion: resolvedConfig.javaVersion,
     broker: resolvedConfig.broker || null,
+    authProvider: resolvedConfig.authProvider || null,
     // Docker image versions (from catalog)
     postgresImage: dockerImages.postgres,
     mysqlImage: dockerImages.mysql,
@@ -37,6 +38,7 @@ function buildDockerContext(resolvedConfig, dockerImages) {
     kafkaZookeeperImage: dockerImages.kafkaZookeeper,
     kafkaUiImage: dockerImages.kafkaUi,
     rabbitmqImage: dockerImages.rabbitmq,
+    keycloakImage: dockerImages.keycloak,
   };
 }
 
@@ -89,6 +91,14 @@ async function generateDockerFiles(resolvedConfig, outputDir) {
     const rabbitContent = await renderTemplate(rabbitSrc, ctx);
     const rabbitServices = yaml.load(rabbitContent);
     Object.assign(composeObj.services, rabbitServices);
+  }
+
+  // 2b. Merge Keycloak service if authProvider is keycloak
+  if (ctx.authProvider === 'keycloak') {
+    const keycloakSrc = path.join(DOCKER_TEMPLATES_DIR, 'keycloak-services.yaml.ejs');
+    const keycloakContent = await renderTemplate(keycloakSrc, ctx);
+    const keycloakServices = yaml.load(keycloakContent);
+    Object.assign(composeObj.services, keycloakServices);
   }
 
   // 3. Dump merged YAML and write to disk

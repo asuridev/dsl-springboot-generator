@@ -1,0 +1,28 @@
+# ─── Test scenario: auth-keycloak ─────────────────────────────────────────────
+# Covers:
+#   - infrastructure.authServer: true → authProvider: keycloak selected
+#   - SecurityConfig.java generates oauth2ResourceServer + jwkSetUri
+#   - JwtAuthConverter.java generated with realm_access.roles claim
+#   - auth-server.yaml generated per environment with JWKS/issuer URI
+#   - @PreAuthorize("hasAnyRole(...)") generated on controller methods
+#   - application-{env}.yaml includes classpath:parameters/{env}/auth-server.yaml
+# ──────────────────────────────────────────────────────────────────────────────
+system:
+  name: test-auth-keycloak-system
+  description: Validates JWT auth server integration with Keycloak as OIDC provider.
+  domainType: core
+
+boundedContexts:
+  - name: products
+    type: core
+    purpose: Manages product catalog with role-based access control.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc
+  authServer: true

@@ -68,6 +68,7 @@
     "kafka": "confluentinc/cp-kafka:7.6.0",
     "kafkaZookeeper": "confluentinc/cp-zookeeper:7.6.0",
     "kafkaUi": "provectuslabs/kafka-ui:latest",
-    "rabbitmq": "rabbitmq:4-management"
+    "rabbitmq": "rabbitmq:4-management",
+    "keycloak": "quay.io/keycloak/keycloak:26.0"
   }
 }

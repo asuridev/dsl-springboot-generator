@@ -1,0 +1,69 @@
+bc: products
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: true
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+      - name: status
+        type: String(20)
+    domainMethods:
+      - name: create
+        description: Creates a new product.
+        returns: Product
+
+useCases:
+
+  - id: UC-PRD-001
+    name: CreateProduct
+    type: command
+    actor: admin
+    trigger:
+      kind: http
+      operationId: createProduct
+    aggregate: Product
+    method: create
+    input:
+      - name: name
+        type: String(200)
+        source: body
+        required: true
+    authorization:
+      rolesAnyOf:
+        - ROLE_ADMIN
+        - ROLE_CATALOG_MANAGER
+    implementation: scaffold
+
+  - id: UC-PRD-010
+    name: GetProductById
+    type: query
+    actor: customer
+    trigger:
+      kind: http
+      operationId: getProductById
+    aggregate: Product
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    returns: ProductDetail
+    notFoundError: PRODUCT_NOT_FOUND
+    authorization:
+      rolesAnyOf:
+        - ROLE_ADMIN
+        - ROLE_CATALOG_MANAGER
+        - ROLE_CUSTOMER
+
+errors:
+  - code: PRODUCT_NOT_FOUND
+    httpStatus: 404
+    message: "Product not found."

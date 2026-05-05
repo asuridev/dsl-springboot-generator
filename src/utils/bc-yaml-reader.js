@@ -124,6 +124,8 @@ function validate(doc, opts = {}) {
     'validations',
     // tolerated aliases / late-stage normalisations
     'emitsList',
+    // Path A: find-then-map — bypass queryMethods requirement
+    'loadAggregate',
   ]);
   const ALLOWED_UC_VALIDATION_KEYS = new Set(['id', 'expression', 'errorCode', 'description']);
   const ALLOWED_UC_TRIGGER_KEYS = new Set([

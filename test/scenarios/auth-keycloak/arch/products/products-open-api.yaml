@@ -1,0 +1,81 @@
+openapi: "3.0.3"
+info:
+  title: Products API
+  version: "1.0.0"
+  description: Product catalog API protected by Keycloak JWT authorization.
+
+paths:
+  /products:
+    post:
+      operationId: createProduct
+      summary: Create a new product
+      description: Creates a product. Requires ROLE_ADMIN or ROLE_CATALOG_MANAGER.
+      tags:
+        - Products
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProductRequest'
+      responses:
+        '201':
+          description: Product created successfully.
+        '400':
+          description: Validation error.
+        '403':
+          description: Insufficient permissions.
+
+  /products/{productId}:
+    get:
+      operationId: getProductById
+      summary: Get product by ID
+      description: Returns product details. Requires an authenticated user with any catalog role.
+      tags:
+        - Products
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Product found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductDetail'
+        '403':
+          description: Insufficient permissions.
+        '404':
+          description: Product not found.
+
+components:
+  schemas:
+    CreateProductRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string
+          maxLength: 200
+
+    ProductDetail:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time

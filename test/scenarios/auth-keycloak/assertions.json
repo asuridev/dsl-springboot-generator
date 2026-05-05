@@ -1,0 +1,65 @@
+{
+  "docker-compose.yaml": {
+    "contains": [
+      "quay.io/keycloak/keycloak:26.0",
+      "container_name: test-auth-keycloak-system-keycloak",
+      "start-dev",
+      "KC_BOOTSTRAP_ADMIN_USERNAME: admin",
+      "KC_BOOTSTRAP_ADMIN_PASSWORD: admin",
+      "8180:8080",
+      "test-auth-keycloak-system-network"
+    ],
+    "notContains": [
+      "8080:8080"
+    ]
+  },
+  "src/main/resources/parameters/local/auth-server.yaml": {
+    "contains": [
+      "localhost:8180/realms/my-realm/protocol/openid-connect/certs",
+      "localhost:8180/realms/my-realm"
+    ],
+    "notContains": [
+      "localhost:8080"
+    ]
+  },
+  "src/main/resources/parameters/develop/auth-server.yaml": {
+    "contains": [
+      "${AUTH_JWKS_URI}",
+      "${AUTH_ISSUER_URI}"
+    ]
+  },
+  "src/main/resources/application-local.yaml": {
+    "contains": [
+      "classpath:parameters/local/auth-server.yaml"
+    ]
+  },
+  "src/main/resources/application-production.yaml": {
+    "contains": [
+      "classpath:parameters/production/auth-server.yaml"
+    ]
+  },
+  "src/main/java/com/test/shared/infrastructure/security/JwtAuthConverter.java": {
+    "contains": [
+      "realm_access.roles",
+      "ROLE_",
+      "preferred_username"
+    ]
+  },
+  "src/main/java/com/test/shared/infrastructure/configurations/securityConfig/SecurityConfig.java": {
+    "contains": [
+      "oauth2ResourceServer",
+      "jwkSetUri",
+      "jwtAuthenticationConverter",
+      "authenticated()"
+    ],
+    "notContains": [
+      "anyRequest().permitAll()"
+    ]
+  },
+  "src/main/java/com/test/products/infrastructure/rest/controllers/product/v1/ProductV1Controller.java": {
+    "contains": [
+      "@PreAuthorize(\"hasAnyRole('ADMIN', 'CATALOG_MANAGER')\")",
+      "@PreAuthorize(\"hasAnyRole('ADMIN', 'CATALOG_MANAGER', 'CUSTOMER')\")"
+    ]
+  }
+}
