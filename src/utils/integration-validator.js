@@ -29,8 +29,8 @@ const { toKebabCase } = require('./naming');
  *            publicado por el BC `from`.
  *   INT-011  Toda projection persistente debe declarar `keyBy` y la propiedad
  *            referida debe existir en `properties[]`.
- *   INT-012  Toda saga step.triggeredBy debe estar publicado por algún BC
- *            (o coincidir con saga.trigger.event).
+ *   INT-012  additionalSources de una projection persistente deben referenciar
+ *            eventos publicados por los BCs `from` correspondientes.
  *   INT-013  saga.trigger.event debe estar en `domainEvents.published[]` del
  *            BC `saga.trigger.bc`.
  *   INT-014  step.onSuccess / step.onFailure / step.compensation deben estar
@@ -39,6 +39,9 @@ const { toKebabCase } = require('./naming');
  *   INT-015  Toda integración HTTP con `auth.type: oauth2-cc` debe declarar
  *            `tokenEndpoint` y `credentialKey`. Aplica a `system.integrations[].auth`,
  *            `system.externalSystems[].auth` y `bc.integrations.outbound[].auth`.
+ *   INT-027  (warn) Projection con `upsertStrategy: versionGuarded` cuyo evento
+ *            fuente no incluye el campo de versión en su `payload[]`. El guard
+ *            degenera silenciosamente a `lastWriteWins` en runtime.
  *
  * Reglas Fase 2 (cross-YAML AsyncAPI ↔ bc.yaml — gaps G4, G7, G12):
  *
@@ -430,6 +433,52 @@ function checkPersistentProjections(bcYamls, bcIndex, diagnostics) {
             message: `Persistent projection "${p.name}" additionalSources[${si}] sources event "${src.event}" but ${src.from}.yaml does not publish it.`,
             location: `${sloc}/event`,
           });
+        }
+      }
+
+      // INT-027: versionGuarded without the version field in the source event payload (warn — code compiles but guard degenerates)
+      const upsertStrategy = p.upsertStrategy || 'lastWriteWins';
+      if (upsertStrategy === 'versionGuarded') {
+        const versionField = p.eventVersionField || 'version';
+        const fromBcYaml = bcIndex.get(p.source.from);
+        if (fromBcYaml) {
+          const sourceEvent = ((fromBcYaml.domainEvents || {}).published || []).find((e) => e.name === p.source.event);
+          if (sourceEvent) {
+            const payloadFields = (sourceEvent.payload || []).map((f) => f.name);
+            if (!payloadFields.includes(versionField)) {
+              diagnostics.push({
+                code: 'INT-027',
+                level: 'warn',
+                message:
+                  `Projection "${bc.bc}.${p.name}" declares upsertStrategy=versionGuarded but ` +
+                  `source event "${p.source.event}" in ${p.source.from}.yaml does not include ` +
+                  `field "${versionField}" in its payload[]. ` +
+                  `The version guard will silently degenerate to lastWriteWins at runtime.`,
+                location: `${loc}/upsertStrategy`,
+              });
+            }
+          }
+          // Check additionalSources[] as well — they inherit versionGuarded
+          for (let si = 0; si < (p.additionalSources || []).length; si++) {
+            const src = p.additionalSources[si];
+            if (!src || !src.event || !src.from) continue;
+            const srcBcYaml = bcIndex.get(src.from);
+            if (!srcBcYaml) continue;
+            const srcEvent = ((srcBcYaml.domainEvents || {}).published || []).find((e) => e.name === src.event);
+            if (!srcEvent) continue;
+            const srcPayloadFields = (srcEvent.payload || []).map((f) => f.name);
+            if (!srcPayloadFields.includes(versionField)) {
+              diagnostics.push({
+                code: 'INT-027',
+                level: 'warn',
+                message:
+                  `Projection "${bc.bc}.${p.name}" additionalSources[${si}] event "${src.event}" in ` +
+                  `${src.from}.yaml does not include field "${versionField}" in its payload[]. ` +
+                  `The version guard will silently degenerate to lastWriteWins at runtime for this partial updater.`,
+                location: `${loc}/additionalSources[${si}]`,
+              });
+            }
+          }
         }
       }
     }

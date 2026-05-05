@@ -14,7 +14,7 @@ entidades Java, reglas de negocio, y lógica de persistencia JPA.
 4. [Entidades hijas (`entities`)](#4-entidades-hijas-entities)
 5. [Métodos de dominio (`domainMethods`)](#5-métodos-de-dominio-domainmethods)
 6. [Reglas de dominio (`domainRules`)](#6-reglas-de-dominio-domainrules)
-7. [Flags de agregado: `auditable`, `softDelete`, `readOnly`](#7-flags-de-agregado)
+7. [Flags de agregado: `auditable`, `softDelete`, `concurrencyControl`, `readOnly`](#7-flags-de-agregado)
 8. [Agregados read model](#8-agregados-read-model)
 
 ---
@@ -115,6 +115,7 @@ aggregates:
 | `readModel` | boolean | no | Si `true`, el agregado es un read model actualizado por eventos de otro BC. Requiere `sourceBC` y `sourceEvents`. |
 | `sourceBC` | kebab-case | ✅ si readModel | BC origen del read model. Solo para agregados read model. |
 | `sourceEvents` | lista PascalCase | ✅ si readModel | Eventos que actualizan este read model. |
+| `concurrencyControl` | `optimistic` | no | Si `optimistic`, la entidad JPA recibe `@Version Long version`. Hibernate gestiona el incremento automáticamente y lanza `OptimisticLockException` si dos transacciones modifican la misma fila concurrentemente. **No afecta a la clase de dominio.** Cualquier valor distinto de `optimistic` es ignorado silenciosamente (no hay validación en `bc-yaml-reader.js`). Ver §7.4. |
 | `properties` | lista | ✅ (mínimo 1) | Campos del agregado raíz. |
 | `entities` | lista | no | Entidades hijas del agregado. |
 | `domainMethods` | lista | no | Métodos de negocio del agregado. |
@@ -975,7 +976,52 @@ void softDelete(@Param("id") UUID id);
 
 ---
 
-### 7.3 `readOnly: true` en propiedades
+### 7.3 `concurrencyControl: optimistic`
+
+**Problema que resuelve:** cuando múltiples transacciones concurrentes pueden modificar
+la misma instancia del agregado (alta contención), el bloqueo optimista detecta escrituras
+conflictivas y lanza una excepción que el llamador puede reintentar. Sin esta guardia,
+la última escritura silenciosamente sobreescribiría las anteriores.
+
+```yaml
+aggregates:
+  - name: Category
+    root: Category
+    auditable: true
+    concurrencyControl: optimistic   # ← opt-in
+    properties:
+      - name: name
+        type: String
+```
+
+**Efecto en el código generado:**
+
+Únicamente en la entidad JPA — `{Name}Jpa.java` recibe el campo `version` con `@Version`:
+
+```java
+@Version
+@Column(name = "version", nullable = false)
+private Long version;
+```
+
+Hibernate gestiona este campo automáticamente:
+- Se inicializa a `0` en el primer `INSERT`
+- Se incrementa en cada `UPDATE`
+- Si la versión en el `UPDATE` no coincide con la almacenada, Hibernate lanza `OptimisticLockException`
+
+**Lo que NO cambia:**
+- La clase de dominio (`{Name}.java`) no recibe el campo `version`
+- Los DTOs de respuesta no exponen `version`
+- El repositorio JPA no requiere cambios
+- `bc-yaml-reader.js` no valida este campo — cualquier valor distinto de `optimistic` es ignorado sin error
+
+**Cuándo usarlo:**
+- Agregados con alta competencia entre comandos concurrentes sobre la misma instancia
+- Agregados que participan en sagas o procesos largos donde una lectura previa puede quedar obsoleta
+
+---
+
+### 7.4 `readOnly: true` en propiedades
 
 **Problema que resuelve:** ciertos campos como `id`, `registeredAt` o `status` no
 deben ser asignados por el cliente en el momento de la creación — su valor inicial

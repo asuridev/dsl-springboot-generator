@@ -759,6 +759,10 @@ projections:
 - El campo `keyBy` **no puede** aparecer en `updatesFields` de ninguna fuente adicional. La PK
   de la tabla nunca se actualiza — su valor viene exclusivamente del evento de `source` principal.
 - Cada campo listado en `updatesFields` debe estar declarado en `properties[]`.
+- **El evento de cada `additionalSources` entry DEBE incluir el campo `keyBy` en su `payload[]`
+  en el BC productor.** El partial updater lo necesita para hacer `findById` y localizar la fila.
+  Si el campo está ausente del payload, el updater descarta el evento silenciosamente con un
+  log `WARN` (`missing keyBy field — discarding`) y la actualización se pierde sin error de build.
 - Los eventos de `additionalSources` **no** necesitan estar en `domainEvents.consumed[]` del
   BC consumidor. El validador INT-002 acepta que un evento esté cubierto por una persistent
   projection (fuente principal o adicional) como alternativa a `domainEvents.consumed[]`.
