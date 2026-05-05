@@ -1,0 +1,4 @@
+{
+  "description": "Regression: outbox: true + broker: kafka must emit @Value(${topics.*}) — not exchanges.* or routing-keys.*. catalog publishes ProductActivated with outbox enabled; inventory consumes it.",
+  "expectFailure": false
+}

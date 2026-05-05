@@ -322,7 +322,7 @@ async function generateRabbitMessageBrokerAdapter(publishedEventCtxs, packageNam
  * Generates {BcPascal}DomainEventHandler.java in application/usecases/.
  * Bridges the internal Spring event bus → MessageBroker port.
  */
-async function generateDomainEventHandler(publishedEventCtxs, packageName, moduleName, usecasesDir, outboxEnabled = false, sagasEnabled = false) {
+async function generateDomainEventHandler(publishedEventCtxs, packageName, moduleName, usecasesDir, outboxEnabled = false, sagasEnabled = false, broker = 'rabbitmq') {
   const bcPascal = toPascalCase(moduleName);
 
   await renderAndWrite(
@@ -335,6 +335,7 @@ async function generateDomainEventHandler(publishedEventCtxs, packageName, modul
       domainEvents: publishedEventCtxs,
       outboxEnabled,
       sagasEnabled,
+      broker,
     }
   );
 }
@@ -788,7 +789,7 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
       ...ctx,
       sagaSteps: sagaEventIndex.get(ctx.name) || [],
     }));
-    await generateDomainEventHandler(annotatedCtxs, packageName, moduleName, usecasesDir, outboxEnabled, sagasEnabled);
+    await generateDomainEventHandler(annotatedCtxs, packageName, moduleName, usecasesDir, outboxEnabled, sagasEnabled, config.broker);
 
     if (config.broker === 'kafka') {
       await generateKafkaMessageBrokerAdapter(brokerEventCtxs, packageName, moduleName, adaptersDir);

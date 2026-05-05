@@ -390,9 +390,13 @@ sin outbox. Las diferencias son:
 | Dependencias | `MessageBroker` | `OutboxEventJpaRepository` + `ObjectMapper` |
 | Qué hace | Llama a `MessageBroker.publishXxx()` | Inserta fila en `outbox_event` |
 | Cuándo corre | Después del COMMIT | Dentro de la transacción (síncrono) |
-| `@Value` bindings | Ninguno | `${exchanges.{bc}:{bc}.events}` y `${routing-keys.{event}:{bc}.{event}}` |
+| `@Value` bindings (RabbitMQ) | Ninguno | `${exchanges.{bc}:{bc}.events}` y `${routing-keys.{event}:{bc}.{event}}` |
+| `@Value` bindings (Kafka) | Ninguno | `${topics.{event}}` por evento |
 
-#### Código generado con `outbox: true` (RabbitMQ)
+El template ramifica los bindings según `broker`. Un mismo `{bc}.yaml` genera código
+correcto con independencia del broker configurado.
+
+#### Código generado con `outbox: true` + `broker: rabbitmq`
 
 ```java
 @ApplicationComponent
@@ -442,8 +446,56 @@ public class CatalogDomainEventHandler {
 }
 ```
 
-#### Los `@Value` bindings con fallback
+#### Código generado con `outbox: true` + `broker: kafka`
 
+```java
+@ApplicationComponent
+public class CatalogDomainEventHandler {
+
+    private final OutboxEventJpaRepository outboxRepository;
+    private final ObjectMapper objectMapper;
+
+    @Value("${topics.product-activated}")
+    private String productActivatedTopic;
+
+    public CatalogDomainEventHandler(OutboxEventJpaRepository outboxRepository, ObjectMapper objectMapper) {
+        this.outboxRepository = outboxRepository;
+        this.objectMapper = objectMapper;
+    }
+
+    @EventListener
+    public void onProductActivatedEvent(ProductActivatedEvent event) {
+        ProductActivatedIntegrationEvent integrationEvent = new ProductActivatedIntegrationEvent(
+                event.metadata(),
+                event.productId(),
+                event.productName(),
+                event.price()
+        );
+        EventEnvelope<ProductActivatedIntegrationEvent> envelope = EventEnvelope.of(
+            productActivatedTopic,
+            integrationEvent,
+            MDC.get("correlationId")
+        );
+        try {
+            outboxRepository.save(OutboxEventJpa.builder()
+                .id(UUID.randomUUID())
+                .destination(productActivatedTopic)
+                .routingKey(null)
+                .eventType("ProductActivatedIntegrationEvent")
+                .payload(objectMapper.writeValueAsString(envelope))
+                .createdAt(Instant.now())
+                .attempts(0)
+                .build());
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("Failed to serialize ProductActivatedIntegrationEvent", e);
+        }
+    }
+}
+```
+
+#### Los `@Value` bindings según broker
+
+**RabbitMQ** — un `exchange` compartido por BC + un `routingKey` por evento:
 ```java
 @Value("${exchanges.catalog:catalog.events}")
 private String exchange;
@@ -451,18 +503,18 @@ private String exchange;
 @Value("${routing-keys.product-activated:catalog.product-activated}")
 private String productActivatedRoutingKey;
 ```
+`rabbitmq.yaml` generado declara los bloques `exchanges` y `routing-keys`, por lo que
+los `@Value` se resuelven correctamente desde el archivo de parámetros.
 
-Ambos tienen fallback hardcoded tras el `:`. Esto significa que si las propiedades
-`exchanges.catalog` y `routing-keys.product-activated` no existen en el YAML de
-parámetros, Spring usará los valores default (`catalog.events` y `catalog.product-activated`).
-
-**Para RabbitMQ:** el archivo `rabbitmq.yaml` generado declara el bloque `exchanges` y
-`routing-keys`, por lo que los `@Value` se resuelven correctamente.
-
-**Para Kafka (limitación — GAP-KAFKA-3):** `kafka.yaml` no declara `exchanges` ni
-`routing-keys` — declara solo `topics`. Los `@Value` caen al fallback hardcoded, que
-produce como `destination` el string `catalog.events` que no existe como topic Kafka.
-La aplicación arranca pero los mensajes se envían a un topic inexistente. Ver §8.
+**Kafka** — un `topic` por evento, sin `exchange` compartido:
+```java
+@Value("${topics.product-activated}")
+private String productActivatedTopic;
+```
+`kafka.yaml` generado declara el bloque `topics`, por lo que el `@Value` se resuelve
+correctamente. El campo `routingKey` en la fila outbox se guarda como `null`;
+`OutboxRelayKafka` lo usa como partition key, y `null` delega en el particionador
+por defecto de Kafka.
 
 #### `EventEnvelope` — la estructura del payload serializado
 
@@ -567,8 +619,9 @@ Flyway activa si cualquiera de estas condiciones es verdadera:
 | `row.routing_key` → | Routing key AMQP | Partition key Kafka (puede ser null) |
 | Envío RabbitMQ | `rabbitTemplate.send(exchange, routingKey, Message)` con `Content-Type: application/json` y `MessageId` | — |
 | Envío Kafka | — | `kafkaTemplate.send(topic, partitionKey, payload).get()` (bloqueante) |
-| `@Value exchanges.*` en handler | ✅ Resuelto desde `rabbitmq.yaml` | ⚠️ Cae al fallback — `kafka.yaml` no tiene `exchanges.*` |
-| `@Value routing-keys.*` en handler | ✅ Resuelto desde `rabbitmq.yaml` | ⚠️ Cae al fallback — topic puede ser incorrecto |
+| `@Value` en handler (campo compartido) | `${exchanges.{bc}:{bc}.events}` → resuelto desde `rabbitmq.yaml` | No hay campo de exchange — cada evento tiene su propio topic |
+| `@Value` en handler (por evento) | `${routing-keys.{event}:{bc}.{event}}` → resuelto desde `rabbitmq.yaml` | `${topics.{event}}` → resuelto desde `kafka.yaml` |
+| `routingKey` en fila outbox | Routing key del evento | `null` (partition key delegada al particionador por defecto) |
 
 ---
 
@@ -620,28 +673,6 @@ dependencias JPA y del broker que ya están presentes.
 ---
 
 ## 8. Limitaciones conocidas del generador
-
-### GAP-KAFKA-3 — `outbox: true` + `broker: kafka` produce código incorrecto
-
-**Causa:** `DomainEventHandler.java.ejs` (rama outbox) genera siempre:
-
-```java
-@Value("${exchanges.{bc}:{bc}.events}")
-private String exchange;
-
-@Value("${routing-keys.{event}:{bc}.{event}}")
-private String {event}RoutingKey;
-```
-
-Los namespaces `exchanges.*` y `routing-keys.*` son propios de RabbitMQ y están
-declarados en `rabbitmq.yaml`. El archivo `kafka.yaml` solo declara `topics.*`.
-
-**Efecto:** los `@Value` caen al fallback hardcoded. El relay envía los mensajes
-al topic `{bc}.events` (e.g. `catalog.events`), que no existe en Kafka. La
-aplicación arranca sin errores pero los mensajes nunca llegan a los consumidores.
-
-**Workaround:** no usar `outbox: true` con `broker: kafka` hasta que el template
-sea corregido para usar `${topics.{event}}` en lugar de `${routing-keys.{event}}`.
 
 ### No hay umbral de abandono
 

@@ -53,12 +53,19 @@ public class <%= bcPascal %>DomainEventHandler {
     private final OutboxEventJpaRepository outboxRepository;
     private final ObjectMapper objectMapper;
 
+<% if (broker === 'kafka') { %>
+<% domainEvents.forEach(event => { %>
+    @Value("${topics.<%= event.topicNameKebab %>}")
+    private String <%= event.topicNameCamel %>Topic;
+<% }); %>
+<% } else { %>
     @Value("${exchanges.<%= bc %>:<%= bc %>.events}")
     private String exchange;
 <% domainEvents.forEach(event => { %>
     @Value("${routing-keys.<%= event.topicNameKebab %>:<%= bc %>.<%= event.topicNameKebab %>}")
     private String <%= event.topicNameCamel %>RoutingKey;
 <% }); %>
+<% } %>
 
     public <%= bcPascal %>DomainEventHandler(OutboxEventJpaRepository outboxRepository, ObjectMapper objectMapper) {
         this.outboxRepository = outboxRepository;
@@ -80,15 +87,18 @@ public class <%= bcPascal %>DomainEventHandler {
 <% }); %>
         );
         EventEnvelope<<%= event.integrationEventClassName %>> envelope = EventEnvelope.of(
-            <%= event.topicNameCamel %>RoutingKey,
+            <% if (broker === 'kafka') { %><%= event.topicNameCamel %>Topic<% } else { %><%= event.topicNameCamel %>RoutingKey<% } %>,
             integrationEvent,
             MDC.get("correlationId")
         );
         try {
             outboxRepository.save(OutboxEventJpa.builder()
                 .id(UUID.randomUUID())
+<% if (broker === 'kafka') { %>
+                .destination(<%= event.topicNameCamel %>Topic)
+                .routingKey(null)<% } else { %>
                 .destination(exchange)
-                .routingKey(<%= event.topicNameCamel %>RoutingKey)
+                .routingKey(<%= event.topicNameCamel %>RoutingKey)<% } %>
                 .eventType("<%= event.integrationEventClassName %>")
                 .payload(objectMapper.writeValueAsString(envelope))
                 .createdAt(Instant.now())

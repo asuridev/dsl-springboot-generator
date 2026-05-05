@@ -1058,41 +1058,30 @@ CREATE INDEX idx_outbox_status ON outbox_event(status) WHERE status = 'PENDING';
 
 #### `consumerIdempotency: true` — Consumer Idempotency Check
 
-**Problema que resuelve:** los message brokers pueden entregar el mismo mensaje más de
-una vez (at-least-once delivery). Sin idempotencia, el handler del consumer procesaría
-el evento múltiples veces, corrompiendo el estado del dominio.
+**Problema que resuelve:** los message brokers garantizan *at-least-once delivery* — el
+mismo mensaje puede llegar más de una vez. Sin esta flag, un redelivery hace que el use
+case se ejecute dos veces, corrompiendo el estado del dominio.
 
 **Artefactos generados:**
 
 ```
 src/main/java/{pkg}/shared/infrastructure/idempotency/
-├── ConsumedEvent.java            ← entidad JPA de la tabla de eventos consumidos
-├── ConsumedEventRepository.java  ← JPA repository
-└── IdempotencyCheckService.java  ← servicio que verifica si ya fue procesado
+├── ProcessedEventJpa.java              ← entidad JPA del log con PK compuesta (handler_id, event_id)
+├── ProcessedEventJpaRepository.java    ← JPA repository (sin métodos custom)
+└── IdempotencyGuard.java               ← guardia: tryRecord(handlerId, eventId) → boolean
+
+src/main/resources/db/migration/
+└── V1__reliability.sql                 ← tabla processed_event (sección condicional)
 ```
 
-**`IdempotencyCheckService.java`** (fragmento):
-```java
-@Service
-@Transactional
-public class IdempotencyCheckService {
+Cada `{EventName}KafkaListener` y `{EventName}RabbitListener` generado en el proyecto
+incorpora automáticamente una llamada a `IdempotencyGuard.tryRecord()` antes de despachar
+el use case. Si el par `(handlerId, eventId)` ya existe en `processed_event`, el mensaje
+se confirma al broker silenciosamente sin ejecutar el use case.
 
-    private final ConsumedEventRepository consumedEventRepository;
-
-    public boolean isAlreadyProcessed(String eventId, String consumerGroup) {
-        return consumedEventRepository.existsByEventIdAndConsumerGroup(eventId, consumerGroup);
-    }
-
-    public void markAsProcessed(String eventId, String consumerGroup) {
-        ConsumedEvent entry = ConsumedEvent.builder()
-            .eventId(eventId)
-            .consumerGroup(consumerGroup)
-            .processedAt(Instant.now())
-            .build();
-        consumedEventRepository.save(entry);
-    }
-}
-```
+> **Documentación detallada:** ver [consumer-idempotency-reference.md](consumer-idempotency-reference.md)
+> para la explicación completa del flujo, el diseño de la PK compuesta, la protección ante
+> condiciones de carrera, las limitaciones conocidas y la comparativa con vs sin la flag.
 
 ---
 

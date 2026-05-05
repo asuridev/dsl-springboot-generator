@@ -1,0 +1,67 @@
+{
+  "src/main/java/com/test/catalog/application/usecases/CatalogDomainEventHandler.java": {
+    "_comment": "GAP-KAFKA-3 regression: outbox+kafka must inject topic @Value, not exchange/routing-key. Must also use OutboxEventJpaRepository (outbox branch active).",
+    "contains": [
+      "CatalogDomainEventHandler",
+      "OutboxEventJpaRepository",
+      "OutboxEventJpa",
+      "@EventListener",
+      "topics.product-activated",
+      "productActivatedTopic",
+      "ProductActivatedEvent"
+    ],
+    "notContains": [
+      "exchanges.",
+      "routing-keys."
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/events/ProductActivatedEvent.java": {
+    "_comment": "Domain event record con payload.",
+    "contains": [
+      "ProductActivatedEvent",
+      "productId",
+      "productName",
+      "price"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/events/ProductActivatedIntegrationEvent.java": {
+    "_comment": "Integration event record: wire format para el broker.",
+    "contains": [
+      "ProductActivatedIntegrationEvent",
+      "productId",
+      "productName",
+      "price"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/adapters/kafkaMessageBroker/CatalogKafkaMessageBroker.java": {
+    "_comment": "Adaptador Kafka del port MessageBroker.",
+    "contains": [
+      "CatalogKafkaMessageBroker",
+      "ProductActivatedIntegrationEvent",
+      "KafkaTemplate"
+    ]
+  },
+
+  "src/main/java/com/test/inventory/infrastructure/kafkaListener/ProductActivatedKafkaListener.java": {
+    "_comment": "Kafka consumer en inventory.",
+    "contains": [
+      "ProductActivatedKafkaListener",
+      "@KafkaListener",
+      "RegisterProductInCatalogCommand"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/outbox/OutboxRelay.java": {
+    "_comment": "OutboxRelay debe ser la variante Kafka (usa KafkaTemplate, no RabbitTemplate).",
+    "contains": [
+      "KafkaTemplate",
+      "OutboxEventJpaRepository"
+    ],
+    "notContains": [
+      "RabbitTemplate"
+    ]
+  }
+}
