@@ -113,10 +113,37 @@ public class ProductV1Controller {
 }
 ```
 
-**Configuración en Keycloak:**
-1. Crear los roles: `ADMIN`, `CATALOG_MANAGER`, `CUSTOMER`
-2. Asignar roles a usuarios en la sección "Role Mappings"
-3. El generador ya configura Spring para leer `realm_access.roles` del token
+**Configuración en Keycloak — paso a paso:**
+
+**Paso 1 — Crear los Realm Roles**
+
+1. Abre la consola de Keycloak (`http://localhost:8180`) y selecciona tu realm (ej. `my-realm`)
+2. Navega a **Realm roles** → **Create role**
+3. Crea un rol por cada función de negocio:
+   - `ADMIN`
+   - `CATALOG_MANAGER`
+   - `CUSTOMER`
+
+**Paso 2 — Asignar roles a usuarios**
+
+1. Navega a **Users** → selecciona el usuario de prueba
+2. Pestaña **Role mapping** → **Assign role**
+3. Filtra por **"Filter by realm roles"** y asigna el rol correspondiente
+
+**Paso 3 — Verificar el token**
+
+Solicita un token para ese usuario y decodifícalo en [jwt.io](https://jwt.io). Deberías ver:
+```json
+{
+  "realm_access": {
+    "roles": ["CATALOG_MANAGER", "default-roles-my-realm"]
+  }
+}
+```
+
+> No se requiere ninguna configuración adicional en el cliente ni mappers especiales.
+> El generador ya configura Spring para leer `realm_access.roles` y añadir el prefijo
+> `ROLE_` automáticamente vía `JwtAuthConverter`.
 
 ### Cuándo usar RBAC
 
@@ -197,17 +224,26 @@ En Keycloak esto se implementa con **Client Scopes** o **Composite Roles**: un r
 
 #### El token JWT resultante
 
-El token de un `CATALOG_MANAGER` cargaría:
+Con la configuración correcta (Client Roles + Protocol Mapper, explicada más abajo),
+el token de un `CATALOG_MANAGER` contiene **dos claims separados**:
 ```json
 {
   "sub": "john.doe",
   "realm_access": {
-    "roles": ["CATALOG_MANAGER", "products:read", "products:create", "products:update"]
-  }
+    "roles": ["CATALOG_MANAGER"]
+  },
+  "permissions": ["products:read", "products:create", "products:update"]
 }
 ```
 
-Los permisos granulares viajan **dentro** del token como si fueran roles adicionales.
+- `realm_access.roles` lleva el rol de función → `extractRoles()` → `ROLE_CATALOG_MANAGER`
+- `permissions` lleva los permisos atómicos → `extractPermissions()` → `products:read`, `products:create`, `products:update`
+
+> **Por qué claims separados y no todo en `realm_access.roles`:**
+> El `JwtAuthConverter` generado añade el prefijo `ROLE_` a todo lo que extrae de
+> `realm_access.roles`. Si los permisos viajaran ahí, se convertirían en
+> `ROLE_products:create`, y `hasAnyAuthority('products:create')` nunca coincidiría.
+> El claim `permissions` se extrae sin prefijo, resolviendo el problema.
 
 #### Código en el controlador
 
@@ -234,7 +270,17 @@ hasRole('ADMIN')          → busca GrantedAuthority "ROLE_ADMIN"  (añade prefi
 hasAuthority('ADMIN')     → busca GrantedAuthority "ADMIN"       (literal, sin prefijo)
 ```
 
-Para que Spring extraiga tanto roles como permisos del token, el `JwtAuthConverter` debe mapear ambos del claim correspondiente. Con Keycloak, todos viajan en `realm_access.roles`, así que el converter estándar ya los recoge sin cambios adicionales.
+Para que Spring extraiga tanto roles como permisos del token, el `JwtAuthConverter` generado
+implementa tres métodos de extracción independientes:
+
+```
+extractRoles()       → lee realm_access.roles    → GrantedAuthority("ROLE_" + rol)
+extractScopes()      → lee claim "scope"          → GrantedAuthority("SCOPE_" + scope)
+extractPermissions() → lee claim "permissions"    → GrantedAuthority(permiso)  ← sin prefijo
+```
+
+Por eso `hasAnyAuthority('products:create')` funciona: el permiso viaja en el claim
+`permissions` y se almacena como authority exacta, sin prefijo.
 
 #### Ejemplo completo con tres roles y permisos granulares
 
@@ -294,6 +340,92 @@ Empieza con RBAC simple. Migra a permisos granulares cuando:
 - Los mismos endpoints empiezan a aparecer en listas de `hasAnyRole` largas
 - Añadir un rol requiere búsqueda y reemplazo en el código
 - El equipo de seguridad necesita controlar permisos sin involucrar a desarrollo
+
+#### Configuración en Keycloak — paso a paso
+
+Esta configuración requiere tres pasos: crear los permisos atómicos como Client Roles,
+agruparlos en Realm Roles compuestos, y añadir un Protocol Mapper que inyecte los
+Client Roles del usuario en el claim `permissions` del JWT.
+
+**Paso 1 — Crear los Client Roles (permisos atómicos)**
+
+Los permisos atómicos se crean como roles del cliente, no del realm. Esto evita
+contaminar el namespace de roles globales con nombres de operaciones.
+
+1. Navega a **Clients** → selecciona tu cliente (ej. `catalog-service`)
+2. Pestaña **Roles** → **Create role**
+3. Crea un rol por cada permiso atómico:
+   - `products:read`
+   - `products:create`
+   - `products:update`
+   - `products:delete`
+
+**Paso 2 — Crear los Realm Roles compuestos (funciones de negocio)**
+
+Los roles de función son Realm Roles que agrupan Client Roles como "Associated roles":
+
+1. Navega a **Realm roles** → **Create role**
+2. Crea `CATALOG_MANAGER`:
+   - Activa **Composite role**: ON
+   - Pestaña **Associated roles** → **Add associated roles**
+   - Filtra por **"Filter by clients"** → selecciona tu cliente
+   - Marca: `products:read`, `products:create`, `products:update` → **Assign**
+3. Crea `ADMIN`:
+   - Composite role: ON
+   - Associated roles (mismo cliente): `products:read`, `products:create`, `products:update`, `products:delete`
+4. Crea `CUSTOMER`:
+   - Composite role: ON
+   - Associated roles: `products:read`
+
+> El usuario recibe el Realm Role (`CATALOG_MANAGER`). Keycloak expande automáticamente
+> los Client Roles asociados cuando se solicita el token.
+
+**Paso 3 — Crear el Protocol Mapper**
+
+El mapper toma los Client Roles del usuario para este cliente y los inyecta en
+el claim `permissions` del access token:
+
+1. Navega a **Clients** → tu cliente → pestaña **Client scopes**
+2. Haz clic en el scope **`{tu-cliente}-dedicated`** (el scope privado del cliente)
+3. Pestaña **Mappers** → **Add mapper** → **By configuration**
+4. Selecciona **"User Client Role"**
+5. Configura los campos:
+
+   | Campo | Valor |
+   |---|---|
+   | Name | `permissions-mapper` |
+   | Client ID | tu cliente (ej. `catalog-service`) |
+   | Token Claim Name | `permissions` |
+   | Claim JSON Type | `String` |
+   | Multivalued | **ON** |
+   | Add to access token | **ON** |
+   | Add to userinfo | opcional |
+
+6. Click **Save**
+
+**Paso 4 — Asignar el rol de función al usuario**
+
+1. **Users** → selecciona el usuario → **Role mapping** → **Assign role**
+2. Filtra por **"Filter by realm roles"**
+3. Asigna `CATALOG_MANAGER` (nunca los Client Roles directamente — el composite los expande)
+
+**Paso 5 — Verificar el token**
+
+Decodifica el access token del usuario en [jwt.io](https://jwt.io). Deberías ver:
+```json
+{
+  "realm_access": {
+    "roles": ["CATALOG_MANAGER"]
+  },
+  "permissions": ["products:read", "products:create", "products:update"]
+}
+```
+
+Si `permissions` no aparece, verifica que:
+- El Protocol Mapper esté en el scope **`{cliente}-dedicated`**, no en otro scope
+- **Multivalued** esté activado
+- El usuario tenga asignado el Realm Role (no los Client Roles directamente)
+- El campo **Client ID** del mapper coincida exactamente con el nombre del cliente
 
 ---
 
@@ -387,6 +519,83 @@ grant_type=client_credentials
 
 El token resultante solo tiene alcance sobre lectura y escritura, no eliminación.
 
+**Configuración en Keycloak — paso a paso:**
+
+Los OAuth2 Scopes se configuran como **Client Scopes** en Keycloak, que son entidades
+de primer nivel separadas de los roles.
+
+**Paso 1 — Crear los Client Scopes**
+
+1. Navega a **Client scopes** → **Create client scope**
+2. Crea un scope por operación:
+
+   | Name | Type | Include in token scope |
+   |---|---|---|
+   | `products:read` | `Optional` | ON |
+   | `products:write` | `Optional` | ON |
+   | `products:delete` | `Optional` | ON |
+
+   > El campo **Type** en `Optional` significa que el scope no se incluye en el
+   > token a menos que el cliente lo solicite explícitamente. `Default` lo incluiría
+   > siempre, lo que elimina el control granular.
+
+3. No es necesario añadir mappers — Keycloak incluye los Client Scopes concedidos
+   en el claim `scope` del token automáticamente como una cadena espacio-separada.
+
+**Paso 2 — Añadir los Client Scopes al cliente**
+
+1. **Clients** → tu cliente → pestaña **Client scopes**
+2. Click **Add client scope**
+3. Agrega cada scope y selecciona **Optional** (no Default):
+   - `products:read` → Optional
+   - `products:write` → Optional
+   - `products:delete` → Optional
+
+**Paso 3 — Solicitar el token con los scopes necesarios**
+
+Para flujo M2M (Client Credentials):
+```bash
+curl -s -X POST http://localhost:8180/realms/my-realm/protocol/openid-connect/token \
+  -H 'Content-Type: application/x-www-form-urlencoded' \
+  -d 'grant_type=client_credentials' \
+  -d 'client_id=inventory-service' \
+  -d 'client_secret=<secret>' \
+  -d 'scope=products:read products:write'
+```
+
+Para flujo de usuario (Authorization Code con PKCE), el parámetro `scope` se incluye
+en la URL de autorización inicial:
+```
+GET /realms/my-realm/protocol/openid-connect/auth
+  ?client_id=catalog-ui
+  &redirect_uri=https://app.example.com/callback
+  &response_type=code
+  &code_challenge=<challenge>
+  &code_challenge_method=S256
+  &scope=openid products:read products:write
+```
+
+**Paso 4 — Verificar el token**
+
+Decodifica el access token. El claim `scope` es una cadena espacio-separada:
+```json
+{
+  "sub": "inventory-service",
+  "scope": "products:read products:write"
+}
+```
+
+El `JwtAuthConverter` generado (método `extractScopes()`) lo divide por espacios y
+produce:
+- `GrantedAuthority("SCOPE_products:read")`
+- `GrantedAuthority("SCOPE_products:write")`
+
+Que coinciden exactamente con `hasAnyAuthority('SCOPE_products:write')` en `@PreAuthorize`.
+
+> Si el cliente solicita un scope que no está en la lista **Optional** del cliente
+> en Keycloak, Keycloak lo ignora silenciosamente (no devuelve error — simplemente
+> no incluye ese scope en el token).
+
 ### Cuándo usar OAuth2 Scopes
 
 ✅ APIs públicas o semi-públicas consumidas por terceros  
@@ -449,7 +658,11 @@ Esto significa:
 
 ## Soporte en el generador
 
-El generador actualmente soporta `rolesAnyOf` en el YAML:
+El generador soporta las tres estrategias mediante el bloque `authorization` del YAML.
+Pueden combinarse: cuando se declaran varios campos, se unen con `and` en la expresión
+SpEL. El orden en la expresión generada es siempre `scopesAnyOf` → `rolesAnyOf` → `permissionsAnyOf`.
+
+### RBAC simple (`rolesAnyOf`)
 
 ```yaml
 authorization:
@@ -463,16 +676,57 @@ Genera:
 @PreAuthorize("hasAnyRole('ADMIN', 'CATALOG_MANAGER')")
 ```
 
-Para añadir soporte de scopes, el YAML podría extenderse con:
+Requisito Keycloak: Realm Roles `ADMIN` y `CATALOG_MANAGER` asignados al usuario.
+
+### RBAC con permisos granulares (`permissionsAnyOf`)
+
+```yaml
+authorization:
+  permissionsAnyOf:
+    - products:create
+    - products:write
+```
+
+Genera:
+```java
+@PreAuthorize("hasAnyAuthority('products:create', 'products:write')")
+```
+
+Requisito Keycloak: Client Roles con esos nombres + Protocol Mapper `permissions` + Realm Roles compuestos que los agrupan. Ver [Configuración en Keycloak — RBAC granular](#configuración-en-keycloak--paso-a-paso-1).
+
+### OAuth2 Scopes (`scopesAnyOf`)
+
 ```yaml
 authorization:
   scopesAnyOf:
-    - products:write
-  rolesAnyOf:
-    - ROLE_ADMIN
+    - products:write      # escribir el nombre limpio; el generador añade SCOPE_ automáticamente
 ```
 
-Generando:
+Genera:
 ```java
-@PreAuthorize("hasAuthority('SCOPE_products:write') and hasAnyRole('ADMIN')")
+@PreAuthorize("hasAnyAuthority('SCOPE_products:write')")
 ```
+
+Requisito Keycloak: Client Scopes `products:write` configurados como Optional en el cliente.
+
+### Combinación de las tres estrategias
+
+```yaml
+authorization:
+  scopesAnyOf:
+    - catalog:admin
+  rolesAnyOf:
+    - ROLE_ADMIN
+  permissionsAnyOf:
+    - catalog:archive
+```
+
+Genera (Prettier puede formatear en varias líneas si la expresión supera ~80 chars):
+```java
+@PreAuthorize(
+    "hasAnyAuthority('SCOPE_catalog:admin') and hasAnyRole('ADMIN') and hasAnyAuthority('catalog:archive')"
+)
+```
+
+Significa: el token debe tener el scope `catalog:admin` **Y** el usuario debe tener
+el rol `ADMIN` **Y** el usuario debe tener el permiso `catalog:archive`.

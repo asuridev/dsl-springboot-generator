@@ -331,15 +331,38 @@ function findCommonPathPrefix(paths) {
   return common.length ? '/' + common.join('/') : '';
 }
 
-// [G3] Builds the @PreAuthorize SpEL expression from uc.authorization.rolesAnyOf.
-// Returns null when no roles declared. Roles are emitted as Spring's hasAnyRole(...)
-// which already implies a ROLE_ prefix; we strip it if present.
+// [G3] Builds the @PreAuthorize SpEL expression from uc.authorization.
+// Supports three independent clauses that are AND-combined when multiple are declared:
+//   scopesAnyOf     → hasAnyAuthority('SCOPE_x', 'SCOPE_y')   (generator adds SCOPE_ prefix)
+//   rolesAnyOf      → hasAnyRole('ADMIN', 'CATALOG_MANAGER')   (generator strips ROLE_ prefix)
+//   permissionsAnyOf → hasAnyAuthority('products:create', ...) (no prefix manipulation)
+// Returns null when none of the three fields is declared.
 function buildPreAuthorizeExpr(uc) {
-  const roles = uc && uc.authorization && uc.authorization.rolesAnyOf;
-  if (!roles || roles.length === 0) return null;
-  const stripped = roles.map((r) => r.replace(/^ROLE_/, ''));
-  const args = stripped.map((r) => `'${r}'`).join(', ');
-  return `hasAnyRole(${args})`;
+  const authz = uc && uc.authorization;
+  if (!authz) return null;
+
+  const clauses = [];
+
+  const scopes = authz.scopesAnyOf;
+  if (scopes && scopes.length > 0) {
+    const args = scopes.map((s) => `'SCOPE_${s}'`).join(', ');
+    clauses.push(`hasAnyAuthority(${args})`);
+  }
+
+  const roles = authz.rolesAnyOf;
+  if (roles && roles.length > 0) {
+    const stripped = roles.map((r) => r.replace(/^ROLE_/, ''));
+    const args = stripped.map((r) => `'${r}'`).join(', ');
+    clauses.push(`hasAnyRole(${args})`);
+  }
+
+  const permissions = authz.permissionsAnyOf;
+  if (permissions && permissions.length > 0) {
+    const args = permissions.map((p) => `'${p}'`).join(', ');
+    clauses.push(`hasAnyAuthority(${args})`);
+  }
+
+  return clauses.length > 0 ? clauses.join(' and ') : null;
 }
 
 // ─── Build controller operation ───────────────────────────────────────────────

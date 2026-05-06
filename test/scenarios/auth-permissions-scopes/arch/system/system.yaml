@@ -1,0 +1,27 @@
+# ─── Test scenario: auth-permissions-scopes ────────────────────────────────────
+# Covers:
+#   - authorization.permissionsAnyOf → @PreAuthorize("hasAnyAuthority('x:action')")
+#   - authorization.scopesAnyOf      → @PreAuthorize("hasAnyAuthority('SCOPE_x:action')")
+#   - rolesAnyOf + scopesAnyOf combined → "hasAnyAuthority('SCOPE_...') and hasAnyRole(...)"
+#   - All three combined → "hasAnyAuthority('SCOPE_...') and hasAnyRole(...) and hasAnyAuthority('...')"
+#   - JwtAuthConverter extracts both ROLE_ and SCOPE_ authorities
+# ──────────────────────────────────────────────────────────────────────────────
+system:
+  name: test-auth-authz-system
+  description: Validates granular RBAC permissions and OAuth2 scopes authorization strategies.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages catalog items with mixed authorization strategies.
+    aggregates:
+      - name: Item
+        root: Item
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc
+  authServer: true

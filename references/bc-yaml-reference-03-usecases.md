@@ -546,9 +546,16 @@ Security o guardas imperativas en el handler.
 
 ```yaml
 authorization:
-  rolesAnyOf:
+  rolesAnyOf:            # RBAC clásico — el usuario debe tener al menos uno de estos roles
     - ROLE_ADMIN
     - ROLE_CATALOG_MANAGER
+
+  permissionsAnyOf:      # RBAC granular — el usuario debe tener al menos uno de estos permisos
+    - catalog:create
+    - catalog:write
+
+  scopesAnyOf:           # OAuth2 Scopes — el token debe tener al menos uno de estos scopes
+    - catalog:write      # escribir el nombre limpio; el generador añade el prefijo SCOPE_ automáticamente
 
   ownership:
     field: ownerId           # propiedad del agregado a comparar
@@ -557,24 +564,100 @@ authorization:
       - ROLE_ADMIN           # roles que pueden saltarse la verificación de ownership
 ```
 
+Cuando se declaran varios de los tres campos de `@PreAuthorize`, se combinan con **AND**.
+El orden en la expresión generada es siempre: `scopesAnyOf` → `rolesAnyOf` → `permissionsAnyOf`.
+
 ### Propiedades de `authorization`
 
 | Propiedad | Tipo | Requerido | Descripción |
 |---|---|---|---|
-| `rolesAnyOf` | lista strings | no | El usuario debe tener al menos uno de estos roles. Genera `@PreAuthorize`. |
-| `ownership` | objeto | no | Verifica que el usuario actual sea el dueño del recurso. |
+| `rolesAnyOf` | lista strings | no | El usuario debe tener **al menos uno** de estos roles. Los nombres con o sin prefijo `ROLE_` son aceptados; el generador elimina el prefijo automáticamente al construir `hasAnyRole(...)`. |
+| `permissionsAnyOf` | lista strings | no | El usuario/token debe tener **al menos uno** de estos permisos granulares (ej. `products:create`). Genera `hasAnyAuthority(...)`. No se acepta el prefijo `ROLE_` en este campo. |
+| `scopesAnyOf` | lista strings | no | El **token** debe tener **al menos uno** de estos OAuth2 scopes. Escribe los nombres sin prefijo (ej. `catalog:write`); el generador añade `SCOPE_` automáticamente al generar `hasAnyAuthority('SCOPE_...')`. |
+| `ownership` | objeto | no | Verifica en tiempo de ejecución que el usuario actual sea el dueño del recurso. |
 | `ownership.field` | camelCase | ✅ | Propiedad del agregado que contiene el ID del dueño. |
 | `ownership.claim` | string | ✅ | Claim del JWT que identifica al usuario actual. |
 | `ownership.allowRoleBypass` | lista strings | no | Roles que pueden saltarse la verificación de ownership. |
 
+### Cuándo usar cada campo
+
+| Campo | Responde a | Caso típico |
+|---|---|---|
+| `rolesAnyOf` | ¿Qué función tiene el **usuario**? | Sistemas internos: `ROLE_ADMIN`, `ROLE_OPERATOR` |
+| `permissionsAnyOf` | ¿Qué operación puede hacer el **usuario**? | RBAC maduro: `products:delete`, `orders:cancel` |
+| `scopesAnyOf` | ¿Qué puede hacer este **token/cliente**? | M2M, APIs públicas, multi-tenant: `catalog:write` |
+| `ownership` | ¿Es el **usuario** el dueño del recurso? | Portal de clientes: solo ver/editar su propia cuenta |
+
 ### Código Java generado
 
 **Con solo `rolesAnyOf`:**
+```yaml
+authorization:
+  rolesAnyOf:
+    - ROLE_ADMIN
+    - ROLE_CATALOG_MANAGER
+```
 ```java
-// El prefijo ROLE_ se elimina automáticamente al generar la expresión:
 @PreAuthorize("hasAnyRole('ADMIN', 'CATALOG_MANAGER')")
 @PostMapping("/products")
 public void createProduct(...) { ... }
+```
+
+**Con solo `permissionsAnyOf`:**
+```yaml
+authorization:
+  permissionsAnyOf:
+    - products:create
+    - products:write
+```
+```java
+@PreAuthorize("hasAnyAuthority('products:create', 'products:write')")
+@PostMapping("/products")
+public void createProduct(...) { ... }
+```
+
+**Con solo `scopesAnyOf`:**
+```yaml
+authorization:
+  scopesAnyOf:
+    - catalog:write
+```
+```java
+// El generador añade el prefijo SCOPE_ automáticamente:
+@PreAuthorize("hasAnyAuthority('SCOPE_catalog:write')")
+@PostMapping("/items")
+public void createItem(...) { ... }
+```
+
+**Combinación — `scopesAnyOf` + `rolesAnyOf`:**
+```yaml
+authorization:
+  rolesAnyOf:
+    - ROLE_MANAGER
+  scopesAnyOf:
+    - catalog:write
+```
+```java
+// Orden: scopes → roles → permissions, unidos con and:
+@PreAuthorize("hasAnyAuthority('SCOPE_catalog:write') and hasAnyRole('MANAGER')")
+@PutMapping("/items/{itemId}")
+public void updateItem(...) { ... }
+```
+
+**Combinación — los tres campos:**
+```yaml
+authorization:
+  rolesAnyOf:
+    - ROLE_ADMIN
+  scopesAnyOf:
+    - catalog:admin
+  permissionsAnyOf:
+    - catalog:archive
+```
+```java
+@PreAuthorize("hasAnyAuthority('SCOPE_catalog:admin') and hasAnyRole('ADMIN') and hasAnyAuthority('catalog:archive')")
+@PostMapping("/items/{itemId}/archive")
+public void archiveItem(...) { ... }
 ```
 
 **Con `ownership`:**
@@ -584,6 +667,23 @@ public void createProduct(...) { ... }
 if (!Objects.equals(String.valueOf(product.ownerId()), SecurityContextUtil.currentUserClaim("userId"))
     && !SecurityContextUtil.hasAnyRole("ADMIN")) {
     throw new ForbiddenException();
+}
+```
+
+### Cómo funciona `JwtAuthConverter`
+
+El generador produce un `JwtAuthConverter` que extrae **roles** y **scopes** del JWT en
+una sola colección de `GrantedAuthority`. Esto permite que las tres estrategias coexistan:
+
+- Roles del token (ej. `realm_access.roles` en Keycloak) → `GrantedAuthority("ROLE_admin")`
+- Scopes del token (claim `scope`, espacio-separado) → `GrantedAuthority("SCOPE_catalog:write")`
+- Permisos granulares configurados como roles compuestos en Keycloak → `GrantedAuthority("products:create")`
+
+```java
+private Collection<GrantedAuthority> extractAuthorities(Jwt jwt) {
+    List<GrantedAuthority> authorities = new ArrayList<>(extractRoles(jwt));
+    authorities.addAll(extractScopes(jwt));
+    return authorities;
 }
 ```
 

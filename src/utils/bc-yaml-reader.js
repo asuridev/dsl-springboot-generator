@@ -158,7 +158,7 @@ function validate(doc, opts = {}) {
   const ALLOWED_UC_DEFAULT_SORT_KEYS = new Set(['field', 'direction']);
   const ALLOWED_UC_SORT_DIRECTIONS = new Set(['ASC', 'DESC']);
   // [G3] authorization whitelists
-  const ALLOWED_UC_AUTHZ_KEYS = new Set(['rolesAnyOf', 'ownership']);
+  const ALLOWED_UC_AUTHZ_KEYS = new Set(['rolesAnyOf', 'permissionsAnyOf', 'scopesAnyOf', 'ownership']);
   const ALLOWED_UC_OWNERSHIP_KEYS = new Set(['field', 'claim', 'allowRoleBypass']);
   // [G2] idempotency whitelists
   const ALLOWED_UC_IDEMPOTENCY_KEYS = new Set(['header', 'ttl', 'storage']);
@@ -377,6 +377,22 @@ function validate(doc, opts = {}) {
       if (a.rolesAnyOf != null) {
         if (!Array.isArray(a.rolesAnyOf) || a.rolesAnyOf.length === 0 || a.rolesAnyOf.some((r) => typeof r !== 'string' || !r.trim())) {
           fail(`Use case "${uc.id}" authorization.rolesAnyOf must be a non-empty array of role-name strings.`);
+        }
+      }
+      if (a.permissionsAnyOf != null) {
+        if (!Array.isArray(a.permissionsAnyOf) || a.permissionsAnyOf.length === 0 || a.permissionsAnyOf.some((p) => typeof p !== 'string' || !p.trim())) {
+          fail(`Use case "${uc.id}" authorization.permissionsAnyOf must be a non-empty array of permission strings (e.g. "products:create").`);
+        }
+        if (a.permissionsAnyOf.some((p) => p.startsWith('ROLE_'))) {
+          fail(`Use case "${uc.id}" authorization.permissionsAnyOf contains an entry starting with "ROLE_". Use rolesAnyOf for role-based authorization.`);
+        }
+      }
+      if (a.scopesAnyOf != null) {
+        if (!Array.isArray(a.scopesAnyOf) || a.scopesAnyOf.length === 0 || a.scopesAnyOf.some((s) => typeof s !== 'string' || !s.trim())) {
+          fail(`Use case "${uc.id}" authorization.scopesAnyOf must be a non-empty array of OAuth2 scope strings (e.g. "products:write").`);
+        }
+        if (a.scopesAnyOf.some((s) => s.startsWith('SCOPE_'))) {
+          fail(`Use case "${uc.id}" authorization.scopesAnyOf contains an entry starting with "SCOPE_". Write bare scope names — the generator adds the SCOPE_ prefix automatically.`);
         }
       }
       if (a.ownership != null) {

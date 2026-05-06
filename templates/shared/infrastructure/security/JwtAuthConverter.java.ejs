@@ -4,6 +4,7 @@ import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
 <% if (authProviderMeta.rolesClaimType === 'nested') { -%>
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
@@ -11,6 +12,9 @@ import java.util.Map;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 <% } else { -%>
+import java.util.ArrayList;
+import java.util.List;
+import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 <% } -%>
 
@@ -35,9 +39,23 @@ public class JwtAuthConverter {
     public JwtAuthenticationConverter converter() {
 <% if (authProviderMeta.rolesClaimType === 'nested') { -%>
         JwtAuthenticationConverter jwtConverter = new JwtAuthenticationConverter();
-        jwtConverter.setJwtGrantedAuthoritiesConverter(this::extractRoles);
+        jwtConverter.setJwtGrantedAuthoritiesConverter(this::extractAuthorities);
         jwtConverter.setPrincipalClaimName("<%= authProviderMeta.principalClaimName %>");
         return jwtConverter;
+    }
+
+    /**
+     * Combines role-based authorities (ROLE_ prefix), OAuth2 scope authorities
+     * (SCOPE_ prefix), and granular permission authorities (no prefix) extracted
+     * from the JWT into a single collection. This allows {@code hasAnyRole(...)},
+     * {@code hasAnyAuthority('SCOPE_...')} and {@code hasAnyAuthority('x:action')}
+     * to work correctly in {@code @PreAuthorize} expressions.
+     */
+    private Collection<GrantedAuthority> extractAuthorities(Jwt jwt) {
+        List<GrantedAuthority> authorities = new ArrayList<>(extractRoles(jwt));
+        authorities.addAll(extractScopes(jwt));
+        authorities.addAll(extractPermissions(jwt));
+        return authorities;
     }
 
     private Collection<GrantedAuthority> extractRoles(Jwt jwt) {
@@ -55,13 +73,60 @@ public class JwtAuthConverter {
                 .map(GrantedAuthority.class::cast)
                 .toList();
     }
+
+    private Collection<GrantedAuthority> extractScopes(Jwt jwt) {
+        String scopeClaim = jwt.getClaimAsString("scope");
+        if (scopeClaim == null || scopeClaim.isBlank()) {
+            return Collections.emptyList();
+        }
+        return List.of(scopeClaim.split(" ")).stream()
+                .filter(s -> !s.isBlank())
+                .map(scope -> new SimpleGrantedAuthority("SCOPE_" + scope))
+                .map(GrantedAuthority.class::cast)
+                .toList();
+    }
+
+    /**
+     * Extracts granular permission authorities from the {@code <%= authProviderMeta.permissionsClaimName %>}
+     * JWT claim (array of strings). Each permission is mapped to a
+     * {@link SimpleGrantedAuthority} with no prefix, enabling
+     * {@code hasAnyAuthority('catalog:read')} in {@code @PreAuthorize}.
+     *
+     * Configure this claim in Keycloak via a "User Client Role" protocol mapper
+     * with "Token Claim Name" set to {@code <%= authProviderMeta.permissionsClaimName %>}
+     * and "Multivalued" enabled.
+     */
+    private Collection<GrantedAuthority> extractPermissions(Jwt jwt) {
+        List<String> permissions = jwt.getClaimAsStringList("<%= authProviderMeta.permissionsClaimName %>");
+        if (permissions == null || permissions.isEmpty()) {
+            return Collections.emptyList();
+        }
+        return permissions.stream()
+                .filter(p -> !p.isBlank())
+                .map(SimpleGrantedAuthority::new)
+                .map(GrantedAuthority.class::cast)
+                .toList();
+    }
 <% } else { -%>
-        JwtGrantedAuthoritiesConverter authoritiesConverter = new JwtGrantedAuthoritiesConverter();
-        authoritiesConverter.setAuthoritiesClaimName("<%= authProviderMeta.rolesClaimName %>");
-        authoritiesConverter.setAuthorityPrefix("ROLE_");
+        JwtGrantedAuthoritiesConverter rolesConverter = new JwtGrantedAuthoritiesConverter();
+        rolesConverter.setAuthoritiesClaimName("<%= authProviderMeta.rolesClaimName %>");
+        rolesConverter.setAuthorityPrefix("ROLE_");
+
+        JwtGrantedAuthoritiesConverter scopesConverter = new JwtGrantedAuthoritiesConverter();
+        scopesConverter.setAuthoritiesClaimName("scope");
+        scopesConverter.setAuthorityPrefix("SCOPE_");
+
+        JwtGrantedAuthoritiesConverter permissionsConverter = new JwtGrantedAuthoritiesConverter();
+        permissionsConverter.setAuthoritiesClaimName("<%= authProviderMeta.permissionsClaimName %>");
+        permissionsConverter.setAuthorityPrefix("");
 
         JwtAuthenticationConverter jwtConverter = new JwtAuthenticationConverter();
-        jwtConverter.setJwtGrantedAuthoritiesConverter(authoritiesConverter);
+        jwtConverter.setJwtGrantedAuthoritiesConverter(jwt -> {
+            List<GrantedAuthority> authorities = new ArrayList<>(rolesConverter.convert(jwt));
+            authorities.addAll(scopesConverter.convert(jwt));
+            authorities.addAll(permissionsConverter.convert(jwt));
+            return authorities;
+        });
         jwtConverter.setPrincipalClaimName("<%= authProviderMeta.principalClaimName %>");
         return jwtConverter;
     }

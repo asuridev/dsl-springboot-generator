@@ -1,0 +1,29 @@
+{
+  "src/main/java/com/test/catalog/infrastructure/rest/controllers/item/v1/ItemV1Controller.java": {
+    "contains": [
+      "@PreAuthorize(\"hasAnyAuthority('catalog:read')\")",
+      "@PreAuthorize(\"hasAnyAuthority('SCOPE_catalog:write')\")",
+      "@PreAuthorize(\"hasAnyAuthority('SCOPE_catalog:write') and hasAnyRole('MANAGER')\")",
+      "hasAnyAuthority('SCOPE_catalog:admin') and hasAnyRole('ADMIN') and hasAnyAuthority('catalog:archive')"
+    ],
+    "notContains": [
+      "hasAnyRole('SCOPE_",
+      "ROLE_MANAGER",
+      "ROLE_ADMIN"
+    ]
+  },
+  "src/main/java/com/test/shared/infrastructure/security/JwtAuthConverter.java": {
+    "contains": [
+      "extractAuthorities",
+      "extractRoles",
+      "extractScopes",
+      "ROLE_",
+      "SCOPE_",
+      "realm_access",
+      "scope"
+    ],
+    "notContains": [
+      "this::extractRoles"
+    ]
+  }
+}

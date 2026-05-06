@@ -51,11 +51,20 @@
       "realm_access",
       "SimpleGrantedAuthority",
       "ROLE_",
-      "preferred_username"
+      "preferred_username",
+      "extractAuthorities",
+      "extractRoles",
+      "extractScopes",
+      "extractPermissions",
+      "getClaimAsStringList",
+      "SCOPE_",
+      "scope",
+      "permissions"
     ],
     "notContains": [
       "new JwtGrantedAuthoritiesConverter()",
-      "setAuthoritiesClaimName(\"realm_access.roles\")"
+      "setAuthoritiesClaimName(\"realm_access.roles\")",
+      "this::extractRoles"
     ]
   },
   "src/main/java/com/test/shared/infrastructure/configurations/securityConfig/SecurityConfig.java": {

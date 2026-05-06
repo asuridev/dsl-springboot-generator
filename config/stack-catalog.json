@@ -61,14 +61,16 @@
       "rolesClaimType": "nested",
       "rolesClaimParent": "realm_access",
       "rolesClaimField": "roles",
-      "principalClaimName": "preferred_username"
+      "principalClaimName": "preferred_username",
+      "permissionsClaimName": "permissions"
     },
     {
       "id": "cognito",
       "label": "AWS Cognito",
       "rolesClaimType": "flat",
       "rolesClaimName": "cognito:groups",
-      "principalClaimName": "username"
+      "principalClaimName": "username",
+      "permissionsClaimName": "permissions"
     }
   ],
   "dockerImages": {

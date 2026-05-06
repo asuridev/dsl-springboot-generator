@@ -1,0 +1,126 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Item
+    root: Item
+    auditable: true
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+      - name: status
+        type: String(20)
+    domainMethods:
+      - name: create
+        description: Creates a new catalog item.
+        returns: Item
+      - name: update
+        description: Updates catalog item details.
+        returns: Item
+      - name: archive
+        description: Archives a catalog item.
+        returns: Item
+
+useCases:
+
+  # UC-1: permissionsAnyOf only → hasAnyAuthority('catalog:read')
+  - id: UC-CAT-001
+    name: GetItemById
+    type: query
+    actor: viewer
+    trigger:
+      kind: http
+      operationId: getItemById
+    aggregate: Item
+    input:
+      - name: itemId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    returns: ItemDetail
+    notFoundError: ITEM_NOT_FOUND
+    authorization:
+      permissionsAnyOf:
+        - catalog:read
+
+  # UC-2: scopesAnyOf only → hasAnyAuthority('SCOPE_catalog:write')
+  - id: UC-CAT-002
+    name: CreateItem
+    type: command
+    actor: api-client
+    trigger:
+      kind: http
+      operationId: createItem
+    aggregate: Item
+    method: create
+    input:
+      - name: name
+        type: String(200)
+        source: body
+        required: true
+    authorization:
+      scopesAnyOf:
+        - catalog:write
+    implementation: scaffold
+
+  # UC-3: rolesAnyOf + scopesAnyOf → hasAnyAuthority('SCOPE_catalog:write') and hasAnyRole('MANAGER')
+  - id: UC-CAT-003
+    name: UpdateItem
+    type: command
+    actor: manager
+    trigger:
+      kind: http
+      operationId: updateItem
+    aggregate: Item
+    method: update
+    input:
+      - name: itemId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+      - name: name
+        type: String(200)
+        source: body
+        required: true
+    authorization:
+      rolesAnyOf:
+        - ROLE_MANAGER
+      scopesAnyOf:
+        - catalog:write
+    implementation: scaffold
+
+  # UC-4: all three combined → hasAnyAuthority('SCOPE_catalog:admin') and hasAnyRole('ADMIN') and hasAnyAuthority('catalog:archive')
+  - id: UC-CAT-004
+    name: ArchiveItem
+    type: command
+    actor: admin
+    trigger:
+      kind: http
+      operationId: archiveItem
+    aggregate: Item
+    method: archive
+    input:
+      - name: itemId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    authorization:
+      rolesAnyOf:
+        - ROLE_ADMIN
+      scopesAnyOf:
+        - catalog:admin
+      permissionsAnyOf:
+        - catalog:archive
+    implementation: scaffold
+
+errors:
+  - code: ITEM_NOT_FOUND
+    httpStatus: 404
+    message: "Item not found."
