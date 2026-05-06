@@ -40,9 +40,15 @@
   },
   "src/main/java/com/test/shared/infrastructure/security/JwtAuthConverter.java": {
     "contains": [
-      "realm_access.roles",
+      "getClaimAsMap",
+      "realm_access",
+      "SimpleGrantedAuthority",
       "ROLE_",
       "preferred_username"
+    ],
+    "notContains": [
+      "new JwtGrantedAuthoritiesConverter()",
+      "setAuthoritiesClaimName(\"realm_access.roles\")"
     ]
   },
   "src/main/java/com/test/shared/infrastructure/configurations/securityConfig/SecurityConfig.java": {

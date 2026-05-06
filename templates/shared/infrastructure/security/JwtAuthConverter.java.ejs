@@ -1,17 +1,29 @@
 package <%= packageName %>.shared.infrastructure.security;
 
-import org.springframework.core.convert.converter.Converter;
 import org.springframework.security.authentication.AbstractAuthenticationToken;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+<% if (authProviderMeta.rolesClaimType === 'nested') { -%>
+import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
+import java.util.Map;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+<% } else { -%>
 import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
+<% } -%>
 
 /**
  * Converts an incoming JWT into a Spring Security {@link AbstractAuthenticationToken},
  * mapping provider-specific roles to standard Spring {@code ROLE_} granted authorities.
  *
  * Provider: <%= authProviderMeta.id %>
- * Roles claim: <%= authProviderMeta.rolesClaimName %>
+<% if (authProviderMeta.rolesClaimType === 'nested') { -%>
+ * Roles claim: <%= authProviderMeta.rolesClaimParent %>.<%= authProviderMeta.rolesClaimField %> (nested)
+<% } else { -%>
+ * Roles claim: <%= authProviderMeta.rolesClaimName %> (flat)
+<% } -%>
  * Principal claim: <%= authProviderMeta.principalClaimName %>
  */
 public class JwtAuthConverter {
@@ -21,6 +33,29 @@ public class JwtAuthConverter {
      * Called by {@code SecurityConfig.jwtAuthenticationConverter()}.
      */
     public JwtAuthenticationConverter converter() {
+<% if (authProviderMeta.rolesClaimType === 'nested') { -%>
+        JwtAuthenticationConverter jwtConverter = new JwtAuthenticationConverter();
+        jwtConverter.setJwtGrantedAuthoritiesConverter(this::extractRoles);
+        jwtConverter.setPrincipalClaimName("<%= authProviderMeta.principalClaimName %>");
+        return jwtConverter;
+    }
+
+    private Collection<GrantedAuthority> extractRoles(Jwt jwt) {
+        Map<String, Object> realmAccess = jwt.getClaimAsMap("<%= authProviderMeta.rolesClaimParent %>");
+        if (realmAccess == null) {
+            return Collections.emptyList();
+        }
+        Object rolesObj = realmAccess.get("<%= authProviderMeta.rolesClaimField %>");
+        if (!(rolesObj instanceof List<?> roles)) {
+            return Collections.emptyList();
+        }
+        return roles.stream()
+                .filter(String.class::isInstance)
+                .map(role -> new SimpleGrantedAuthority("ROLE_" + role))
+                .map(GrantedAuthority.class::cast)
+                .toList();
+    }
+<% } else { -%>
         JwtGrantedAuthoritiesConverter authoritiesConverter = new JwtGrantedAuthoritiesConverter();
         authoritiesConverter.setAuthoritiesClaimName("<%= authProviderMeta.rolesClaimName %>");
         authoritiesConverter.setAuthorityPrefix("ROLE_");
@@ -30,4 +65,5 @@ public class JwtAuthConverter {
         jwtConverter.setPrincipalClaimName("<%= authProviderMeta.principalClaimName %>");
         return jwtConverter;
     }
+<% } -%>
 }

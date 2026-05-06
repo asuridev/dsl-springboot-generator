@@ -58,8 +58,17 @@
     {
       "id": "keycloak",
       "label": "Keycloak",
-      "rolesClaimName": "realm_access.roles",
+      "rolesClaimType": "nested",
+      "rolesClaimParent": "realm_access",
+      "rolesClaimField": "roles",
       "principalClaimName": "preferred_username"
+    },
+    {
+      "id": "cognito",
+      "label": "AWS Cognito",
+      "rolesClaimType": "flat",
+      "rolesClaimName": "cognito:groups",
+      "principalClaimName": "username"
     }
   ],
   "dockerImages": {
@@ -69,6 +78,6 @@
     "kafkaZookeeper": "confluentinc/cp-zookeeper:7.6.0",
     "kafkaUi": "provectuslabs/kafka-ui:latest",
     "rabbitmq": "rabbitmq:4-management",
-    "keycloak": "quay.io/keycloak/keycloak:26.0"
+    "keycloak": "quay.io/keycloak/keycloak:26.3.1"
   }
 }
