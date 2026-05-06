@@ -24,6 +24,9 @@ import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
+<% if (typeof authServerEnabled !== 'undefined' && authServerEnabled) { -%>
+import org.springframework.security.access.AccessDeniedException;
+<% } -%>
 
 <% const constraintMap = (typeof constraintErrorMap !== 'undefined' ? constraintErrorMap : []) || []; -%>
 <% const infraMap = (typeof infrastructureErrorMap !== 'undefined' ? infrastructureErrorMap : []) || []; -%>
@@ -167,6 +170,15 @@ public class HandlerExceptions {
     public ErrorResponse onForbiddenException(ForbiddenException ex) {
         return buildResponse(HttpStatus.FORBIDDEN, "Forbidden", ex, "Access denied");
     }
+<% if (typeof authServerEnabled !== 'undefined' && authServerEnabled) { -%>
+
+    @ResponseStatus(HttpStatus.FORBIDDEN)
+    @ExceptionHandler(AccessDeniedException.class)
+    @ResponseBody
+    public ErrorResponse onAccessDeniedException(AccessDeniedException ex) {
+        return new ErrorResponse(HttpStatus.FORBIDDEN.value(), "Forbidden", "Access denied");
+    }
+<% } -%>
 
     // ── Domain exceptions ──────────────────────────────────────────
 

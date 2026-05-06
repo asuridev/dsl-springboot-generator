@@ -510,7 +510,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'shared', 'handlerException', 'HandlerExceptions.java.ejs'),
     path.join(handlerDir, 'HandlerExceptions.java'),
-    { packageName, constraintErrorMap: buildConstraintErrorMap(packageName, allBcYamls), infrastructureErrorMap: buildInfrastructureErrorMap(packageName, allBcYamls) }
+    { packageName, authServerEnabled, constraintErrorMap: buildConstraintErrorMap(packageName, allBcYamls), infrastructureErrorMap: buildInfrastructureErrorMap(packageName, allBcYamls) }
   );
 
   // ── Shared: CQRS interfaces ───────────────────────────────────────────────
