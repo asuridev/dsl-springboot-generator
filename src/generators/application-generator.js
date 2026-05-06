@@ -946,8 +946,9 @@ function appendOwnershipGuard(lines, extraImports, uc, aggVarName, packageName) 
   const bypassExpr = bypass.length > 0
     ? ` && !SecurityContextUtil.hasAnyRole(${bypass.map((r) => `"${r.replace(/^ROLE_/, '')}"`).join(', ')})`
     : '';
+  const getter = `get${field.charAt(0).toUpperCase() + field.slice(1)}`;
   lines.push(`        // [G3] Ownership guard — derived_from: useCases[${uc.id}].authorization`);
-  lines.push(`        if (!Objects.equals(String.valueOf(${aggVarName}.${field}()), SecurityContextUtil.currentUserClaim("${claim}"))${bypassExpr}) {`);
+  lines.push(`        if (!Objects.equals(String.valueOf(${aggVarName}.${getter}()), SecurityContextUtil.currentUserClaim("${claim}"))${bypassExpr}) {`);
   lines.push(`            throw new ForbiddenException();`);
   lines.push(`        }`);
 }

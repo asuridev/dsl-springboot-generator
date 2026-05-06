@@ -617,6 +617,272 @@ Con roles, cualquier usuario con `ROLE_ADMIN` tendría acceso completo desde cua
 
 ---
 
+## Estrategia 3 — Ownership (verificación por recurso)
+
+### ¿Qué problema resuelve?
+
+Las estrategias anteriores responden a la pregunta ¿tiene este usuario/token permiso para
+ejecutar esta operación en general? El ownership responde a una pregunta más estricta:
+¿tiene este usuario permiso para ejecutar esta operación **sobre este recurso concreto**?
+
+Ejemplos donde roles y scopes no son suficientes:
+- Un cliente puede cancelar pedidos, pero **solo los suyos**, no los de otros clientes
+- Un usuario puede editar perfiles, pero **solo su propio perfil**
+- Un driver puede actualizar el estado de una entrega, pero **solo las que le están asignadas**
+
+### Cómo funciona
+
+A diferencia de `rolesAnyOf`, `permissionsAnyOf` y `scopesAnyOf` —que generan una
+anotación `@PreAuthorize` en el **controller**—, `ownership` genera una guarda
+imperativa en el **handler**, ejecutada **después** de cargar el agregado.
+
+```
+Request HTTP
+    │
+    ▼
+@PreAuthorize (si se declaró rolesAnyOf / permissionsAnyOf / scopesAnyOf)
+    │
+    ▼
+Handler.handle(command)
+    │
+    ▼
+aggregado = repository.findById(...).orElseThrow()
+    │
+    ▼
+[G3] Ownership guard                    ← se ejecuta aquí
+    │   compara: agregado.field() == JWT.claim
+    │   si no coincide y no tiene bypass role → throw ForbiddenException
+    ▼
+lógica de negocio / persistencia
+```
+
+### Declaración en YAML
+
+```yaml
+useCases:
+  - id: UC-ORD-003
+    name: CancelOrder
+    type: command
+    aggregate: Order
+    method: cancel
+    input:
+      - name: orderId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true     # obligatorio — el guard compara contra el agregado cargado
+    notFoundError: ORDER_NOT_FOUND
+    authorization:
+      rolesAnyOf:               # opcional: restricción previa por rol
+        - ROLE_CUSTOMER
+        - ROLE_ADMIN
+      ownership:
+        field: customerId       # propiedad del agregado Order (getter: order.customerId())
+        claim: userId           # nombre del claim en el JWT del usuario autenticado
+        allowRoleBypass:        # opcional: roles que omiten la verificación de ownership
+          - ROLE_ADMIN
+          - ROLE_SUPPORT
+    implementation: scaffold
+```
+
+### Propiedades de `ownership`
+
+| Propiedad | Tipo | Requerido | Descripción |
+|---|---|---|---|
+| `field` | camelCase | ✅ | Nombre de la **propiedad** del agregado cuyo valor se compara con el claim. El generador construye el getter automáticamente: `field: customerId` → `aggregate.getCustomerId()`. |
+| `claim` | string | ✅ | Nombre del claim JWT que identifica al usuario actual. Valor típico: `userId`, `sub`, `preferred_username`. |
+| `allowRoleBypass` | lista strings | no | Roles que pueden saltarse la verificación. Acepta con o sin prefijo `ROLE_` — el generador elimina el prefijo al generar `hasAnyRole(...)`. |
+
+> **Restricción:** `ownership` requiere que el agregado esté cargado antes de ejecutar
+> la guarda. Esto ocurre automáticamente cuando el use case declara `loadAggregate: true`
+> en uno de sus inputs, o cuando usa `lookups[]`. Sin carga previa del agregado, el
+> generador no puede producir la comparación.
+
+### Código Java generado
+
+**Sin `allowRoleBypass`:**
+```yaml
+authorization:
+  ownership:
+    field: customerId
+    claim: userId
+```
+```java
+// [G3] Ownership guard — derived_from: useCases[UC-ORD-003].authorization
+if (!Objects.equals(String.valueOf(order.getCustomerId()), SecurityContextUtil.currentUserClaim("userId"))) {
+    throw new ForbiddenException();
+}
+```
+
+**Con `allowRoleBypass: [ROLE_ADMIN, ROLE_SUPPORT]`:**
+```yaml
+authorization:
+  ownership:
+    field: customerId
+    claim: userId
+    allowRoleBypass:
+      - ROLE_ADMIN
+      - ROLE_SUPPORT
+```
+```java
+// [G3] Ownership guard — derived_from: useCases[UC-ORD-003].authorization
+if (!Objects.equals(String.valueOf(order.getCustomerId()), SecurityContextUtil.currentUserClaim("userId"))
+        && !SecurityContextUtil.hasAnyRole("ADMIN", "SUPPORT")) {
+    throw new ForbiddenException();
+}
+```
+
+La condición se lee: “lanza `ForbiddenException` si el usuario actual **no** es el
+dueño del recurso **Y** tampoco tiene uno de los roles de bypass”.
+
+### `SecurityContextUtil` — la clase que usa la guarda
+
+El generador produce siempre (en todos los proyectos con `authServer: true`) la clase
+`shared/infrastructure/security/SecurityContextUtil.java`. Es el helper estático que
+la guarda de ownership invoca:
+
+```java
+// Lee un claim del JWT del usuario autenticado (devuelve null si no existe)
+public static String currentUserClaim(String claim) {
+    Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+    if (auth == null || !auth.isAuthenticated()) return null;
+    Object principal = auth.getPrincipal();
+    if (principal instanceof Jwt jwt) {
+        Object value = jwt.getClaim(claim);
+        return value == null ? null : String.valueOf(value);
+    }
+    return null;
+}
+
+// Verifica si el usuario tiene alguno de los roles indicados (sin prefijo ROLE_)
+public static boolean hasAnyRole(String... roles) {
+    Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+    if (auth == null || !auth.isAuthenticated()) return false;
+    for (GrantedAuthority granted : auth.getAuthorities()) {
+        String authority = granted.getAuthority();
+        for (String role : roles) {
+            String expected = role.startsWith("ROLE_") ? role : "ROLE_" + role;
+            if (expected.equals(authority)) return true;
+        }
+    }
+    return false;
+}
+```
+
+### Ejemplo completo: handler generado para `CancelOrder`
+
+YAML del use case:
+```yaml
+- id: UC-ORD-003
+  name: CancelOrder
+  type: command
+  aggregate: Order
+  method: cancel
+  input:
+    - name: orderId
+      type: Uuid
+      source: path
+      required: true
+      loadAggregate: true
+  notFoundError: ORDER_NOT_FOUND
+  authorization:
+    rolesAnyOf:
+      - ROLE_CUSTOMER
+      - ROLE_ADMIN
+    ownership:
+      field: customerId
+      claim: userId
+      allowRoleBypass:
+        - ROLE_ADMIN
+  implementation: scaffold
+```
+
+Código Java generado — `CancelOrderCommandHandler.java`:
+```java
+@ApplicationComponent
+public class CancelOrderCommandHandler implements CommandHandler<CancelOrderCommand> {
+
+    private final OrderRepository orderRepository;
+
+    @Override
+    @Transactional
+    @LogExceptions
+    public void handle(CancelOrderCommand command) {
+        Order order = orderRepository.findById(UUID.fromString(command.orderId()))
+                .orElseThrow(OrderNotFoundError::new);
+
+        // [G3] Ownership guard — derived_from: useCases[UC-ORD-003].authorization
+        if (!Objects.equals(String.valueOf(order.getCustomerId()), SecurityContextUtil.currentUserClaim("userId"))
+                && !SecurityContextUtil.hasAnyRole("ADMIN")) {
+            throw new ForbiddenException();
+        }
+
+        // TODO: implement business logic — ver orders-flows.md
+        throw new UnsupportedOperationException("Not implemented yet");
+    }
+}
+```
+
+Código Java generado — `CancelOrderController` (fragmento):
+```java
+@DeleteMapping("/orders/{orderId}")
+@PreAuthorize("hasAnyRole('CUSTOMER', 'ADMIN')")
+public void cancelOrder(@PathVariable String orderId) {
+    log.info("cancelOrder");
+    useCaseMediator.dispatch(new CancelOrderCommand(orderId));
+}
+```
+
+Flujo completo para un cliente intentando cancelar el pedido de otro:
+1. `@PreAuthorize("hasAnyRole('CUSTOMER', 'ADMIN')")` — pasa (tiene `ROLE_CUSTOMER`)
+2. Handler carga `Order` con `orderId` — encuentra el pedido
+3. Ownership guard: `order.getCustomerId()` es `"uuid-de-otro-usuario"`, `currentUserClaim("userId")` es `"uuid-del-cliente"` — no coinciden
+4. El cliente no tiene `ROLE_ADMIN` (bypass) — lanza `ForbiddenException` → **HTTP 403**
+
+Flujo para un administrador cancelando el mismo pedido:
+1. `@PreAuthorize` — pasa (tiene `ROLE_ADMIN`)
+2. Handler carga `Order`
+3. Ownership guard: `getCustomerId()` no coincide, pero `SecurityContextUtil.hasAnyRole("ADMIN")` es `true` — **pasa la guarda**
+4. Se ejecuta la lógica de negocio
+
+### Configuración en Keycloak para `ownership`
+
+No se requiere ninguna configuración especial en Keycloak más allá de lo que ya se
+configura para la estrategia de roles. El claim que `ownership.claim` referencia
+(ej. `userId`) debe estar presente en el access token.
+
+Keycloak incluye por defecto el claim `sub` (UUID del usuario) en todos los tokens.
+Si el sistema usa un claim personalizado como `userId`, hay que añadir un Protocol
+Mapper:
+
+1. **Clients** → tu cliente → **Client scopes** → `{cliente}-dedicated`
+2. **Mappers** → **Add mapper** → **By configuration** → **User Attribute**
+3. Configura:
+
+   | Campo | Valor |
+   |---|---|
+   | Name | `userId-mapper` |
+   | User Attribute | `userId` |
+   | Token Claim Name | `userId` |
+   | Claim JSON Type | `String` |
+   | Add to access token | ON |
+
+4. En el usuario: **Users** → usuario → pestaña **Attributes** → añadir `userId` = `<valor>`
+
+> Si usas `claim: sub`, el UUID generado por Keycloak para el usuario ya está
+> disponible sin ningún mapper adicional. Es la opción más sencilla cuando el
+> dominio no necesita un ID propio separado del ID de Keycloak.
+
+### Cuándo usar `ownership`
+
+✅ Portales de clientes donde cada usuario gestiona solo sus propios recursos  
+✅ Aplicaciones multi-usuario donde los recursos tienen propietario (pedidos, perfiles, documentos)  
+✅ Cuando `rolesAnyOf` no es suficiente porque el mismo rol puede ver los recursos de todos  
+❌ No aplica en APIs puramente internas M2M (sin concepto de usuario propietario)  
+❌ No aplica cuando todos los recursos son globales (catálogo, configuración del sistema)  
+
+---
+
 ## Combinación — La práctica real en sistemas complejos
 
 En la industria, las dos estrategias se usan juntas en capas:
@@ -730,3 +996,29 @@ Genera (Prettier puede formatear en varias líneas si la expresión supera ~80 c
 
 Significa: el token debe tener el scope `catalog:admin` **Y** el usuario debe tener
 el rol `ADMIN` **Y** el usuario debe tener el permiso `catalog:archive`.
+
+### Ownership (`ownership`)
+
+```yaml
+authorization:
+  rolesAnyOf:
+    - ROLE_CUSTOMER
+    - ROLE_ADMIN
+  ownership:
+    field: customerId       # getter del agregado: order.customerId()
+    claim: userId           # claim del JWT del usuario autenticado
+    allowRoleBypass:
+      - ROLE_ADMIN
+```
+
+No genera `@PreAuthorize`. Genera en el **handler**, después de cargar el agregado:
+```java
+// [G3] Ownership guard — derived_from: useCases[UC-ORD-003].authorization
+if (!Objects.equals(String.valueOf(order.customerId()), SecurityContextUtil.currentUserClaim("userId"))
+        && !SecurityContextUtil.hasAnyRole("ADMIN")) {
+    throw new ForbiddenException();
+}
+```
+
+Requisito: el input que carga el agregado debe declarar `loadAggregate: true`.
+Ver [Estrategia 3 — Ownership](#estrategia-3--ownership-verificaci%C3%B3n-por-recurso) para la explicación completa.
