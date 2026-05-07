@@ -636,7 +636,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'shared', 'configurations', 'swaggerConfig', 'SwaggerConfig.java.ejs'),
     path.join(swaggerConfigDir, 'SwaggerConfig.java'),
-    { packageName }
+    { packageName, authServerEnabled }
   );
 
   // ── Shared: HandlerLogs (AOP logging aspect) ──────────────────────────────

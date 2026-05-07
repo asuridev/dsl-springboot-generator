@@ -2,6 +2,11 @@ package <%= packageName %>.shared.infrastructure.configurations.swaggerConfig;
 
 import io.swagger.v3.oas.models.OpenAPI;
 import io.swagger.v3.oas.models.info.Info;
+<% if (authServerEnabled) { -%>
+import io.swagger.v3.oas.models.Components;
+import io.swagger.v3.oas.models.security.SecurityRequirement;
+import io.swagger.v3.oas.models.security.SecurityScheme;
+<% } -%>
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -18,6 +23,15 @@ public class SwaggerConfig {
             .info(new Info()
                 .title("API de " + appName)
                 .version("1.0")
-                .description("Documentación de la API REST"));
+                .description("Documentación de la API REST"))
+<% if (authServerEnabled) { -%>
+            .components(new Components()
+                .addSecuritySchemes("bearerAuth", new SecurityScheme()
+                    .type(SecurityScheme.Type.HTTP)
+                    .scheme("bearer")
+                    .bearerFormat("JWT")))
+            .addSecurityItem(new SecurityRequirement().addList("bearerAuth"))
+<% } -%>
+            ;
     }
 }
