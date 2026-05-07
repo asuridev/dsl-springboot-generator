@@ -1,0 +1,55 @@
+{
+  "build.gradle": {
+    "contains": [
+      "spring-boot-starter-data-redis"
+    ]
+  },
+  "src/main/resources/parameters/local/redis.yaml": {
+    "contains": [
+      "host:",
+      "port:"
+    ]
+  },
+  "src/main/java/com/test/shared/infrastructure/configurations/cacheConfig/CacheConfig.java": {
+    "contains": [
+      "@EnableCaching",
+      "@Configuration",
+      "RedisCacheManager",
+      "GenericJackson2JsonRedisSerializer",
+      "disableCachingNullValues",
+      "getProductById",
+      "Duration.parse(\"PT5M\")",
+      "getCategoryTree",
+      "Duration.parse(\"PT1H\")",
+      "searchProductsByCategory",
+      "Duration.parse(\"PT3M\")",
+      "derived_from: useCases[UC-CAT-010].cacheable",
+      "derived_from: useCases[UC-CAT-020].cacheable",
+      "derived_from: useCases[UC-CAT-030].cacheable"
+    ]
+  },
+  "src/main/java/com/test/catalog/application/usecases/GetProductByIdQueryHandler.java": {
+    "contains": [
+      "import org.springframework.cache.annotation.Cacheable",
+      "@Cacheable(cacheNames = \"getProductById\", key = \"#query.productId\")"
+    ]
+  },
+  "src/main/java/com/test/catalog/application/usecases/GetCategoryTreeQueryHandler.java": {
+    "contains": [
+      "import org.springframework.cache.annotation.Cacheable",
+      "@Cacheable(cacheNames = \"getCategoryTree\")"
+    ],
+    "notContains": [
+      "key =",
+      "condition ="
+    ]
+  },
+  "src/main/java/com/test/catalog/application/usecases/SearchProductsByCategoryQueryHandler.java": {
+    "contains": [
+      "import org.springframework.cache.annotation.Cacheable",
+      "cacheNames = \"searchProductsByCategory\"",
+      "key = \"#query.categoryId + ':' + #query.page + ':' + #query.size\"",
+      "condition = \"#query.categoryId != null\""
+    ]
+  }
+}

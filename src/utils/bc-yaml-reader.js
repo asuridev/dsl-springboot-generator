@@ -116,6 +116,8 @@ function validate(doc, opts = {}) {
     'authorization',
     // [G2] declarative idempotency
     'idempotency',
+    // [G21] declarative query caching
+    'cacheable',
     // [G9] bulk command wrapper
     'bulk',
     // [G10] async / job tracking
@@ -163,6 +165,8 @@ function validate(doc, opts = {}) {
   // [G2] idempotency whitelists
   const ALLOWED_UC_IDEMPOTENCY_KEYS = new Set(['header', 'ttl', 'storage']);
   const ALLOWED_UC_IDEMPOTENCY_STORAGES = new Set(['cache']);
+  // [G21] cacheable whitelists
+  const ALLOWED_UC_CACHEABLE_KEYS = new Set(['ttl', 'keyFields', 'cacheWhen']);
   // [G9] bulk whitelists
   const ALLOWED_UC_BULK_KEYS = new Set(['itemType', 'maxItems', 'onItemError']);
   const ALLOWED_UC_BULK_ON_ITEM_ERROR = new Set(['continue', 'abort']);
@@ -443,6 +447,44 @@ function validate(doc, opts = {}) {
       }
       if (uc.type !== 'command') {
         fail(`Use case "${uc.id}" declares idempotency but type is "${uc.type}". Idempotency is only supported on commands.`);
+      }
+    }
+    // [G21] cacheable structure validation
+    if (uc.cacheable != null) {
+      if (typeof uc.cacheable !== 'object' || Array.isArray(uc.cacheable)) {
+        fail(`Use case "${uc.id}" "cacheable" must be a mapping with keys: ${[...ALLOWED_UC_CACHEABLE_KEYS].join(', ')}.`);
+      }
+      for (const k of Object.keys(uc.cacheable)) {
+        if (!ALLOWED_UC_CACHEABLE_KEYS.has(k)) {
+          fail(`Use case "${uc.id}" cacheable declares unsupported key "${k}". Allowed: ${[...ALLOWED_UC_CACHEABLE_KEYS].join(', ')}.`);
+        }
+      }
+      const ca = uc.cacheable;
+      if (!ca.ttl || typeof ca.ttl !== 'string' || !/^P/.test(ca.ttl)) {
+        fail(`Use case "${uc.id}" cacheable.ttl is required and must be an ISO-8601 duration (e.g. "PT5M", "PT1H", "P1D").`);
+      }
+      if (ca.keyFields != null) {
+        if (!Array.isArray(ca.keyFields) || ca.keyFields.length === 0) {
+          fail(`Use case "${uc.id}" cacheable.keyFields must be a non-empty array of camelCase field names from input[].`);
+        }
+        for (const f of ca.keyFields) {
+          if (typeof f !== 'string' || !/^[a-z][a-zA-Z0-9]*$/.test(f)) {
+            fail(`Use case "${uc.id}" cacheable.keyFields entry "${f}" must be a camelCase string matching a field in input[].`);
+          }
+        }
+      }
+      if (ca.cacheWhen != null) {
+        if (!Array.isArray(ca.cacheWhen) || ca.cacheWhen.length === 0) {
+          fail(`Use case "${uc.id}" cacheable.cacheWhen must be a non-empty array of camelCase field names from input[].`);
+        }
+        for (const f of ca.cacheWhen) {
+          if (typeof f !== 'string' || !/^[a-z][a-zA-Z0-9]*$/.test(f)) {
+            fail(`Use case "${uc.id}" cacheable.cacheWhen entry "${f}" must be a camelCase string matching a field in input[].`);
+          }
+        }
+      }
+      if (uc.type !== 'query') {
+        fail(`Use case "${uc.id}" declares cacheable but type is "${uc.type}". cacheable is only supported on queries.`);
       }
     }
     // [G9] bulk structure validation

@@ -32,7 +32,8 @@ public class <%= useCaseName %>QueryHandler implements QueryHandler<<%= useCaseN
     @Override
     @Transactional(readOnly = true)
     @LogExceptions
-    public <%- returnType %> handle(<%= useCaseName %>Query query) {
+<% if (cacheableAnnotation) { %>    @Cacheable(cacheNames = "<%= cacheableAnnotation.cacheName %>"<% if (cacheableAnnotation.key) { %>, key = "<%- cacheableAnnotation.key %>"<% } %><% if (cacheableAnnotation.condition) { %>, condition = "<%- cacheableAnnotation.condition %>"<% } %>)
+<% } %>    public <%- returnType %> handle(<%= useCaseName %>Query query) {
 <% if (validations && validations.length > 0) { %>
         // [G20] cross-field validations — derived_from useCases[<%= useCaseId %>].validations[]
 <% validations.forEach(function(v) { %><% if (v.throwable && v.errorClass) { %>        // derived_from: validations[<%= v.id %>] — errors[<%= v.errorCode %>]

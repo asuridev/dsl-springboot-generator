@@ -2137,6 +2137,19 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
     }
   }
 
+  // [G21] declarative query caching — translate technology-agnostic keyFields/cacheWhen to Spring SpEL
+  let cacheableAnnotation = null;
+  if (uc.cacheable) {
+    const keyExpr = (uc.cacheable.keyFields || []).length > 0
+      ? uc.cacheable.keyFields.map((f) => `#query.${f}`).join(" + ':' + ")
+      : null;
+    const conditionExpr = (uc.cacheable.cacheWhen || []).length > 0
+      ? uc.cacheable.cacheWhen.map((f) => `#query.${f} != null`).join(' and ')
+      : null;
+    cacheableAnnotation = { cacheName: toCamelCase(uc.name), key: keyExpr, condition: conditionExpr };
+    extraImports.push('org.springframework.cache.annotation.Cacheable');
+  }
+
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'UcQueryHandler.java.ejs'),
     path.join(bcDir, 'application', 'usecases', `${ucClassName}QueryHandler.java`),
@@ -2155,6 +2168,8 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
       implementation: effectiveImpl,
       body,
       imports: extraImports,
+      // [G21] declarative query caching
+      cacheableAnnotation,
       // [G20] declarative cross-field validations — enriched with errorClass/throwable (Phase 3, Gap E9)
       validations: (function() {
         const enriched = enrichValidations(uc.validations, errorMap);

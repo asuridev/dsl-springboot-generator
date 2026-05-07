@@ -65,7 +65,7 @@ dependencies {
 <% } else if (databaseId === 'mysql') { %>    implementation 'org.flywaydb:flyway-mysql'
 <% } %>
 <% } %>
-<% if (requestIdempotencyEnabled && cacheSpringDependency) { %>
+<% if ((requestIdempotencyEnabled || cacheableQueriesPresent) && cacheSpringDependency) { %>
     <%- cacheSpringDependency %>
 <% } %>
 

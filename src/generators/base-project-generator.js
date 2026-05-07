@@ -2,7 +2,7 @@
 
 const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
-const { toPascalCase, toPackagePath, getApplicationClassName } = require('../utils/naming');
+const { toPascalCase, toCamelCase, toPackagePath, getApplicationClassName } = require('../utils/naming');
 const { loadParameters } = require('../utils/config-manager');
 const { hasAnyPersistentProjection } = require('./projection-updater-generator');
 const { hasAnyResilience, hasAnyOAuth2Cc, hasAnyInternalJwt, hasAnyMtls,
@@ -276,6 +276,11 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
     (bc && bc.useCases || []).some((uc) => uc && uc.idempotency)
   );
   const requestIdempotencyEnabled = requestIdempotencyPresent;
+  // [G21] Query caching — shares Redis infrastructure with request idempotency.
+  const cacheableQueriesPresent = (allBcYamls || []).some((bc) =>
+    (bc && bc.useCases || []).some((uc) => uc && uc.cacheable)
+  );
+  const cacheEnabled = requestIdempotencyPresent || cacheableQueriesPresent;
   // [G10] Async/job-tracking requires Flyway to provision async_job.
   const asyncJobPresent = (allBcYamls || []).some((bc) =>
     (bc && bc.useCases || []).some((uc) => uc && uc.async && uc.async.mode === 'jobTracking')
@@ -318,7 +323,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'gradle', 'build.gradle.ejs'),
     path.join(outputDir, 'build.gradle'),
-    { groupId, artifactId, javaVersion, springBootVersion, databaseDependency, brokerDependency, brokerTestDependency, flywayEnabled, databaseId: dbId, resilienceEnabled, oauth2ClientEnabled, requestIdempotencyEnabled, cacheSpringDependency }
+    { groupId, artifactId, javaVersion, springBootVersion, databaseDependency, brokerDependency, brokerTestDependency, flywayEnabled, databaseId: dbId, resilienceEnabled, oauth2ClientEnabled, requestIdempotencyEnabled, cacheableQueriesPresent, cacheSpringDependency }
   );
 
   await renderAndWrite(
@@ -439,8 +444,8 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
       );
     }
 
-    // redis.yaml (only when request idempotency is enabled)
-    if (requestIdempotencyEnabled) {
+    // redis.yaml (only when request idempotency or query caching is enabled)
+    if (cacheEnabled) {
       await renderAndWrite(
         path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'redis.yaml.ejs'),
         path.join(paramDir, 'redis.yaml'),
@@ -590,6 +595,24 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
       path.join(TEMPLATES_DIR, 'shared', 'application', 'dtos', 'Range.java.ejs'),
       path.join(sharedDtosDir, 'Range.java'),
       { packageName }
+    );
+  }
+
+  // ── Shared: CacheConfig (only when query caching is enabled) ─────────────
+  if (cacheableQueriesPresent) {
+    const cacheableEntries = [];
+    for (const bc of (allBcYamls || [])) {
+      for (const uc of ((bc && bc.useCases) || [])) {
+        if (uc && uc.cacheable) {
+          cacheableEntries.push({ name: toCamelCase(uc.name), ucId: uc.id, ttl: uc.cacheable.ttl });
+        }
+      }
+    }
+    const cacheConfigDir = path.join(javaMainDir, 'shared', 'infrastructure', 'configurations', 'cacheConfig');
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'shared', 'configurations', 'cacheConfig', 'CacheConfig.java.ejs'),
+      path.join(cacheConfigDir, 'CacheConfig.java'),
+      { packageName, cacheableEntries }
     );
   }
 

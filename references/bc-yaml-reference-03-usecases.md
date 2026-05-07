@@ -16,16 +16,17 @@ idempotencia, paginación, validaciones cruzadas, y comportamiento asíncrono.
 6. [Bloque `authorization`](#6-bloque-authorization)
 7. [Bloque `pagination`](#7-bloque-pagination)
 8. [Bloque `idempotency`](#8-bloque-idempotency)
-9. [Bloque `bulk`](#9-bloque-bulk)
-10. [Bloque `async`](#10-bloque-async)
-11. [Propiedad `rules`](#11-propiedad-rules)
-12. [Propiedad `notFoundError` y `lookups`](#12-notfounderror-y-lookups)
-13. [Propiedad `fkValidations`](#13-fkvalidations)
-14. [Propiedad `validations`](#14-propiedad-validations)
-15. [Propiedad `emits`](#15-propiedad-emits)
-16. [Multi-agregado: `aggregates` + `steps`](#16-multi-agregado-aggregates--steps)
-17. [Propiedad `implementation`](#17-propiedad-implementation)
-18. [Ejemplos completos](#18-ejemplos-completos)
+9. [Bloque `cacheable`](#9-bloque-cacheable)
+10. [Bloque `bulk`](#10-bloque-bulk)
+11. [Bloque `async`](#11-bloque-async)
+12. [Propiedad `rules`](#12-propiedad-rules)
+13. [Propiedad `notFoundError` y `lookups`](#13-notfounderror-y-lookups)
+14. [Propiedad `fkValidations`](#14-fkvalidations)
+15. [Propiedad `validations`](#15-propiedad-validations)
+16. [Propiedad `emits`](#16-propiedad-emits)
+17. [Multi-agregado: `aggregates` + `steps`](#17-multi-agregado-aggregates--steps)
+18. [Propiedad `implementation`](#18-propiedad-implementation)
+19. [Ejemplos completos](#19-ejemplos-completos)
 
 ---
 
@@ -1000,7 +1001,138 @@ implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 
 ---
 
-## 9. Bloque `bulk`
+## 9. Bloque `cacheable`
+
+Permite declarar caché de lectura en query use cases de forma tecnológicamente agnóstica.
+
+**Problema que resuelve:** las queries de solo lectura frecuentes (catálogos, árboles
+de categorías, detalles de productos) se ejecutan miles de veces con los mismos
+parámetros. Declarar `cacheable` en el YAML genera automáticamente `@Cacheable` en
+el query handler y un `CacheConfig.java` con `RedisCacheManager` configurado con TTL
+individual por query.
+
+**Solo para queries:** el bloque `cacheable` es válido únicamente en use cases con
+`type: query`. El generador rechaza el YAML si se declara en un comando.
+
+### Sintaxis mínima
+
+```yaml
+useCases:
+  - id: UC-CAT-010
+    name: GetProductById
+    type: query
+    # ...
+    cacheable:
+      ttl: PT5M              # ISO-8601 Duration — obligatorio
+```
+
+### Sintaxis con `keyFields`
+
+```yaml
+    cacheable:
+      ttl: PT5M
+      keyFields: [productId]  # campos del query object que forman la cache key
+```
+
+Genera: `@Cacheable(cacheNames = "getProductById", key = "#query.productId")`
+
+Con múltiples campos: `keyFields: [categoryId, page, size]`
+
+Genera: `key = "#query.categoryId + ':' + #query.page + ':' + #query.size"`
+
+### Sintaxis con `cacheWhen`
+
+```yaml
+    cacheable:
+      ttl: PT3M
+      keyFields: [categoryId, page, size]
+      cacheWhen: [categoryId]  # la cache solo aplica si estos campos son no-nulos
+```
+
+Genera: `condition = "#query.categoryId != null"`
+
+Con múltiples campos: `cacheWhen: [f1, f2]` →
+`condition = "#query.f1 != null and #query.f2 != null"`
+
+### Propiedades del bloque `cacheable`
+
+| Propiedad | Tipo | Requerida | Descripción |
+|---|---|---|---|
+| `ttl` | string ISO-8601 | ✅ Sí | Tiempo de vida de la entrada en caché (e.g. `PT5M`, `PT1H`, `P1D`) |
+| `keyFields` | string[] | ❌ No | Nombres de campos del query object que forman la cache key. Si se omite, Spring usa el método completo como key |
+| `cacheWhen` | string[] | ❌ No | Campos que deben ser no-nulos para que la caché aplique. Se traduce a `condition = "#query.f != null and ..."` |
+
+Todos los nombres en `keyFields` y `cacheWhen` deben estar en camelCase y coincidir
+exactamente con nombres de campos declarados en `input[]` del use case.
+
+### Candidatos ideales para `cacheable`
+
+| Patrón | Ejemplo | TTL recomendado |
+|---|---|---|
+| Detalle de entidad por ID | `GetProductById` | `PT5M` – `PT30M` |
+| Árbol de categorías | `GetCategoryTree` | `PT1H` – `PT12H` |
+| Lookup / catálogo de referencia | `GetCountryList` | `PT1H` – `P1D` |
+| Búsqueda parametrizada | `SearchProductsByCategory` | `PT1M` – `PT5M` |
+
+**No es adecuado para:** queries que devuelven estado mutable frecuente (inventario
+en tiempo real, estado de pedido activo) o queries con datos sensibles de usuario.
+
+### Artefactos generados
+
+**Query handler** — anotación `@Cacheable`:
+```java
+@Cacheable(
+    cacheNames = "searchProductsByCategory",
+    key = "#query.categoryId + ':' + #query.page + ':' + #query.size",
+    condition = "#query.categoryId != null"
+)
+public ProductPage handle(SearchProductsByCategoryQuery query) { ... }
+```
+
+**`CacheConfig.java`** (shared, uno por proyecto) — `RedisCacheManager` con TTL por query:
+```java
+@Configuration
+@EnableCaching
+public class CacheConfig {
+    @Bean
+    public RedisCacheManager cacheManager(RedisConnectionFactory factory) {
+        RedisCacheConfiguration defaults = RedisCacheConfiguration.defaultCacheConfig()
+            .disableCachingNullValues()
+            .serializeValuesWith(SerializationPair.fromSerializer(
+                new GenericJackson2JsonRedisSerializer()));
+
+        Map<String, RedisCacheConfiguration> caches = new HashMap<>();
+        // derived_from: useCases[UC-CAT-010].cacheable
+        caches.put("getProductById", defaults.entryTtl(Duration.parse("PT5M")));
+        // ...
+        return RedisCacheManager.builder(factory)
+            .cacheDefaults(defaults)
+            .withInitialCacheConfigurations(caches)
+            .build();
+    }
+}
+```
+
+**`build.gradle`** — dependencia añadida automáticamente cuando algún query tiene `cacheable`:
+```groovy
+implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+```
+
+**`redis.yaml`** generado por entorno (compartido con `idempotency`).
+
+### Restricciones
+
+- Solo válido en `type: query`.
+- `ttl` es obligatorio y debe ser una duración ISO-8601 válida.
+- `keyFields` y `cacheWhen` deben contener únicamente nombres en camelCase.
+- Requiere `cacheProvider: redis` (o `valkey`) en `dsl-springboot.json`.
+  El generador detiene el build con un mensaje de error si falta.
+- Los nombres de caché son derivados automáticamente del `name` del use case
+  (camelCase). No son configurables en el YAML.
+
+---
+
+## 10. Bloque `bulk`
 
 Envuelve un use case existente para procesarlo en batch sobre una lista de ítems.
 
@@ -1076,7 +1208,7 @@ public class BulkActivateProductsCommandHandler
 
 ---
 
-## 10. Bloque `async`
+## 11. Bloque `async`
 
 Convierte un command en una operación asíncrona con seguimiento de estado (job tracking)
 o disparo y olvido (fire and forget).
@@ -1180,7 +1312,7 @@ public void handle(BulkImportProductsCommand command) {
 
 ---
 
-## 11. Propiedad `rules`
+## 12. Propiedad `rules`
 
 Lista las reglas de dominio que se evalúan durante la ejecución del use case. Cada
 valor es un `id` de una regla declarada en `aggregates[].domainRules`.
@@ -1204,7 +1336,7 @@ not found in errors[].
 
 ---
 
-## 12. `notFoundError` y `lookups`
+## 13. `notFoundError` y `lookups`
 
 ### `notFoundError` (simple)
 
@@ -1275,7 +1407,7 @@ Order order = orderRepository.findById(UUID.fromString(command.orderId()))
 
 ---
 
-## 13. `fkValidations`
+## 14. `fkValidations`
 
 Valida la existencia de entidades referenciadas por el use case en otros repositorios
 (foreign key a nivel de dominio).
@@ -1320,7 +1452,7 @@ if (!suppliersServicePort.existsSupplier(UUID.fromString(command.supplierId())))
 
 ---
 
-## 14. Propiedad `validations`
+## 15. Propiedad `validations`
 
 Valida condiciones cruzadas entre campos del input que no pueden expresarse con anotaciones
 Jakarta Validation estándar.
@@ -1366,7 +1498,7 @@ if (!(command.startDate().isBefore(command.endDate()))) {
 
 ---
 
-## 15. Propiedad `emits`
+## 16. Propiedad `emits`
 
 Declara los eventos de dominio que publica el use case. El generador añade la lógica
 de publicación al final del handler.
@@ -1393,7 +1525,7 @@ directamente desde el handler (sin pasar por el agregado). Se debe evitar la dup
 
 ---
 
-## 16. Multi-agregado: `aggregates` + `steps`
+## 17. Multi-agregado: `aggregates` + `steps`
 
 Para use cases que orquestan la mutación de múltiples agregados dentro del mismo BC.
 
@@ -1482,7 +1614,7 @@ public void handle(ConfirmOrderAndPaymentCommand command) {
 
 ---
 
-## 17. Propiedad `implementation`
+## 18. Propiedad `implementation`
 
 Controla si el generador produce el método `execute()` completo o solo un scaffold.
 
@@ -1531,7 +1663,7 @@ public ProductDetail handle(GetProductByIdQuery query) {
 
 ---
 
-## 18. Ejemplos completos
+## 19. Ejemplos completos
 
 ### Ejemplo 1: Command completo con todas las capacidades
 

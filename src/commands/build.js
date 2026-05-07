@@ -302,22 +302,28 @@ async function buildCommand(options = {}) {
     const requestIdempotencyPresent = allBcYamls.some((bc) =>
       ((bc && bc.useCases) || []).some((uc) => uc && uc.idempotency)
     );
+    // [G21] Query caching also requires a cache provider (shares Redis with idempotency).
+    const cacheableQueriesPresent = allBcYamls.some((bc) =>
+      ((bc && bc.useCases) || []).some((uc) => uc && uc.cacheable)
+    );
+    const cacheNeeded = requestIdempotencyPresent || cacheableQueriesPresent;
     let cacheProviderMeta = null;
-    if (requestIdempotencyPresent && resolvedConfig.cacheProvider) {
+    if (cacheNeeded && resolvedConfig.cacheProvider) {
       const catalogParams = await loadParameters();
       const cacheProviders = catalogParams.cacheProviders || [];
       cacheProviderMeta = cacheProviders.find((c) => c.id === resolvedConfig.cacheProvider) || null;
     }
-    if (requestIdempotencyPresent && !resolvedConfig.cacheProvider) {
+    if (cacheNeeded && !resolvedConfig.cacheProvider) {
+      const cacheFeature = requestIdempotencyPresent ? 'idempotency' : 'cacheable queries';
       logger.error(
-        'One or more use cases declare idempotency but "cacheProvider" is not set in dsl-springboot.json. ' +
+        `One or more use cases declare ${cacheFeature} but "cacheProvider" is not set in dsl-springboot.json. ` +
         'Add "cacheProvider": "redis" (or "valkey") to your dsl-springboot.json and re-run.'
       );
       process.exit(1);
     }
     const dockerSpinner = ora('Generating Docker Compose and Dockerfile…').start();
     try {
-      await generateDockerFiles(resolvedConfig, outputDir, { requestIdempotencyEnabled: requestIdempotencyPresent, cacheProviderMeta });
+      await generateDockerFiles(resolvedConfig, outputDir, { requestIdempotencyEnabled: cacheNeeded, cacheProviderMeta });
       dockerSpinner.succeed('Docker Compose and Dockerfile generated');
     } catch (err) {
       dockerSpinner.fail(`Docker generation failed: ${err.message}`);
