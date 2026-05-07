@@ -142,6 +142,18 @@ async function promptConfig(systemName, system) {
     });
   }
 
+  const cacheChoices = [
+    ...( params.cacheProviders || []).map((c) => ({ name: c.label, value: c.id })),
+    { name: 'None', value: null },
+  ];
+  questions.push({
+    type: 'list',
+    name: 'cacheProvider',
+    message: 'Cache provider (required for request idempotency — select None if unused):',
+    choices: cacheChoices,
+    default: null,
+  });
+
   const answers = await inquirer.prompt(questions);
 
   return {
@@ -151,6 +163,7 @@ async function promptConfig(systemName, system) {
     database: answers.database,
     broker: needsBroker ? (answers.broker || null) : null,
     authProvider: needsAuthServer ? (answers.authProvider || null) : null,
+    cacheProvider: answers.cacheProvider || null,
     systemName,
   };
 }
@@ -286,9 +299,25 @@ async function buildCommand(options = {}) {
     }
 
     // ── 5. Generate Docker Compose and Dockerfile ────────────────────────────
+    const requestIdempotencyPresent = allBcYamls.some((bc) =>
+      ((bc && bc.useCases) || []).some((uc) => uc && uc.idempotency)
+    );
+    let cacheProviderMeta = null;
+    if (requestIdempotencyPresent && resolvedConfig.cacheProvider) {
+      const catalogParams = await loadParameters();
+      const cacheProviders = catalogParams.cacheProviders || [];
+      cacheProviderMeta = cacheProviders.find((c) => c.id === resolvedConfig.cacheProvider) || null;
+    }
+    if (requestIdempotencyPresent && !resolvedConfig.cacheProvider) {
+      logger.error(
+        'One or more use cases declare idempotency but "cacheProvider" is not set in dsl-springboot.json. ' +
+        'Add "cacheProvider": "redis" (or "valkey") to your dsl-springboot.json and re-run.'
+      );
+      process.exit(1);
+    }
     const dockerSpinner = ora('Generating Docker Compose and Dockerfile…').start();
     try {
-      await generateDockerFiles(resolvedConfig, outputDir);
+      await generateDockerFiles(resolvedConfig, outputDir, { requestIdempotencyEnabled: requestIdempotencyPresent, cacheProviderMeta });
       dockerSpinner.succeed('Docker Compose and Dockerfile generated');
     } catch (err) {
       dockerSpinner.fail(`Docker generation failed: ${err.message}`);

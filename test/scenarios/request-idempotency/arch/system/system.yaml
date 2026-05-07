@@ -1,0 +1,25 @@
+# ─── Test scenario: request-idempotency ───────────────────────────────────────
+# Covers:
+#   - useCases[*].idempotency.storage = cache → Redis backend
+#   - RedisIdempotencyStore.java generated (not JdbcIdempotencyStore)
+#   - IdempotencyStore.java has 3-state protocol (State enum, FindResult)
+#   - IdempotencyFilter.java uses claim/complete/release pattern
+#   - build.gradle includes spring-boot-starter-data-redis
+#   - parameters/{env}/redis.yaml generated for all profiles
+#   - docker-compose.yaml includes cache (redis) service
+#   - NO V3__request_idempotency.sql (Redis needs no Flyway migration)
+# ──────────────────────────────────────────────────────────────────────────────
+
+system:
+  name: test-idempotency-system
+  description: Minimal system to test HTTP request idempotency with Redis.
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Handles order placement with idempotent commands.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []

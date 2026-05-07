@@ -1,0 +1,7 @@
+cache:
+  image: <%= cacheImage %>
+  container_name: <%= systemName %>-cache
+  ports:
+    - "<%= cachePort %>:<%= cachePort %>"
+  networks:
+    - <%= systemName %>-network

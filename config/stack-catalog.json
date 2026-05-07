@@ -80,6 +80,22 @@
     "kafkaZookeeper": "confluentinc/cp-zookeeper:7.6.0",
     "kafkaUi": "provectuslabs/kafka-ui:latest",
     "rabbitmq": "rabbitmq:4-management",
-    "keycloak": "quay.io/keycloak/keycloak:26.3.1"
-  }
+    "keycloak": "quay.io/keycloak/keycloak:26.3.1",
+    "redis": "redis:7-alpine",
+    "valkey": "valkey/valkey:8-alpine"
+  },
+  "cacheProviders": [
+    {
+      "id": "redis",
+      "label": "Redis",
+      "springDependency": "implementation 'org.springframework.boot:spring-boot-starter-data-redis'",
+      "port": 6379
+    },
+    {
+      "id": "valkey",
+      "label": "Valkey",
+      "springDependency": "implementation 'org.springframework.boot:spring-boot-starter-data-redis'",
+      "port": 6379
+    }
+  ]
 }

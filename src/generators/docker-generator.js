@@ -14,13 +14,21 @@ const DOCKER_TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates', 'base
  *
  * @param {object} resolvedConfig - config from dsl-springboot.json (database, broker, javaVersion, systemName)
  * @param {object} dockerImages   - dockerImages section from stack-catalog.json
+ * @param {object} [opts]         - optional flags: requestIdempotencyEnabled, cacheProviderMeta
  * @returns {object}
  */
-function buildDockerContext(resolvedConfig, dockerImages) {
+function buildDockerContext(resolvedConfig, dockerImages, opts = {}) {
   const systemName = resolvedConfig.systemName;
   const databaseType = resolvedConfig.database || 'postgresql';
   // Database name derived from systemName: replace hyphens/spaces with underscores
   const databaseName = systemName.replace(/[-\s]/g, '_').toLowerCase();
+
+  const cacheProviderMeta = opts.cacheProviderMeta || null;
+  const cachePort = cacheProviderMeta ? cacheProviderMeta.port : 6379;
+  const cacheProviderId = resolvedConfig.cacheProvider || null;
+  const cacheImage = cacheProviderId && dockerImages[cacheProviderId]
+    ? dockerImages[cacheProviderId]
+    : dockerImages.redis;
 
   return {
     systemName,
@@ -31,6 +39,9 @@ function buildDockerContext(resolvedConfig, dockerImages) {
     javaVersion: resolvedConfig.javaVersion,
     broker: resolvedConfig.broker || null,
     authProvider: resolvedConfig.authProvider || null,
+    requestIdempotencyEnabled: !!opts.requestIdempotencyEnabled,
+    cacheImage,
+    cachePort,
     // Docker image versions (from catalog)
     postgresImage: dockerImages.postgres,
     mysqlImage: dockerImages.mysql,
@@ -52,8 +63,9 @@ function buildDockerContext(resolvedConfig, dockerImages) {
  *
  * @param {object} resolvedConfig
  * @param {string} outputDir
+ * @param {object} [opts]   - optional: { requestIdempotencyEnabled, cacheProviderMeta }
  */
-async function generateDockerFiles(resolvedConfig, outputDir) {
+async function generateDockerFiles(resolvedConfig, outputDir, opts = {}) {
   const params = await loadParameters();
   const dockerImages = params.dockerImages;
 
@@ -61,7 +73,7 @@ async function generateDockerFiles(resolvedConfig, outputDir) {
     throw new Error('dockerImages section missing from stack-catalog.json');
   }
 
-  const ctx = buildDockerContext(resolvedConfig, dockerImages);
+  const ctx = buildDockerContext(resolvedConfig, dockerImages, opts);
 
   // ── Dockerfile (always) ──────────────────────────────────────────────────
   const dockerfileSrc = path.join(DOCKER_TEMPLATES_DIR, 'Dockerfile.ejs');
@@ -99,6 +111,14 @@ async function generateDockerFiles(resolvedConfig, outputDir) {
     const keycloakContent = await renderTemplate(keycloakSrc, ctx);
     const keycloakServices = yaml.load(keycloakContent);
     Object.assign(composeObj.services, keycloakServices);
+  }
+
+  // 2c. Merge Redis/Valkey service if request idempotency is enabled
+  if (ctx.requestIdempotencyEnabled) {
+    const redisSrc = path.join(DOCKER_TEMPLATES_DIR, 'redis-services.yaml.ejs');
+    const redisContent = await renderTemplate(redisSrc, ctx);
+    const redisServices = yaml.load(redisContent);
+    Object.assign(composeObj.services, redisServices);
   }
 
   // 3. Dump merged YAML and write to disk

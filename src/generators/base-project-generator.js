@@ -255,6 +255,12 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   const brokerDependency     = brokerMeta ? brokerMeta.gradleDependency : null;
   const brokerTestDependency = brokerMeta ? brokerMeta.testDependency    : null;
 
+  const cacheProviderId  = config.cacheProvider || null;
+  const cacheProviders   = params.cacheProviders || [];
+  const cacheProviderMeta = cacheProviderId ? cacheProviders.find((c) => c.id === cacheProviderId) || null : null;
+  const cacheSpringDependency = cacheProviderMeta ? cacheProviderMeta.springDependency : null;
+  const cachePort = cacheProviderMeta ? cacheProviderMeta.port : 6379;
+
   const hasMessaging        = !!brokerId;
   const httpIntegrations    = buildHttpIntegrations(system);
   const hasHttpIntegrations = httpIntegrations.length > 0;
@@ -265,15 +271,16 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   const outboxEnabled       = !!reliability.outbox;
   const idempotencyEnabled  = !!reliability.consumerIdempotency;
   const persistentProjectionsPresent = hasAnyPersistentProjection(allBcYamls);
-  // [G2] Request idempotency requires Flyway to provision idempotency_request.
+  // [G2] Request idempotency — uses Redis (no Flyway migration needed).
   const requestIdempotencyPresent = (allBcYamls || []).some((bc) =>
     (bc && bc.useCases || []).some((uc) => uc && uc.idempotency)
   );
+  const requestIdempotencyEnabled = requestIdempotencyPresent;
   // [G10] Async/job-tracking requires Flyway to provision async_job.
   const asyncJobPresent = (allBcYamls || []).some((bc) =>
     (bc && bc.useCases || []).some((uc) => uc && uc.async && uc.async.mode === 'jobTracking')
   );
-  const flywayEnabled       = outboxEnabled || idempotencyEnabled || persistentProjectionsPresent || requestIdempotencyPresent || asyncJobPresent;
+  const flywayEnabled       = outboxEnabled || idempotencyEnabled || persistentProjectionsPresent || asyncJobPresent;
 
   // ── Resilience + OAuth2 flags (Phase 5) ──────────────────────────────
   // derived_from: system.yaml#/integrations[*]/resilience + .../auth
@@ -311,7 +318,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'gradle', 'build.gradle.ejs'),
     path.join(outputDir, 'build.gradle'),
-    { groupId, artifactId, javaVersion, springBootVersion, databaseDependency, brokerDependency, brokerTestDependency, flywayEnabled, databaseId: dbId, resilienceEnabled, oauth2ClientEnabled }
+    { groupId, artifactId, javaVersion, springBootVersion, databaseDependency, brokerDependency, brokerTestDependency, flywayEnabled, databaseId: dbId, resilienceEnabled, oauth2ClientEnabled, requestIdempotencyEnabled, cacheSpringDependency }
   );
 
   await renderAndWrite(
@@ -429,6 +436,15 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
         path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'auth-server.yaml.ejs'),
         path.join(paramDir, 'auth-server.yaml'),
         { env, authProviderMeta }
+      );
+    }
+
+    // redis.yaml (only when request idempotency is enabled)
+    if (requestIdempotencyEnabled) {
+      await renderAndWrite(
+        path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'redis.yaml.ejs'),
+        path.join(paramDir, 'redis.yaml'),
+        { cachePort }
       );
     }
 

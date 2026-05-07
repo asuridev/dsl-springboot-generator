@@ -1,0 +1,4 @@
+{
+  "description": "Request idempotency with Redis backend (storage: cache). Verifies RedisIdempotencyStore, 3-state IdempotencyStore interface, IdempotencyFilter, redis.yaml per profile, Redis service in docker-compose, and spring-boot-starter-data-redis dependency in build.gradle.",
+  "expectFailure": false
+}

@@ -6,12 +6,11 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.HexFormat;
-import java.util.Optional;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.method.HandlerMethod;
@@ -22,17 +21,15 @@ import org.springframework.web.util.ContentCachingResponseWrapper;
 
 /**
  * Servlet filter that gives {@link Idempotent}-annotated controller methods
- * exactly-once semantics over the duration declared by the annotation.
+ * exactly-once semantics using a three-state protocol:
  *
- * On a request whose target handler is annotated:
- *   1. The configured header is read; absence ⇒ short-circuit 400.
- *   2. {@link IdempotencyStore#find} is consulted — a hit replays the stored
- *      status+body and skips handler invocation.
- *   3. On miss the handler runs through a {@link ContentCachingResponseWrapper};
- *      successful (2xx) responses are persisted via
- *      {@link IdempotencyStore#saveIfAbsent}.
+ *   ABSENT  + claim() wins  → execute handler → complete() on 2xx / release() otherwise
+ *   ABSENT  + claim() loses → 409 Conflict (concurrent duplicate)
+ *   PENDING                 → 409 Conflict (in-flight duplicate)
+ *   COMPLETE                → replay stored response
  *
- * Failure responses (4xx/5xx) are not cached — clients may retry.
+ * The filter uses {@link ContentCachingResponseWrapper} so it can inspect and
+ * store the response body after the handler executes.
  *
  * derived_from: useCases[*].idempotency
  */
@@ -64,12 +61,31 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             return;
         }
 
-        Optional<IdempotencyStore.StoredResponse> cached = store.find(key);
-        if (cached.isPresent()) {
-            writeCached(response, cached.get());
+        Duration ttl = Duration.parse(annotation.ttl());
+
+        // ── State probe ──────────────────────────────────────────────────────
+        IdempotencyStore.FindResult result = store.find(key);
+
+        if (result.state() == IdempotencyStore.State.COMPLETE) {
+            writeCached(response, result.response());
             return;
         }
 
+        if (result.state() == IdempotencyStore.State.PENDING) {
+            response.sendError(HttpStatus.CONFLICT.value(),
+                "A request with the same idempotency key is currently being processed.");
+            return;
+        }
+
+        // ABSENT — attempt to claim the slot atomically
+        if (!store.claim(key, ttl)) {
+            // Another thread/node claimed it in the race window
+            response.sendError(HttpStatus.CONFLICT.value(),
+                "A request with the same idempotency key is currently being processed.");
+            return;
+        }
+
+        // We hold the PENDING slot — execute the handler
         ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
         ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
 
@@ -81,9 +97,14 @@ public class IdempotencyFilter extends OncePerRequestFilter {
                 byte[] body = responseWrapper.getContentAsByteArray();
                 String contentType = responseWrapper.getContentType();
                 String hash = sha256(requestWrapper.getContentAsByteArray());
-                Duration ttl = Duration.parse(annotation.ttl());
-                store.saveIfAbsent(key, hash, new IdempotencyStore.StoredResponse(status, body, contentType), ttl);
+                store.complete(key, hash, new IdempotencyStore.StoredResponse(status, body, contentType), ttl);
+            } else {
+                // Non-2xx: release so clients may retry with the same key
+                store.release(key);
             }
+        } catch (Exception ex) {
+            store.release(key);
+            throw ex;
         } finally {
             responseWrapper.copyBodyToResponse();
         }

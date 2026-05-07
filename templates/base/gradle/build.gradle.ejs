@@ -65,6 +65,9 @@ dependencies {
 <% } else if (databaseId === 'mysql') { %>    implementation 'org.flywaydb:flyway-mysql'
 <% } %>
 <% } %>
+<% if (requestIdempotencyEnabled && cacheSpringDependency) { %>
+    <%- cacheSpringDependency %>
+<% } %>
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
 <% if (brokerTestDependency) { %>

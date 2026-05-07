@@ -826,7 +826,9 @@ operación dos veces.
 **Problema que resuelve:** en redes inestables o con proxies que reintenten automáticamente,
 el mismo request HTTP puede llegar dos veces. Sin idempotencia, se crearían dos órdenes,
 dos pagos, etc. Con `idempotency`, el generador produce un filtro que detecta requests
-ya procesados y devuelve la misma respuesta.
+ya procesados y devuelve la misma respuesta. El protocolo de tres estados elimina además
+la condición de carrera entre retries concurrentes: un segundo request idéntico en vuelo
+recibe `409 Conflict` en lugar de ejecutarse dos veces.
 
 ```yaml
 - id: UC-ORD-001
@@ -835,7 +837,7 @@ ya procesados y devuelve la misma respuesta.
   idempotency:
     header: Idempotency-Key      # header HTTP que lleva la clave
     ttl: PT24H                   # ISO-8601 duration: durante cuánto tiempo se guarda
-    storage: database            # database o redis
+    storage: cache               # único valor válido: cache
 ```
 
 ### Propiedades de `idempotency`
@@ -844,26 +846,57 @@ ya procesados y devuelve la misma respuesta.
 |---|---|---|---|
 | `header` | string | ✅ | Nombre del header HTTP (e.g. `Idempotency-Key`). |
 | `ttl` | ISO-8601 duration | ✅ | Tiempo de retención de la clave. Ejemplos: `PT1H`, `P1D`, `PT24H`. |
-| `storage` | `database` \| `redis` | ✅ | Dónde almacenar las claves procesadas. |
+| `storage` | `cache` | ✅ | Siempre `cache`. El proveedor concreto (Redis o Valkey) se configura en `dsl-springboot.json`. Ver nota de migración abajo. |
 
 > **Restricción:** solo válido en use cases de `type: command`.
 
-### Código Java generado
+> **`storage` — valores válidos:**
+> Solo se acepta `storage: cache`. Los valores `database` y `redis` han sido eliminados
+> y provocan un error de build con indicación de migración:
+> ```
+> [bc-yaml-reader] idempotency.storage "database" ya no es soportado.
+> Usa 'cache'. El provider concreto se configura en dsl-springboot.json con cacheProvider.
+> ```
 
-**`PlaceOrderCommandHandler.java`** (fragmento):
-```java
-@ApplicationComponent
-public class PlaceOrderCommandHandler implements CommandHandler<PlaceOrderCommand> {
+### Configuración del proveedor de caché
 
-    @Override
-    @Transactional
-    @LogExceptions
-    public void handle(PlaceOrderCommand command) {
-        // TODO: implement business logic — ver orders-flows.md
-        throw new UnsupportedOperationException("Not implemented yet");
-    }
+El proveedor concreto **no se declara en el YAML del BC**, sino en `dsl-springboot.json`
+mediante la propiedad `cacheProvider`:
+
+```json
+{
+  "groupId": "com.example",
+  "javaVersion": "21",
+  "springBootVersion": "3.4.5",
+  "database": "postgresql",
+  "broker": "none",
+  "authProvider": "none",
+  "cacheProvider": "redis"
 }
 ```
+
+| Valor | Descripción |
+|---|---|
+| `redis` | Redis 7+. Usa `spring-boot-starter-data-redis`. |
+| `valkey` | Valkey 8+. Usa la misma dependencia Spring (`spring-boot-starter-data-redis`). |
+
+Si algún use case declara `idempotency` pero `cacheProvider` no está configurado en
+`dsl-springboot.json`, la build falla con un mensaje claro.
+
+### Protocolo de tres estados
+
+El generador produce un filtro (`IdempotencyFilter`) con el siguiente protocolo:
+
+| Estado al consultar | Acción |
+|---|---|
+| `ABSENT` + `claim()` gana | Ejecuta el handler; en éxito (2xx) → `complete()`; en error → `release()` |
+| `ABSENT` + `claim()` pierde | `409 Conflict` (otro nodo/hilo ganó la carrera) |
+| `PENDING` | `409 Conflict` (mismo request en vuelo) |
+| `COMPLETE` | Devuelve la respuesta almacenada (replay) |
+
+Esto garantiza exactamente-una-ejecución incluso bajo retries concurrentes.
+
+### Código Java generado
 
 **Controller** (anotación generada):
 ```java
@@ -872,22 +905,98 @@ public class PlaceOrderCommandHandler implements CommandHandler<PlaceOrderComman
 public void placeOrder(...) { ... }
 ```
 
-> **Nota:** el atributo `storage` del YAML es reconocido por el lector pero actualmente no se traslada al atributo `storage` de la anotación generada. La anotación `@Idempotent` solo incluye `header` y `ttl`.
+**`IdempotencyStore.java`** — interfaz generada en `shared/infrastructure/web/`:
+```java
+public interface IdempotencyStore {
 
-**Tabla de base de datos generada** (Flyway migration `V3__request_idempotency.sql`):
-```sql
-CREATE TABLE IF NOT EXISTS idempotency_request (
-    key                   VARCHAR(255)  NOT NULL PRIMARY KEY,
-    request_hash          VARCHAR(128)  NOT NULL,
-    response_status       INTEGER       NOT NULL,
-    response_body         BYTEA,
-    response_content_type VARCHAR(128),
-    expires_at            TIMESTAMP     NOT NULL
-);
+    enum State { ABSENT, PENDING, COMPLETE }
 
-CREATE INDEX IF NOT EXISTS idx_idempotency_request_expires_at
-    ON idempotency_request (expires_at);
+    record FindResult(State state, StoredResponse response) {}
+    record StoredResponse(int status, byte[] body, String contentType) {}
+
+    FindResult find(String key);
+    boolean claim(String key, Duration ttl);
+    void complete(String key, String hash, StoredResponse response, Duration ttl);
+    void release(String key);
+}
 ```
+
+**`RedisIdempotencyStore.java`** — adaptador generado en `shared/infrastructure/web/`:
+```java
+@Component
+public class RedisIdempotencyStore implements IdempotencyStore {
+
+    private static final String PREFIX = "idempotency:";
+
+    private final StringRedisTemplate redis;
+    private final ObjectMapper objectMapper;
+
+    // claim() usa SET NX — atomic: gana quien llega primero
+    @Override
+    public boolean claim(String key, Duration ttl) {
+        return Boolean.TRUE.equals(
+            redis.opsForValue().setIfAbsent(PREFIX + key,
+                "{\"state\":\"PENDING\"}", ttl.getSeconds(), TimeUnit.SECONDS));
+    }
+
+    // complete() sobreescribe con la respuesta final serializada
+    @Override
+    public void complete(String key, String hash, StoredResponse response, Duration ttl) { ... }
+
+    // release() elimina la clave para que el cliente pueda reintentar
+    @Override
+    public void release(String key) {
+        redis.delete(PREFIX + key);
+    }
+}
+```
+
+**Parámetros Redis generados** — `parameters/{profile}/redis.yaml`:
+```yaml
+# local
+spring:
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+# develop / test
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+
+# production
+spring:
+  data:
+    redis:
+      host: ${REDIS_HOST}       # obligatorio en producción
+      password: ${REDIS_PASSWORD}
+      ssl:
+        enabled: ${REDIS_SSL_ENABLED:true}
+```
+
+**Docker Compose** — servicio Redis añadido automáticamente cuando existe al menos
+un use case con `idempotency`:
+```yaml
+cache:
+  image: redis:7-alpine         # o valkey/valkey:8-alpine si cacheProvider: valkey
+  container_name: my-system-cache
+  ports:
+    - "6379:6379"
+  networks:
+    - my-system-network
+```
+
+**`build.gradle`** — dependencia añadida automáticamente:
+```groovy
+implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+```
+
+> **Sin migración Flyway:** la idempotencia basada en caché no genera ninguna tabla
+> SQL ni migración Flyway. Todo el estado se almacena en Redis/Valkey con TTL nativo.
 
 ---
 

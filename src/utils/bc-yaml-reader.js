@@ -162,7 +162,7 @@ function validate(doc, opts = {}) {
   const ALLOWED_UC_OWNERSHIP_KEYS = new Set(['field', 'claim', 'allowRoleBypass']);
   // [G2] idempotency whitelists
   const ALLOWED_UC_IDEMPOTENCY_KEYS = new Set(['header', 'ttl', 'storage']);
-  const ALLOWED_UC_IDEMPOTENCY_STORAGES = new Set(['database', 'redis']);
+  const ALLOWED_UC_IDEMPOTENCY_STORAGES = new Set(['cache']);
   // [G9] bulk whitelists
   const ALLOWED_UC_BULK_KEYS = new Set(['itemType', 'maxItems', 'onItemError']);
   const ALLOWED_UC_BULK_ON_ITEM_ERROR = new Set(['continue', 'abort']);
@@ -435,7 +435,11 @@ function validate(doc, opts = {}) {
         fail(`Use case "${uc.id}" idempotency.ttl is required and must be an ISO-8601 duration (e.g. "PT24H", "P1D").`);
       }
       if (!idem.storage || !ALLOWED_UC_IDEMPOTENCY_STORAGES.has(idem.storage)) {
-        fail(`Use case "${uc.id}" idempotency.storage is required. Allowed: ${[...ALLOWED_UC_IDEMPOTENCY_STORAGES].join(', ')}.`);
+        const deprecated = idem.storage === 'database' || idem.storage === 'redis';
+        const hint = deprecated
+          ? `"${idem.storage}" ya no es soportado. Usa 'cache'. El provider concreto se configura en dsl-springboot.json con cacheProvider.`
+          : `Allowed: ${[...ALLOWED_UC_IDEMPOTENCY_STORAGES].join(', ')}.`;
+        fail(`Use case "${uc.id}" idempotency.storage inválido — ${hint}`);
       }
       if (uc.type !== 'command') {
         fail(`Use case "${uc.id}" declares idempotency but type is "${uc.type}". Idempotency is only supported on commands.`);

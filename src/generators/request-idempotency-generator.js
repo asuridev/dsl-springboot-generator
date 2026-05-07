@@ -13,12 +13,9 @@ const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
  * a top-level `idempotency` block. Emits:
  *
  *   - shared/infrastructure/web/Idempotent.java                  (annotation)
- *   - shared/infrastructure/web/IdempotencyStore.java            (port)
- *   - shared/infrastructure/web/JdbcIdempotencyStore.java        (DB adapter)
- *   - shared/infrastructure/web/IdempotencyRequestJpa.java
- *   - shared/infrastructure/web/IdempotencyRequestJpaRepository.java
+ *   - shared/infrastructure/web/IdempotencyStore.java            (port — 3-state)
+ *   - shared/infrastructure/web/RedisIdempotencyStore.java       (Redis/Valkey adapter)
  *   - shared/infrastructure/web/IdempotencyFilter.java
- *   - src/main/resources/db/migration/V3__request_idempotency.sql
  *
  * derived_from: useCases[*].idempotency
  *
@@ -43,9 +40,7 @@ async function generateRequestIdempotencyArtifacts(bcYamls, config, outputDir) {
   const sharedFiles = [
     'Idempotent.java',
     'IdempotencyStore.java',
-    'JdbcIdempotencyStore.java',
-    'IdempotencyRequestJpa.java',
-    'IdempotencyRequestJpaRepository.java',
+    'RedisIdempotencyStore.java',
     'IdempotencyFilter.java',
   ];
   for (const file of sharedFiles) {
@@ -55,13 +50,6 @@ async function generateRequestIdempotencyArtifacts(bcYamls, config, outputDir) {
       { packageName }
     );
   }
-
-  const migrationDir = path.join(outputDir, 'src', 'main', 'resources', 'db', 'migration');
-  await renderAndWrite(
-    path.join(TEMPLATES_DIR, 'base', 'resources', 'db', 'migration', 'V3__request_idempotency.sql.ejs'),
-    path.join(migrationDir, 'V3__request_idempotency.sql'),
-    {}
-  );
 
   return { enabled: true, useCaseIds };
 }
