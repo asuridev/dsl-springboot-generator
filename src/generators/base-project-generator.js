@@ -1,6 +1,8 @@
 'use strict';
 
 const path = require('path');
+const fs = require('fs-extra');
+const yaml = require('js-yaml');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toCamelCase, toPackagePath, getApplicationClassName } = require('../utils/naming');
 const { loadParameters } = require('../utils/config-manager');
@@ -208,6 +210,57 @@ function buildInfrastructureErrorMap(packageName, allBcYamls) {
     }
   }
   return [...byTrigger.values()];
+}
+
+/**
+ * Collects Ant-style URL paths for use cases declared as public: true across all BCs.
+ * These paths are added to the .permitAll() block in SecurityConfig — no JWT is required.
+ *
+ * Converts OpenAPI path parameters ({id}) to Spring Security Ant wildcards (*).
+ * Prepends the server base URL from the OpenAPI servers[0].url (default: /api/v1).
+ *
+ * @param {Array}  allBcYamls — parsed bc.yaml documents
+ * @param {string} archDir    — absolute path to the arch/ directory
+ * @returns {Promise<string[]>} deduplicated Ant patterns (e.g. ["/api/v1/products/*"])
+ */
+async function collectPublicEndpointPaths(allBcYamls, archDir) {
+  const result = new Set();
+
+  for (const bcYaml of (allBcYamls || [])) {
+    if (!bcYaml) continue;
+
+    const publicUcs = (bcYaml.useCases || []).filter(
+      (uc) => uc && uc.public === true && uc.trigger && uc.trigger.kind === 'http' && uc.trigger.operationId
+    );
+    if (publicUcs.length === 0) continue;
+
+    // Load the OpenAPI document for this BC to resolve operationId → URL path
+    const openApiPath = path.join(archDir, bcYaml.bc, `${bcYaml.bc}-open-api.yaml`);
+    if (!(await fs.pathExists(openApiPath))) continue;
+
+    const rawDoc = yaml.load(await fs.readFile(openApiPath, 'utf8'));
+    const serverBase = rawDoc.servers?.[0]?.url || '/api/v1';
+
+    // Build operationId → fullPath map
+    const opPathMap = new Map();
+    for (const [urlPath, pathItem] of Object.entries(rawDoc.paths || {})) {
+      for (const [method, operation] of Object.entries(pathItem)) {
+        if (method === 'parameters') continue;
+        if (typeof operation !== 'object' || !operation.operationId) continue;
+        opPathMap.set(operation.operationId, urlPath);
+      }
+    }
+
+    for (const uc of publicUcs) {
+      const urlPath = opPathMap.get(uc.trigger.operationId);
+      if (!urlPath) continue;
+      // Convert {pathVar} segments to Ant wildcard *
+      const antPath = urlPath.replace(/\{[^}]+\}/g, '*');
+      result.add(serverBase + antPath);
+    }
+  }
+
+  return [...result];
 }
 
 /**
@@ -640,10 +693,13 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   const securityConfigDir = path.join(
     javaMainDir, 'shared', 'infrastructure', 'configurations', 'securityConfig'
   );
+  const publicEndpointPaths = authServerEnabled
+    ? await collectPublicEndpointPaths(allBcYamls, path.join(outputDir, 'arch'))
+    : [];
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'shared', 'configurations', 'securityConfig', 'SecurityConfig.java.ejs'),
     path.join(securityConfigDir, 'SecurityConfig.java'),
-    { packageName, authServerEnabled, authProviderMeta }
+    { packageName, authServerEnabled, authProviderMeta, publicEndpointPaths }
   );
 
   // ── Shared: SecurityContextUtil (G3) ──────────────────────────────────────

@@ -128,6 +128,8 @@ function validate(doc, opts = {}) {
     'emitsList',
     // Path A: find-then-map — bypass queryMethods requirement
     'loadAggregate',
+    // public endpoint — no JWT required (overrides authorization if both declared)
+    'public',
   ]);
   const ALLOWED_UC_VALIDATION_KEYS = new Set(['id', 'expression', 'errorCode', 'description']);
   const ALLOWED_UC_TRIGGER_KEYS = new Set([
@@ -365,6 +367,15 @@ function validate(doc, opts = {}) {
         if (p.sortable && !p.sortable.includes(p.defaultSort.field)) {
           fail(`Use case "${uc.id}" pagination.defaultSort.field "${p.defaultSort.field}" must be present in pagination.sortable[].`);
         }
+      }
+    }
+    // public endpoint validation
+    if (uc.public != null) {
+      if (typeof uc.public !== 'boolean') {
+        fail(`Use case "${uc.id}" "public" must be a boolean (true or false).`);
+      }
+      if (uc.public === true && uc.authorization != null) {
+        console.warn(`[bc-yaml-reader] Warning: Use case "${uc.id}" declares public: true with an authorization block — authorization will be ignored for this endpoint.`);
       }
     }
     // [G3] authorization structure validation

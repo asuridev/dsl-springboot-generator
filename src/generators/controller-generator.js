@@ -337,7 +337,9 @@ function findCommonPathPrefix(paths) {
 //   rolesAnyOf      → hasAnyRole('ADMIN', 'CATALOG_MANAGER')   (generator strips ROLE_ prefix)
 //   permissionsAnyOf → hasAnyAuthority('products:create', ...) (no prefix manipulation)
 // Returns null when none of the three fields is declared.
+// Returns null immediately when uc.public === true — public endpoints never get @PreAuthorize.
 function buildPreAuthorizeExpr(uc) {
+  if (uc && uc.public === true) return null;
   const authz = uc && uc.authorization;
   if (!authz) return null;
 
