@@ -2314,19 +2314,29 @@ directamente desde el handler (sin pasar por el agregado). Se debe evitar la dup
 
 ## 17. Multi-agregado: `aggregates` + `steps`
 
-Para use cases que orquestan la mutación de múltiples agregados dentro del mismo BC.
+**Problema que resuelve:** algunas operaciones de negocio deben mutar más de un agregado
+de forma atómica. Sin este patrón no hay una guía de estructura para el handler ni se
+generan los repositorios adicionales.
 
-**Problema que resuelve:** algunas operaciones de negocio afectan a más de un agregado.
-Por ejemplo, "confirmar un pedido" puede actualizar tanto la `Order` como el `Payment`.
-Sin este patrón, el handler tendría que cargar ambos manualmente sin una guía de estructura.
+> **Solo aplica a agregados del mismo BC.**
+> La atomicidad la provee `@Transactional` de Spring: si cualquier paso lanza una
+> `RuntimeException`, la base de datos hace rollback de todas las escrituras de la
+> transacción automáticamente. Si los agregados pertenecen a BCs distintos, la
+> transacción distribuida no es posible — ese escenario se modela como una **saga** en
+> `system.yaml`, que tiene su propio generador y maneja compensación distribuida.
+
+**Cuándo un use case puede tener múltiples agregados:** en DDD la regla general es
+"una transacción, un agregado". Este patrón es la excepción válida cuando (a) ambos
+agregados son del mismo BC y (b) la atomicidad de base de datos es suficiente como
+garantía de consistencia.
 
 ```yaml
 - id: UC-ORD-020
-  name: ConfirmOrderAndPayment
-  type: command              # solo commands
+  name: ConfirmOrderAndInventory
+  type: command              # solo commands; incompatible con bulk, async, aggregate/method simple
   aggregates:
-    - Order
-    - Payment
+    - Order                  # primero = agregado principal; su repositorio siempre se inyecta
+    - Inventory              # los demás también se inyectan como dependencias del handler
   steps:
     - aggregate: Order
       method: confirm
@@ -2335,19 +2345,19 @@ Sin este patrón, el handler tendría que cargar ambos manualmente sin una guía
           aggregate: Order
           method: rollback
 
-    - aggregate: Payment
-      method: capture
+    - aggregate: Inventory
+      method: reserveStock
       onFailure:
         compensate:
-          aggregate: Payment
-          method: void
+          aggregate: Inventory
+          method: releaseStock
 ```
 
 ### Propiedades de `aggregates` (multi-aggregate)
 
 | Propiedad | Tipo | Requerido | Descripción |
 |---|---|---|---|
-| `aggregates` | lista PascalCase (mínimo 2) | ✅ | Agregados involucrados. Todos deben estar en el mismo BC. |
+| `aggregates` | lista PascalCase (mínimo 2) | ✅ | Todos deben pertenecer al mismo BC. El primero es el agregado principal. |
 | `steps` | lista | ✅ | Pasos de ejecución en orden. |
 
 ### Propiedades de un `step`
@@ -2356,48 +2366,48 @@ Sin este patrón, el handler tendría que cargar ambos manualmente sin una guía
 |---|---|---|---|
 | `aggregate` | PascalCase | ✅ | Debe ser uno de los declarados en `aggregates`. |
 | `method` | camelCase | ✅ | Debe estar en `aggregates[].domainMethods`. |
-| `onFailure` | objeto | no | Acción de compensación si este paso falla. |
-| `onFailure.compensate` | objeto | ✅ | Qué ejecutar como compensación. |
-| `onFailure.compensate.aggregate` | PascalCase | ✅ | Uno de los declarados en `aggregates`. |
-| `onFailure.compensate.method` | camelCase | ✅ | Método de compensación. Debe estar en `domainMethods`. |
+| `onFailure.compensate.aggregate` | PascalCase | no | Agregado sobre el que ejecutar la compensación. |
+| `onFailure.compensate.method` | camelCase | no | Método de compensación del agregado. |
 
-> **Restricciones:** no se puede combinar con `bulk`, `async`, ni `aggregate`/`method`.
+### Código generado
 
-**Código Java generado:**
+El generador **no puede derivar del YAML** cómo mapear los campos del command a los
+parámetros del método de dominio de cada agregado. Todos los steps se emiten como
+`// TODO` para que el desarrollador de Fase 3 los implemente siguiendo `{bc}-flows.md`.
+La carga de los agregados y la persistencia también son responsabilidad de Fase 3.
+
 ```java
 @Override
 @Transactional
 @LogExceptions
-public void handle(ConfirmOrderAndPaymentCommand command) {
-    Order order = orderRepository.findById(UUID.fromString(command.orderId()))
-        .orElseThrow(OrderNotFoundError::new);
-    Payment payment = paymentRepository.findById(UUID.fromString(command.paymentId()))
-        .orElseThrow(PaymentNotFoundError::new);
-
+public void handle(ConfirmOrderAndInventoryCommand command) {
+    // [G6] Multi-aggregate orchestration — same BC, single transaction.
+    // Spring rolls back the JPA transaction on uncaught RuntimeException;
+    // application-level compensation runs in the catch block before re-throw.
     try {
-        order.confirm();
-        orderRepository.save(order);
-    } catch (Exception e) {
-        // onFailure.compensate: Order.rollback
-        order.rollback();
-        orderRepository.save(order);
-        throw e;
-    }
+        // step 1/2 — Order.confirm
+        // TODO useCase(UC-ORD-020, step:1): load the Order aggregate root from
+        //   orderRepository, map command fields to method args,
+        //   invoke order.confirm(...) and persist.
 
-    try {
-        payment.capture();
-        paymentRepository.save(payment);
-    } catch (Exception e) {
-        // onFailure.compensate: Payment.void
-        payment.void_();
-        paymentRepository.save(payment);
-        // compensate: Order.rollback
-        order.rollback();
-        orderRepository.save(order);
-        throw e;
+        // step 2/2 — Inventory.reserveStock
+        // TODO useCase(UC-ORD-020, step:2): load the Inventory aggregate root from
+        //   inventoryRepository, map command fields to method args,
+        //   invoke inventory.reserveStock(...) and persist.
+
+    } catch (RuntimeException ex) {
+        // Compensation order (reverse of execution):
+        // TODO useCase(UC-ORD-020, compensate step:2): load the Inventory aggregate root
+        //   and invoke inventory.releaseStock(...) to undo step 2.
+        // TODO useCase(UC-ORD-020, compensate step:1): load the Order aggregate root
+        //   and invoke order.rollback(...) to undo step 1.
+        throw ex;
     }
 }
 ```
+
+> Si ningún step declara `onFailure.compensate`, el bloque catch contiene solo:
+> `// No step declares onFailure.compensate — rely on @Transactional rollback.`
 
 ---
 
