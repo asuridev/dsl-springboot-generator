@@ -28,8 +28,7 @@ generador los convierte en:
 
 - Una **interfaz de dominio** (`{Aggregate}Repository.java`) en la capa de dominio
 - Una **implementación JPA** (`{Aggregate}JpaRepository.java`) en la capa de infraestructura
-- **Specifications** dinámicas (`{Aggregate}Specification.java`) cuando se declaran
-  parámetros con `filterOn` u `operator`
+- Una **implementación del adaptador de dominio** (`{Aggregate}RepositoryImpl.java`) que traduce entre dominio y JPA
 
 ### 1.1 Estructura base
 
@@ -49,16 +48,9 @@ repositories:
       - name: findBySku
         signature: "findBySku(String(50)): Product?"
 
-    bulkOperations:
-      - save
-      - delete
+    bulkOperations: true   # expone saveAll, findAllById y count
 
-    autoDerive:
-      - findById
-      - save
-      - delete
-      - existsById
-      - findAll
+    autoDerive: true        # default; poner false para desactivar la auto-derivación de uniqueness rules
 ```
 
 ### Propiedades de una entrada de repository
@@ -66,18 +58,18 @@ repositories:
 | Propiedad | Tipo | Requerido | Descripción |
 |---|---|---|---|
 | `aggregate` | PascalCase | ✅ | Nombre del agregado. Debe coincidir con un agregado declarado en `aggregates[]`. |
-| `queryMethods` | lista | no | Métodos de query con parámetros de filtro opcionales que generan `Specification`. |
+| `queryMethods` | lista | no | Métodos de query con parámetros de filtro que generan una consulta JPQL `@Query` inline. |
 | `methods` | lista | no | Métodos con firma directa (findBy*, save, delete, exists*, count*). |
-| `bulkOperations` | lista | no | Operaciones en batch (`save`, `delete`). |
-| `autoDerive` | lista | no | Métodos estándar Spring Data que se generan automáticamente sin configuración adicional. |
+| `bulkOperations` | `true` / omitido | no | Cuando `true`, expone `saveAll(List<T>)`, `findAllById(List<UUID>)` y `count()` en el puerto de dominio. |
+| `autoDerive` | `true` / `false` | no | Default: `true`. Cuando `true`, deriva automáticamente métodos `findBy{Field}` a partir de `domainRules[].type: uniqueness`. Poner `false` para desactivar. |
 
 ---
 
 ### 1.2 Métodos de query (`queryMethods`)
 
-Los `queryMethods` son métodos que aceptan filtros opcionales y generan
-`Specification<AggregateJpa>` dinámicamente. Ideales para endpoints de búsqueda
-y listado con múltiples filtros opcionales.
+Los `queryMethods` son métodos que aceptan filtros opcionales y generan una consulta
+JPQL `@Query` inline con condiciones `IS NULL OR` para los parámetros opcionales.
+Ideales para endpoints de búsqueda y listado con múltiples filtros opcionales.
 
 ```yaml
 queryMethods:
@@ -86,38 +78,42 @@ queryMethods:
       - name: status
         type: ProductStatus
         required: false
-        filterOn: status
+        filterOn: [status]
         operator: EQ
 
       - name: categoryId
         type: Uuid
         required: false
-        filterOn: categoryId
+        filterOn: [categoryId]
         operator: EQ
 
       - name: searchTerm
         type: String
         required: false
-        filterOn: name
+        filterOn: [name]
         operator: LIKE_CONTAINS
 
       - name: minPrice
         type: Decimal
         required: false
-        filterOn: priceAmount      # columna JPA (Money expandida)
+        filterOn: [priceAmount]      # columna JPA (Money expandida)
         operator: GTE
 
       - name: maxPrice
         type: Decimal
         required: false
-        filterOn: priceAmount
+        filterOn: [priceAmount]
         operator: LTE
 
       - name: statusList
         type: List[ProductStatus]
         required: false
-        filterOn: status
+        filterOn: [status]
         operator: IN
+
+      - name: pageable          # obligatorio cuando returns: Page[T]
+        type: PageRequest
+        required: true
 
     returns: Page[Product]
     defaultSort:
@@ -136,28 +132,28 @@ queryMethods:
 | `name` | camelCase | ✅ | Nombre del parámetro en Java. |
 | `type` | tipo canónico | ✅ | Tipo del parámetro. `List[T]` activa operador `IN` por defecto. |
 | `required` | boolean | no | Si `false`, el filtro se aplica solo cuando el parámetro no es `null`. Default: `true`. |
-| `filterOn` | camelCase | no | Nombre de la columna JPA sobre la que se aplica el filtro. Si se omite, se asume el mismo `name`. |
-| `operator` | enum | no | Operador de comparación. Ver tabla siguiente. Default: `EQ` para escalares, `IN` para `List[T]`. |
+| `filterOn` | lista camelCase | no | Lista de columnas JPA sobre las que se aplica el filtro. Si se omite, se usa el nombre del propio parámetro como columna JPA. Cuando se declara `filterOn`, `operator` es **obligatorio**. |
+| `operator` | enum | no si `filterOn` omitido | Operador de comparación. Ver tabla siguiente. **Obligatorio** cuando se declara `filterOn`. Sin `filterOn`: default `EQ` para escalares, `IN` para `List[T]`. |
 
 #### Operadores disponibles
 
-| Operador | SQL generado | Uso típico |
+| Operador | JPQL generado | Uso típico |
 |---|---|---|
-| `EQ` | `WHERE field = :value` | Filtro exacto por estado, ID, booleano. |
-| `LIKE_CONTAINS` | `WHERE LOWER(field) LIKE '%value%'` | Búsqueda libre de texto. |
-| `LIKE_STARTS` | `WHERE LOWER(field) LIKE 'value%'` | Autocompletado con prefijo. |
-| `LIKE_ENDS` | `WHERE LOWER(field) LIKE '%value'` | Sufijo. |
-| `GTE` | `WHERE field >= :value` | Rango inferior (precio mínimo, fecha desde). |
-| `LTE` | `WHERE field <= :value` | Rango superior (precio máximo, fecha hasta). |
-| `IN` | `WHERE field IN (:values)` | Filtro multi-valor. El parámetro debe ser `List[T]`. |
+| `EQ` | `field = :param` | Filtro exacto por estado, ID, booleano. |
+| `LIKE_CONTAINS` | `LOWER(field) LIKE LOWER(CONCAT('%', :param, '%'))` | Búsqueda libre de texto (case-insensitive). |
+| `LIKE_STARTS` | `LOWER(field) LIKE LOWER(CONCAT(:param, '%'))` | Autocompletado con prefijo (case-insensitive). |
+| `LIKE_ENDS` | `LOWER(field) LIKE LOWER(CONCAT('%', :param))` | Sufijo (case-insensitive). |
+| `GTE` | `field >= :param` | Rango inferior (precio mínimo, fecha desde). |
+| `LTE` | `field <= :param` | Rango superior (precio máximo, fecha hasta). |
+| `IN` | `field IN :param` | Filtro multi-valor. El parámetro debe ser `List[T]`. |
 
 #### Propiedades de ordenación en `queryMethod`
 
 | Propiedad | Tipo | Descripción |
 |---|---|---|
-| `defaultSort.field` | camelCase | Campo de ordenación por defecto. Debe estar en `sortable`. |
+| `defaultSort.field` | camelCase | Campo de ordenación por defecto. El validador verifica que sea un atributo conocido del agregado (incluyendo `id`, `createdAt`, `updatedAt`, `deletedAt`). Solo aplicado por el generador en retornos `List[T]`; para `Page[T]` el orden lo controla `Pageable.sort` en runtime. |
 | `defaultSort.direction` | `ASC` \| `DESC` | Dirección de ordenación. Default: `ASC`. |
-| `sortable` | lista camelCase | Campos por los que se puede ordenar. |
+| `sortable` | lista camelCase | Campos por los que se puede ordenar. Cada campo se valida contra los atributos del agregado. |
 
 #### Tipos de retorno disponibles en `returns`
 
@@ -208,17 +204,34 @@ public interface ProductRepository {
 }
 ```
 
-**`ProductJpaRepository.java`** (implementación Spring Data):
+**`ProductJpaRepository.java`** (interfaz Spring Data con `@Query` JPQL inline):
 ```java
 package com.canastaShop.catalog.infrastructure.persistence.repositories;
 
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import java.util.Optional;
 import java.util.UUID;
 
-public interface ProductJpaRepository
-    extends JpaRepository<ProductJpa, UUID>, JpaSpecificationExecutor<ProductJpa> {
+public interface ProductJpaRepository extends JpaRepository<ProductJpa, UUID> {
+
+    @Query("SELECT p FROM ProductJpa p WHERE " +
+           "(:status IS NULL OR p.status = :status) AND " +
+           "(:categoryId IS NULL OR p.categoryId = :categoryId) AND " +
+           "(:searchTerm IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', :searchTerm, '%'))) AND " +
+           "(:minPrice IS NULL OR p.priceAmount >= :minPrice) AND " +
+           "(:maxPrice IS NULL OR p.priceAmount <= :maxPrice) AND " +
+           "(:statusList IS NULL OR p.status IN :statusList)")
+    Page<ProductJpa> searchProducts(
+        @Param("status") ProductStatus status,
+        @Param("categoryId") UUID categoryId,
+        @Param("searchTerm") String searchTerm,
+        @Param("minPrice") BigDecimal minPrice,
+        @Param("maxPrice") BigDecimal maxPrice,
+        @Param("statusList") List<ProductStatus> statusList,
+        Pageable pageable
+    );
 
     Optional<ProductJpa> findBySku(String sku);
 }
@@ -227,10 +240,11 @@ public interface ProductJpaRepository
 **`ProductRepositoryImpl.java`** (adaptador que implementa el puerto de dominio):
 ```java
 @Repository
+@Transactional(readOnly = true)
 public class ProductRepositoryImpl implements ProductRepository {
 
     private final ProductJpaRepository jpaRepository;
-    private final ApplicationMapper mapper;
+    private final ProductJpaMapper mapper;
 
     @Override
     public Page<Product> searchProducts(
@@ -238,47 +252,9 @@ public class ProductRepositoryImpl implements ProductRepository {
         BigDecimal minPrice, BigDecimal maxPrice, List<ProductStatus> statusList,
         Pageable pageable) {
 
-        Specification<ProductJpa> spec = Specification.where(null);
-        if (status != null) spec = spec.and(ProductSpecification.status(status));
-        if (categoryId != null) spec = spec.and(ProductSpecification.categoryId(categoryId));
-        if (searchTerm != null) spec = spec.and(ProductSpecification.searchName(searchTerm));
-        if (minPrice != null) spec = spec.and(ProductSpecification.minPriceAmount(minPrice));
-        if (maxPrice != null) spec = spec.and(ProductSpecification.maxPriceAmount(maxPrice));
-        if (statusList != null && !statusList.isEmpty())
-            spec = spec.and(ProductSpecification.statusIn(statusList));
-
-        return jpaRepository.findAll(spec, pageable).map(mapper::toDomain);
-    }
-}
-```
-
-**`ProductSpecification.java`:**
-```java
-public class ProductSpecification {
-
-    public static Specification<ProductJpa> status(ProductStatus value) {
-        return (root, query, cb) -> cb.equal(root.get("status"), value);
-    }
-
-    public static Specification<ProductJpa> categoryId(UUID value) {
-        return (root, query, cb) -> cb.equal(root.get("categoryId"), value);
-    }
-
-    public static Specification<ProductJpa> searchName(String value) {
-        return (root, query, cb) ->
-            cb.like(cb.lower(root.get("name")), "%" + value.toLowerCase() + "%");
-    }
-
-    public static Specification<ProductJpa> minPriceAmount(BigDecimal value) {
-        return (root, query, cb) -> cb.greaterThanOrEqualTo(root.get("priceAmount"), value);
-    }
-
-    public static Specification<ProductJpa> maxPriceAmount(BigDecimal value) {
-        return (root, query, cb) -> cb.lessThanOrEqualTo(root.get("priceAmount"), value);
-    }
-
-    public static Specification<ProductJpa> statusIn(List<ProductStatus> values) {
-        return (root, query, cb) -> root.get("status").in(values);
+        return jpaRepository.searchProducts(
+            status, categoryId, searchTerm, minPrice, maxPrice, statusList, pageable
+        ).map(mapper::toDomain);
     }
 }
 ```
@@ -304,9 +280,13 @@ methods:
         required: true
     returns: Customer?
 
-  # Conteo
+  # Conteo — usa params/returns para nombrar correctamente el parámetro
   - name: countActiveByCategoryId
-    signature: "countActiveByCategoryId(Uuid): Long"
+    params:
+      - name: categoryId
+        type: Uuid
+        required: true
+    returns: Int
 
   # Existencia
   - name: existsBySkuAndIdNot
@@ -341,77 +321,84 @@ methods:
 `{methodName}({param1Type}, {param2Name}?: {param2Type}): {returnType}`
 
 - Los tipos se usan directamente del mapeo canónico (ver tabla de tipos)
-- El `?` marca parámetros opcionales
-- Con `paramName: Type` se puede nombrar el parámetro explícitamente
+- El `?` marca parámetros opcionales: `paramName?: Type`
+- Para nombrar un parámetro requerido explícitamente, usa el formato `params/returns` en lugar de `signature`
 
 **Código Java generado:**
 ```java
 // En la interfaz de dominio ProductRepository:
 Optional<Product> findBySku(String sku);
-long countActiveByCategoryId(UUID categoryId);
+int countActiveByCategoryId(UUID categoryId);
 boolean existsBySkuAndIdNot(String sku, UUID id);
 
-// En ProductJpaRepository (Spring Data derivado automáticamente):
-Optional<ProductJpa> findBySku(String sku);
+// En ProductJpaRepository:
+Optional<ProductJpa> findBySku(String sku);           // Spring Data derived
 
-@Query("SELECT COUNT(p) FROM ProductJpa p WHERE p.categoryId = :categoryId " +
-       "AND p.status = 'ACTIVE'")
-long countActiveByCategoryId(@Param("categoryId") UUID categoryId);
+@Query("SELECT COUNT(p) FROM ProductJpa p WHERE p.status = 'ACTIVE' AND p.categoryId = :categoryId")
+int countActiveByCategoryId(@Param("categoryId") UUID categoryId);
 ```
 
 ---
 
 ### 1.4 Operaciones en bulk (`bulkOperations`)
 
-Declara operaciones que procesan colecciones de entidades en una sola llamada.
+Cuando `true`, expone en el puerto de dominio y en `RepositoryImpl` tres métodos
+que procesan colecciones en una sola llamada a Spring Data JPA.
 
 ```yaml
-bulkOperations:
-  - save      # saveAll(List<Product>)
-  - delete    # deleteAll(List<Product>)
+bulkOperations: true   # expone saveAll, findAllById y count
 ```
 
-**Código Java generado:**
+**Métodos generados en el puerto de dominio:**
 ```java
-// En la interfaz de dominio:
-void saveAll(List<Product> products);
-void deleteAll(List<Product> products);
-
-// En la implementación JPA:
-@Override
-public void saveAll(List<Product> products) {
-    jpaRepository.saveAll(products.stream().map(mapper::toJpa).collect(Collectors.toList()));
-}
+List<Product> saveAll(List<Product> entities);
+List<Product> findAllById(List<UUID> ids);
+long count();
 ```
+
+Estos métodos son heredados directamente de `JpaRepository` y no requieren
+declaración adicional en la interfaz Spring Data JPA.
+
+> **Nota:** `deleteAll(List<T>)` **no** es generado por `bulkOperations`. Para
+> eliminar en batch, declara un método explícito en `methods[]`.
 
 ---
 
 ### 1.5 Derivación automática (`autoDerive`)
 
-Lista los métodos CRUD estándar que Spring Data JPA soporta nativamente y que el
-generador incluye sin necesidad de declarar una firma explícita.
+Cuando `true` (default), el generador inspecciona cada `domainRules[].type: uniqueness`
+declarada en el agregado y añade automáticamente un método `findBy{Field}: Aggregate?`
+en el repositorio si el campo es una propiedad del agregado raíz y el método aún
+no ha sido declarado explícitamente.
+
+Pon `autoDerive: false` para desactivar este comportamiento y declarar todos los
+métodos manualmente.
 
 ```yaml
-autoDerive:
-  - findById        # Optional<T> findById(UUID id)
-  - findAll         # Page<T> findAll(Pageable pageable)
-  - save            # void save(T entity)
-  - delete          # void delete(T entity)
-  - deleteById      # void deleteById(UUID id)
-  - existsById      # boolean existsById(UUID id)
-  - count           # long count()
+# Default — activado
+autoDerive: true
+
+# Opt-out explícito
+autoDerive: false
 ```
 
-**Código Java generado** (en la interfaz de dominio):
-```java
-Optional<Product> findById(UUID id);
-Page<Product> findAll(Pageable pageable);
-void save(Product product);
-void delete(Product product);
-void deleteById(UUID id);
-boolean existsById(UUID id);
-long count();
+**Ejemplo:** un agregado con `domainRules: [{id: PRD-RULE-001, type: uniqueness, field: sku}]`
+y sin método `findBySku` ni `existsBySku` declarado provocará que el generador inyecte:
+
+```yaml
+# Método auto-derivado (equivalente a declarar manualmente):
+methods:
+  - name: findBySku
+    params:
+      - name: sku
+        type: String(50)   # tipo tomado de la propiedad del agregado
+    returns: Product?
+    derivedFrom: PRD-RULE-001
 ```
+
+> **Restricción:** si el campo pertenece a una entidad hija (no al agregado raíz),
+> la derivación se omite automáticamente. La unicidad en esos campos se aplica
+> solo a nivel de constraint de base de datos.
 
 ---
 
@@ -469,34 +456,53 @@ Solo se aceptan los siguientes valores (cualquier otro falla la build):
 
 ### Código Java generado
 
+El generador mapea `httpStatus` a la clase base de excepción:
+
+| `httpStatus` | Clase base generada |
+|---|---|
+| `404` | `NotFoundException` |
+| `409` | `ConflictException` |
+| `400` | `BadRequestException` |
+| `403` | `ForbiddenException` |
+| `401` | `UnauthorizedException` |
+| `422` | `BusinessException` |
+| `402, 408, 412, 415, 423, 429, 503, 504` | `DomainException` |
+
+Todas estas clases están en el paquete `{packageName}.shared.domain.customExceptions`.
+
 Para `code: PRODUCT_NOT_FOUND` con `httpStatus: 404`:
 
 **`ProductNotFoundError.java`:**
 ```java
 package com.canastaShop.catalog.domain.errors;
 
-import com.canastaShop.shared.domain.exceptions.BusinessException;
+import com.canastaShop.shared.domain.customExceptions.NotFoundException;
 
-public class ProductNotFoundError extends BusinessException {
-
-    private static final String CODE = "PRODUCT_NOT_FOUND";
-    private static final int HTTP_STATUS = 404;
-    private static final String MESSAGE = "Product with the given identifier was not found.";
-    private static final String TITLE = "Product Not Found";
+/**
+ * The requested product does not exist.
+ */
+// derived_from: errors[PRODUCT_NOT_FOUND]
+public class ProductNotFoundError extends NotFoundException {
 
     public ProductNotFoundError() {
-        super(CODE, HTTP_STATUS, MESSAGE, TITLE);
+        super("PRODUCT_NOT_FOUND");
     }
 }
 ```
 
-El handler global convierte la excepción en la respuesta HTTP:
+> **Nota:** el campo `message` del YAML es metadata de documentación (aparece en el
+> catálogo de errores generado). Para que el mensaje llegue al constructor Java usa
+> `messageTemplate` (ver §2.4). Sin `messageTemplate`, el constructor llama a
+> `super("CODE")` y el código se usa como texto del mensaje.
+
+El `HandlerExceptions` convierte la excepción por **jerarquía**, no por clase individual:
 ```java
-// HandlerExceptions.java (fragmento generado para BC catalog):
-@ExceptionHandler(ProductNotFoundError.class)
-public ResponseEntity<ErrorResponse> handleProductNotFoundError(ProductNotFoundError ex) {
-    return ResponseEntity.status(ex.getHttpStatus())
-        .body(new ErrorResponse(ex.getCode(), ex.getMessage(), ex.getTitle()));
+// HandlerExceptions.java (fragmento — aplica a TODOS los NotFoundException del BC)
+@ResponseStatus(HttpStatus.NOT_FOUND)
+@ExceptionHandler(NotFoundException.class)
+@ResponseBody
+public ErrorResponse onNotFoundException(NotFoundException ex) {
+    return buildResponse(HttpStatus.NOT_FOUND, "Not Found", ex, "Resource not found");
 }
 ```
 
@@ -521,8 +527,12 @@ errors:
 
 **`RequestValidationError.java`:**
 ```java
-public class RequestValidationError extends BusinessException {
-    // ...
+// derived_from: errors[VALIDATION_ERROR]
+public class RequestValidationError extends BadRequestException {
+
+    public RequestValidationError() {
+        super("VALIDATION_ERROR");
+    }
 }
 ```
 
@@ -559,16 +569,12 @@ errors:
 
 **`ProductSkuAlreadyExistsError.java`:**
 ```java
-public class ProductSkuAlreadyExistsError extends BusinessException {
-
-    private static final String CODE = "PRODUCT_SKU_ALREADY_EXISTS";
-    private static final int HTTP_STATUS = 409;
-    private static final String TEMPLATE = "A product with SKU ''{0}'' already exists.";
+// derived_from: errors[PRODUCT_SKU_ALREADY_EXISTS]
+public class ProductSkuAlreadyExistsError extends ConflictException {
 
     public ProductSkuAlreadyExistsError(String sku) {
-        super(CODE, HTTP_STATUS,
-              MessageFormat.format(TEMPLATE, sku),
-              "Product SKU Already Exists");
+        super("A product with SKU '" + String.valueOf(sku) + "' already exists.",
+              "PRODUCT_SKU_ALREADY_EXISTS", 409, new Object[]{ sku });
     }
 }
 ```
@@ -595,20 +601,16 @@ errors:
 
 **`PaymentProcessingFailedError.java`:**
 ```java
-public class PaymentProcessingFailedError extends BusinessException {
+// derived_from: errors[PAYMENT_PROCESSING_FAILED]
+public class PaymentProcessingFailedError extends DomainException {
 
     public PaymentProcessingFailedError() {
-        super("PAYMENT_PROCESSING_FAILED", 503,
-              "Payment processing failed due to an unexpected error.",
-              "Payment Processing Failed");
+        super("PAYMENT_PROCESSING_FAILED");
     }
 
     // chainable: true → constructor adicional con cause
     public PaymentProcessingFailedError(Throwable cause) {
-        super("PAYMENT_PROCESSING_FAILED", 503,
-              "Payment processing failed due to an unexpected error.",
-              "Payment Processing Failed",
-              cause);
+        super("PAYMENT_PROCESSING_FAILED", cause);
     }
 }
 ```
@@ -654,21 +656,36 @@ errors:
 **Restricciones:**
 - `triggeredBy` solo se puede declarar cuando `kind: infrastructure`
 - `triggeredBy` debe ser un nombre de clase válido Java (FQN o simple)
-- Si dos errores en distintos BCs declaran el mismo `triggeredBy`, la build falla
-  (el mapeo debe ser unívoco)
+- Si el mismo `triggeredBy` está mapeado a dos errores **diferentes** en distintos BCs, la build falla con error de ambigüedad (el mapeo debe ser unívoco por excepción JVM)
 
 **Código generado en `HandlerExceptions.java`:**
-```java
-// derived_from: errors[kind=infrastructure, triggeredBy=DataAccessException]
-@ExceptionHandler(org.springframework.dao.DataAccessException.class)
-public ResponseEntity<ErrorResponse> handleDataAccessException(
-    org.springframework.dao.DataAccessException ex) {
 
-    DatabaseConnectionFailedError error = new DatabaseConnectionFailedError(ex);
-    return ResponseEntity.status(503)
-        .body(new ErrorResponse(error.getCode(), error.getMessage(), error.getTitle()));
+Cuando `triggeredBy` es un FQN, la clase se importa y se usa el nombre simple en el handler:
+```java
+// import org.springframework.dao.DataAccessException; ← importado automáticamente
+@ExceptionHandler(DataAccessException.class)
+@ResponseBody
+public ResponseEntity<ErrorResponse> onDatabaseConnectionFailedError(
+    DataAccessException ex) {
+
+    log.warn("Infrastructure failure mapped to DATABASE_CONNECTION_FAILED", ex);
+    DomainException domainEx = new DatabaseConnectionFailedError();
+    Integer rawStatus = domainEx.getHttpStatus();
+    HttpStatus status = rawStatus != null ? HttpStatus.valueOf(rawStatus) : HttpStatus.SERVICE_UNAVAILABLE;
+    ErrorResponse body = new ErrorResponse(
+            status.value(),
+            status.getReasonPhrase(),
+            domainEx.getCode(),
+            domainEx.getMessage() != null ? domainEx.getMessage() : status.getReasonPhrase(),
+            domainEx.getDetails()
+    );
+    return ResponseEntity.status(status).body(body);
 }
 ```
+
+> **Nota:** la excepción original `ex` se pasa solo al logger; la instancia
+> `domainEx` se construye con el constructor sin argumentos. El `cause` NO
+> se encadena automáticamente aunque el error declare `chainable: true`.
 
 ---
 
@@ -682,7 +699,7 @@ ningún `domainRule`, `notFoundError`, `fkValidations` o `validations` lo refere
 errors:
   # Este error se lanza manualmente en la Fase 3 — no se puede declarar en el YAML
   - code: SAGA_COMPENSATION_FAILED
-    httpStatus: 500
+    httpStatus: 503
     usedFor: manual       # suprime la advertencia de error huérfano
     description: >
       Thrown during saga compensation when the rollback operation also fails.
@@ -751,7 +768,7 @@ errors:
       from the catalog service. The FeignException is preserved as the cause.
 
   - code: EXTERNAL_AUDIT_LOG_FAILED
-    httpStatus: 500
+    httpStatus: 503
     kind: infrastructure
     usedFor: manual
     description: >
