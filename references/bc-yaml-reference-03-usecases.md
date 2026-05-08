@@ -1551,6 +1551,333 @@ public void handle(BulkImportProductsCommand command) {
 
 ---
 
+### 11.3 Ejemplo completo — `GenerateProductReport` con `jobTracking`
+
+**Caso de uso típico:** un cliente solicita un informe de productos que requiere
+consultar varias fuentes, consolidar datos y generar un PDF. El proceso puede tardar
+10-30 segundos. El cliente no puede esperar bloqueado; necesita recibir un jobId
+y consultar el estado periódicamente.
+
+#### YAML completo
+
+```yaml
+# ── Bloque 1: identificación del use case ────────────────────────────────────
+# Define el ID canónico, nombre y tipo. type: command porque muta estado
+# (crea una fila async_job). Los reports de solo lectura también pueden ser
+# async si el costo de cálculo es alto.
+- id: UC-PRD-020
+  name: GenerateProductReport
+  type: command
+  actor: admin
+
+  # ── Bloque 2: trigger ────────────────────────────────────────────────────
+  # El cliente llama POST /products/reports para iniciar el trabajo.
+  # El generador produce un controller que responde 202 Accepted con el jobId.
+  trigger:
+    kind: http
+    operationId: generateProductReport
+
+  aggregate: Product
+
+  # ── Bloque 3: input ──────────────────────────────────────────────────────
+  # Parámetros que el cliente envía en el body. Se generan como campos del
+  # record BulkImportProductsCommand. La validación @NotNull/@Size se añade
+  # automáticamente según required: true y el tipo.
+  input:
+    - name: format
+      type: String(10)           # PDF, EXCEL, CSV
+      source: body
+      required: true
+    - name: fromDate
+      type: Date
+      source: body
+      required: true
+    - name: toDate
+      type: Date
+      source: body
+      required: true
+
+  # ── Bloque 4: authorization ──────────────────────────────────────────────
+  # Solo admins pueden solicitar reportes. El generador emite
+  # @PreAuthorize("hasAnyRole('ADMIN')") en el controller.
+  authorization:
+    rolesAnyOf:
+      - ROLE_ADMIN
+
+  # ── Bloque 5: async ──────────────────────────────────────────────────────
+  # Convierte el endpoint en asíncrono:
+  #   - mode: jobTracking  → persiste una fila en async_job (PENDING) y retorna
+  #     un JobReference { jobId, statusUrl }. El cliente hace polling a statusUrl.
+  #   - statusEndpoint     → operationId del endpoint GET /jobs/{jobId} que
+  #     el generador también produce para consultar el estado del job.
+  async:
+    mode: jobTracking
+    statusEndpoint: getJobStatus
+
+  implementation: scaffold
+```
+
+#### Qué genera cada bloque
+
+**Controller** — `ProductController.java`
+
+El trigger + async generan un endpoint `POST /products/reports` que responde `202 Accepted`
+con la URI de estado en el header `Location`:
+
+```java
+// derived_from: UC-PRD-020 GenerateProductReport
+@PostMapping("/products/reports")
+@PreAuthorize("hasAnyRole('ADMIN')")             // ← authorization.rolesAnyOf
+public ResponseEntity<JobReference> generateProductReport(
+    @Valid @RequestBody GenerateProductReportCommand command) {
+
+    log.info("generateProductReport");
+    JobReference reference = useCaseMediator.dispatch(command);
+    URI location = URI.create("/jobs/" + reference.jobId());
+    return ResponseEntity.accepted()             // ← 202 Accepted
+        .location(location)                      // ← Location: /jobs/{jobId}
+        .body(reference);
+}
+```
+
+**Command record** — `GenerateProductReportCommand.java`
+
+Los campos del bloque `input` se convierten en componentes del record. El generador
+añade `@NotBlank`/`@NotNull` según `required: true`:
+
+```java
+// derived_from: UC-PRD-020 input[]
+public record GenerateProductReportCommand(
+    @NotBlank String format,        // ← input[0] String(10) required
+    @NotNull LocalDate fromDate,    // ← input[1] Date required
+    @NotNull LocalDate toDate       // ← input[2] Date required
+) implements Command {}
+```
+
+**Handler** — `GenerateProductReportHandler.java`
+
+El async.mode: jobTracking genera la persistencia de la fila PENDING y el TODO del worker:
+
+```java
+@Component
+@RequiredArgsConstructor
+public class GenerateProductReportHandler
+    implements UseCase<GenerateProductReportCommand, JobReference> {
+
+    private final AsyncJobRepository asyncJobRepository;
+
+    @Override
+    @Transactional
+    @LogExceptions
+    public JobReference handle(GenerateProductReportCommand command) {
+
+        // [G10] Persist a PENDING job row; the actual work is performed by
+        // a worker (out of scope for the generator).
+        UUID jobId = UUID.randomUUID();
+        Instant now = Instant.now();
+        AsyncJobJpa job = AsyncJobJpa.builder()
+                .id(jobId)
+                .type("GenerateProductReport")   // ← nombre del use case
+                .status(AsyncJobStatus.PENDING)  // ← estado inicial
+                .createdAt(now)
+                .updatedAt(now)
+                .build();
+        asyncJobRepository.save(job);
+
+        // TODO useCase(UC-PRD-020, async): implement worker that picks up
+        //      PENDING async_job rows of type="GenerateProductReport",
+        //      transitions them to RUNNING/SUCCEEDED/FAILED and writes
+        //      the result (PDF bytes, presigned URL, etc.) to result column.
+        return new JobReference(jobId);
+    }
+}
+```
+
+**Endpoint de estado** — generado por `statusEndpoint: getJobStatus`
+
+El generador produce un endpoint `GET /jobs/{jobId}` derivado del operationId:
+
+```java
+@GetMapping("/jobs/{jobId}")
+public ResponseEntity<AsyncJobStatusResponse> getJobStatus(
+    @PathVariable UUID jobId) {
+
+    AsyncJobJpa job = asyncJobRepository.findById(jobId)
+        .orElseThrow(JobNotFoundError::new);
+    return ResponseEntity.ok(AsyncJobMapper.toResponse(job));
+}
+```
+
+Respuesta de ejemplo mientras el job está en proceso:
+```json
+{
+  "jobId": "b3e2c1d0-...",
+  "type": "GenerateProductReport",
+  "status": "RUNNING",
+  "createdAt": "2026-05-08T15:30:00Z",
+  "updatedAt": "2026-05-08T15:30:05Z",
+  "result": null
+}
+```
+
+Respuesta cuando el job finaliza:
+```json
+{
+  "jobId": "b3e2c1d0-...",
+  "status": "SUCCEEDED",
+  "result": "https://storage.example.com/reports/b3e2c1d0-....pdf"
+}
+```
+
+**Tabla `async_job`** — migration `V4__async_job.sql`
+
+El generador crea esta tabla una sola vez (compartida por todos los BCs):
+
+```sql
+CREATE TABLE IF NOT EXISTS async_job (
+    id          UUID          NOT NULL PRIMARY KEY,
+    type        VARCHAR(128)  NOT NULL,           -- nombre del use case
+    status      VARCHAR(16)   NOT NULL,           -- PENDING / RUNNING / SUCCEEDED / FAILED
+    payload     BYTEA,                            -- input serializado (opcional)
+    result      BYTEA,                            -- output del worker (opcional)
+    created_at  TIMESTAMP     NOT NULL,
+    updated_at  TIMESTAMP     NOT NULL
+);
+```
+
+#### Flujo completo de una petición
+
+```
+Cliente                Controller               Handler              Worker (manual, Fase 3)
+  │                        │                       │                       │
+  │  POST /products/reports │                       │                       │
+  │──────────────────────► │                       │                       │
+  │                        │  dispatch(command)    │                       │
+  │                        │──────────────────────►│                       │
+  │                        │                       │  INSERT async_job     │
+  │                        │                       │  status=PENDING       │
+  │                        │                       │──────────────────────►│ (DB)
+  │                        │  JobReference(jobId)  │                       │
+  │                        │◄──────────────────────│                       │
+  │  202 Accepted           │                       │                       │
+  │  Location: /jobs/{id}  │                       │                       │
+  │◄──────────────────────  │                       │                       │
+  │                         │                       │                       │
+  │  (polling)              │                       │          UPDATE async_job
+  │  GET /jobs/{id}         │                       │          status=SUCCEEDED
+  │──────────────────────►  │                       │──────────────────────►│
+  │  200 { status: "..." }  │                       │                       │
+  │◄──────────────────────  │                       │                       │
+```
+
+---
+
+### 11.4 Fase 3 — patrones para activar el worker
+
+El generador produce el `// TODO` en el handler y toda la infraestructura de persistencia,
+pero **no genera el worker**. En Fase 3 el desarrollador elige uno de estos tres patrones
+según los requisitos de latencia y robustez del proyecto.
+
+#### Patrón A — `@Scheduled` (polling periódico)
+
+El worker se despierta cada N segundos y busca filas `PENDING` en la tabla. No requiere
+ningún cambio en el handler generado.
+
+```java
+@Component
+@RequiredArgsConstructor
+public class GenerateProductReportWorker {
+
+    private final AsyncJobRepository asyncJobRepository;
+
+    @Scheduled(fixedDelay = 5000)          // cada 5 segundos
+    @Transactional
+    public void processPendingJobs() {
+        asyncJobRepository.findAll().stream()
+            .filter(j -> j.getStatus() == AsyncJobStatus.PENDING
+                      && "GenerateProductReport".equals(j.getType()))
+            .forEach(this::processJob);
+    }
+
+    private void processJob(AsyncJobJpa job) {
+        job.setStatus(AsyncJobStatus.RUNNING);
+        job.setUpdatedAt(Instant.now());
+        asyncJobRepository.save(job);
+        try {
+            byte[] result = /* lógica real */;
+            job.setResult(result);
+            job.setStatus(AsyncJobStatus.SUCCEEDED);
+        } catch (Exception ex) {
+            job.setResult(ex.getMessage().getBytes(StandardCharsets.UTF_8));
+            job.setStatus(AsyncJobStatus.FAILED);
+        }
+        job.setUpdatedAt(Instant.now());
+        asyncJobRepository.save(job);
+    }
+}
+```
+
+Requiere `@EnableScheduling` en la clase principal. Latencia máxima = intervalo del poll.
+
+#### Patrón B — `ApplicationEventPublisher` + `@Async` (reacción inmediata)
+
+El handler publica un evento interno de Spring al crear el job. El worker lo escucha
+en un hilo separado y reacciona de inmediato. Se recomienda combinar con un
+`@Scheduled` de rescate para jobs que quedaron `PENDING` por un crash de la JVM.
+
+Modificación en el handler generado (Fase 3):
+```java
+// En GenerateProductReportHandler.handle() — añadir después del asyncJobRepository.save(job):
+eventPublisher.publishEvent(new AsyncJobCreatedEvent(jobId, "GenerateProductReport"));
+```
+
+Worker:
+```java
+@Component
+@RequiredArgsConstructor
+public class GenerateProductReportWorker {
+
+    @Async
+    @EventListener
+    public void onJobCreated(AsyncJobCreatedEvent event) {
+        if (!"GenerateProductReport".equals(event.type())) return;
+        // procesa igual que en el Patrón A
+    }
+}
+```
+
+Requiere `@EnableAsync` en la clase principal.
+
+#### Patrón C — broker de mensajes (Kafka / RabbitMQ)
+
+Adecuado cuando el worker corre en un servicio separado o se necesita distribución de
+carga entre réplicas. El handler publica un mensaje al broker; el worker es un consumer.
+
+```java
+// Handler (Fase 3) — publicar mensaje
+kafkaTemplate.send("jobs.generate-product-report", jobId.toString());
+
+// Worker consumer
+@KafkaListener(topics = "jobs.generate-product-report")
+public void consume(String jobId) {
+    // busca la fila por jobId y procesa
+}
+```
+
+#### Resumen de elección
+
+| Patrón | Latencia | Robustez ante crash | Infraestructura extra |
+|---|---|---|---|
+| `@Scheduled` | Hasta N seg | ✅ (reintenta en siguiente ciclo) | Ninguna |
+| `ApplicationEventPublisher` | Inmediata | ⚠️ Necesita `@Scheduled` de rescate | `@EnableAsync` |
+| Broker (Kafka/RabbitMQ) | Inmediata | ✅ (mensajes persistidos) | Broker externo |
+
+> Para la mayoría de casos de uso de larga duración (reportes, exportaciones, importaciones)
+> el **Patrón A** es suficiente. El **Patrón B** es preferible cuando la latencia importa.
+> El **Patrón C** está justificado solo cuando el volumen o la distribución lo requieren.
+
+---
+
 ## 12. Propiedad `rules`
 
 Lista las reglas de dominio que se evalúan durante la ejecución del use case. Cada
@@ -1571,6 +1898,116 @@ regla no está en `errors[]`, la build falla:
 ```
 [bc-yaml-reader] domainRule "PRD-RULE-001" errorCode "PRODUCT_CANNOT_BE_ACTIVATED"
 not found in errors[].
+```
+
+### Qué genera el generador con `rules`
+
+Las reglas declaradas en el use case se inyectan en el **método de dominio del agregado**
+(no en el handler de aplicación). El generador clasifica cada regla según su tipo:
+
+- Reglas de tipo distinto a `sideEffect` → comentario `// Validate: {id}` (precondiciones, unicidad, guardas)
+- Reglas de tipo `sideEffect` → comentario `// Side effects: {id}` (acciones derivadas)
+
+#### YAML completo de ejemplo
+
+```yaml
+# ── Aggregate — define las reglas en el catálogo domainRules ────────────────
+aggregates:
+  - name: Product
+    domainMethods:
+      - name: activate
+        returns: Product
+    domainRules:
+      - id: PRD-RULE-001
+        type: statePrecondition
+        description: "A product can only be activated if it is in DRAFT state."
+        errorCode: PRODUCT_CANNOT_BE_ACTIVATED
+
+      - id: PRD-RULE-002
+        type: uniqueness
+        field: sku
+        description: "SKU must be unique across all products."
+        errorCode: PRODUCT_SKU_ALREADY_EXISTS
+
+      - id: PRD-RULE-003
+        type: sideEffect
+        description: "On activation, notify the catalog service."
+
+# ── Use case — referencia los IDs del catálogo ───────────────────────────────
+useCases:
+  - id: UC-PRD-004
+    name: ActivateProduct
+    type: command
+    actor: admin
+    trigger:
+      kind: http
+      operationId: activateProduct
+    aggregate: Product
+    method: activate
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    rules:
+      - PRD-RULE-001     # statePrecondition → va a // Validate:
+      - PRD-RULE-002     # uniqueness        → va a // Validate:
+      - PRD-RULE-003     # sideEffect        → va a // Side effects:
+    implementation: scaffold
+    notFoundError: PRODUCT_NOT_FOUND
+```
+
+#### Código generado en el agregado — `Product.java`
+
+El generador inyecta los IDs clasificados como comentarios dentro del cuerpo del método
+de dominio. Orientan al desarrollador de Fase 3 exactamente qué validar y qué efecto
+secundario implementar:
+
+```java
+/** derived_from: UC-PRD-004 ActivateProduct */
+public Product activate() {
+    // TODO: implement business logic — ver products-flows.md
+    // Validate: PRD-RULE-001, PRD-RULE-002
+    // Side effects: PRD-RULE-003
+    throw new UnsupportedOperationException("Not implemented yet");
+}
+```
+
+> **Nota:** si el campo `status` es un Enum con transición declarada (`DRAFT → PUBLISHED`),
+> el generador emite la línea de transición **además** de los comentarios de reglas:
+> ```java
+> public Product activate() {
+>     // TODO: implement business logic — ver products-flows.md
+>     // Validate: PRD-RULE-001, PRD-RULE-002
+>     // Side effects: PRD-RULE-003
+>     this.status = this.status.transitionTo(ProductStatus.PUBLISHED);
+> }
+> ```
+
+#### Qué hace el desarrollador en Fase 3
+
+Cada comentario es una guía de implementación. El desarrollador reemplaza el `// TODO`
+con la lógica real, consultando `{bc-name}-flows.md` para los detalles:
+
+```java
+public Product activate() {
+    // PRD-RULE-001: statePrecondition
+    if (this.status != ProductStatus.DRAFT) {
+        throw new ProductCannotBeActivatedError();
+    }
+
+    // PRD-RULE-002: uniqueness — se verifica en el repositorio antes de llamar a activate()
+    // (la verificación del handler llama a productRepository.findBySku() antes de este método)
+
+    // transición de estado
+    this.status = this.status.transitionTo(ProductStatus.PUBLISHED);
+
+    // PRD-RULE-003: sideEffect — notificar al catálogo
+    raise(new ProductActivatedEvent(this.id));
+
+    return this;
+}
 ```
 
 ---
@@ -1604,14 +2041,24 @@ Product product = productRepository.findById(UUID.fromString(command.productId()
 
 ### `lookups` (múltiples cargas)
 
-Para use cases que cargan varios agregados y necesitan errores distintos por cada uno:
+Para use cases que cargan varios agregados y necesitan errores distintos por cada uno.
+
+> **Mecanismos mutuamente excluyentes:**
+>
+> | Escenario | Usar |
+> |---|---|
+> | Cargas **un solo agregado** | `input[].loadAggregate: true` + `notFoundError` |
+> | Cargas **múltiples agregados** con errores distintos | `lookups[]` |
+>
+> Cuando se declara `lookups`, **no se usa `loadAggregate: true` en ningún input ni `notFoundError` en el use case**.
+> El `param` de cada entrada de `lookups` referencia el input por nombre — eso es suficiente para que el generador sepa qué campo cargar.
 
 ```yaml
 - id: UC-ORD-010
   name: AddItemToOrder
   type: command
   lookups:
-    - param: orderId
+    - param: orderId        # ← referencia el input por nombre; NO declarar loadAggregate en input
       aggregate: Order
       errorCode: ORDER_NOT_FOUND
     - param: productId
@@ -1620,6 +2067,20 @@ Para use cases que cargan varios agregados y necesitan errores distintos por cad
     - param: itemId
       nestedIn: Order.items      # busca en una colección hija del agregado
       errorCode: ORDER_ITEM_NOT_FOUND
+  input:
+    - name: orderId
+      type: Uuid
+      source: path
+      required: true
+      # ← sin loadAggregate; lookups[] lo gestiona
+    - name: productId
+      type: Uuid
+      source: body
+      required: true
+    - name: itemId
+      type: Uuid
+      source: body
+      required: true
 ```
 
 | Propiedad | Tipo | Requerido | Descripción |
@@ -1659,9 +2120,8 @@ fkValidations:
 
   - aggregate: Supplier
     param: supplierId
-    bc: suppliers          # BC propietario del repositorio (si es diferente al BC actual)
+    bc: suppliers          # BC propietario (si es diferente al BC actual)
     error: SUPPLIER_NOT_FOUND
-    conditional: categoryId != null   # solo si categoryId fue provisto
 ```
 
 ### Propiedades de `fkValidations`
@@ -1669,48 +2129,137 @@ fkValidations:
 | Propiedad | Tipo | Requerido | Descripción |
 |---|---|---|---|
 | `aggregate` | PascalCase | ✅ | Agregado cuya existencia se verifica. |
-| `param` | camelCase | ✅ | Nombre del input que contiene el ID del agregado a verificar. |
+| `param` | camelCase | ✅ | Nombre del input que contiene el ID a verificar. Alias: `field`. |
 | `error` | SCREAMING_SNAKE | ✅ | Error si el registro no existe. Alias: `notFoundError`. |
-| `bc` | kebab-case | no | BC propietario del repositorio. Si se omite, se asume el BC actual. |
-| `conditional` | expresión Java | no | **Declarado en el schema YAML pero no implementado por el generador.** El campo es aceptado sin error pero no genera ningún `if` condicional en el handler. |
+| `bc` | kebab-case | no | BC propietario. Si se omite (o coincide con el BC actual), se usa el repositorio local. |
 
-**Código Java generado:**
+---
+
+### Cómo decide el generador qué código emitir
+
+El generador evalúa **tres rutas** según el campo `bc` y la presencia de un local read model:
+
+| Condición | Código generado |
+|---|---|
+| `bc` ausente **o** `bc` == BC actual | `{aggregate}Repository.findById().isEmpty()` — repositorio local |
+| `bc` es otro BC **y** existe un agregado con `readModel: true` + `sourceBC: {bc}` + mismo nombre | `{aggregate}Repository.findById().isEmpty()` — repositorio del read model local |
+| `bc` es otro BC **y** no hay local read model | `{BcName}ServicePort.exists{Aggregate}(UUID)` — puerto de salida generado |
+
+---
+
+### Ruta 1 — mismo BC (o `bc` omitido)
+
+El generador inyecta el repositorio local y genera una verificación con `findById().isEmpty()`:
+
+**YAML:**
+```yaml
+fkValidations:
+  - aggregate: Category
+    param: categoryId
+    error: CATEGORY_NOT_FOUND
+```
+
+**Código generado en el handler:**
 ```java
-// fkValidation mismo BC — usa findById().isEmpty()
 if (categoryRepository.findById(UUID.fromString(command.categoryId())).isEmpty()) {
     throw new CategoryNotFoundError();
 }
+```
 
-// fkValidation cross-BC sin local read model — usa ServicePort.exists{Aggregate}(UUID)
+---
+
+### Ruta 2 — BC distinto con local read model
+
+Si el BC actual tiene un agregado con `readModel: true` + `sourceBC: suppliers`, el generador
+lo trata igual que la Ruta 1 — usa el repositorio local del read model, sin ningún puerto de salida.
+
+```yaml
+# En el mismo bc-yaml — declara que tienes una réplica local del agregado externo:
+aggregates:
+  - name: Supplier
+    readModel: true
+    sourceBC: suppliers
+```
+
+El handler generado es idéntico a la Ruta 1 (`supplierRepository.findById(...).isEmpty()`).
+
+---
+
+### Ruta 3 — BC distinto sin local read model
+
+Cuando se declara `bc: suppliers` y **no** existe un local read model, el generador:
+
+1. Genera una interfaz de puerto de salida en `application/ports/SuppliersServicePort.java`
+2. Inyecta el puerto en el handler y llama a `existsSupplier(UUID)`
+
+**YAML:**
+```yaml
+fkValidations:
+  - aggregate: Supplier
+    param: supplierId
+    bc: suppliers
+    error: SUPPLIER_NOT_FOUND
+```
+
+**Puerto de salida generado — `application/ports/SuppliersServicePort.java`:**
+```java
+package com.example.products.application.ports;
+
+import java.util.UUID;
+
+/**
+ * Output port — anti-corruption boundary to the suppliers bounded context.
+ * Implementations live in infrastructure/adapters/suppliers/.
+ */
+public interface SuppliersServicePort {
+
+    /**
+     * Returns true if a Supplier with the given id exists and is active in suppliers.
+     * Used for FK validation before persisting aggregates that reference cross-BC entities.
+     */
+    boolean existsSupplier(UUID id);
+}
+```
+
+**Código generado en el handler:**
+```java
 if (!suppliersServicePort.existsSupplier(UUID.fromString(command.supplierId()))) {
     throw new SupplierNotFoundError();
 }
-// Nota: el campo `conditional` no genera un if-guard. El validador se emite
-// siempre, independientemente de la expresión declarada en el YAML.
 ```
+
+> **Nota sobre `outbound-http` integrations:** si el BC `suppliers` ya está declarado en
+> `integrations[]` con tipo `outbound-http`, el generador de integraciones ya emite un
+> `SuppliersServicePort` unificado. En ese caso `fkValidations` **no** genera un archivo
+> de puerto duplicado — simplemente reutiliza el puerto existente.
 
 ---
 
 ## 15. Propiedad `validations`
 
-Valida condiciones cruzadas entre campos del input que no pueden expresarse con anotaciones
-Jakarta Validation estándar.
+Valida condiciones cruzadas entre campos del input que no pueden expresarse con reglas
+de campo individuales.
 
 **Problema que resuelve:** validaciones como "si `discountType` es `PERCENTAGE`, entonces
-`discountValue` debe estar entre 0 y 100" requieren lógica multi-campo que Bean Validation
-no soporta directamente.
+`discountValue` debe estar entre 0 y 100" requieren lógica multi-campo que una validación
+por campo no puede expresar.
+
+> **Los artefactos de diseño son agnósticos a la tecnología.** El campo `expression`
+> describe la regla en **lenguaje de negocio**, no en código Java. El generador emite
+> siempre un `// TODO` que el desarrollador de Fase 3 implementa en el lenguaje de la
+> plataforma.
 
 ```yaml
 validations:
   - id: VAL-001
-    expression: "command.discountValue() <= 100 || !DiscountType.PERCENTAGE.equals(command.discountType())"
+    expression: "discountValue must be between 0 and 100 when discountType is PERCENTAGE"
     errorCode: INVALID_PERCENTAGE_DISCOUNT
-    description: When discount type is PERCENTAGE, value must be between 0 and 100.
+    description: Percentage discounts must be expressed as a value from 0 to 100.
 
   - id: VAL-002
-    expression: "command.startDate().isBefore(command.endDate())"
+    expression: "startDate must be before endDate"
     errorCode: INVALID_DATE_RANGE
-    description: Start date must be before end date.
+    description: The promotion window must have a positive duration.
 ```
 
 ### Propiedades de `validations`
@@ -1718,21 +2267,20 @@ validations:
 | Propiedad | Tipo | Requerido | Descripción |
 |---|---|---|---|
 | `id` | camelCase o string | ✅ | Identificador único dentro del use case. |
-| `expression` | expresión Java | ✅ | Condición que debe ser `true` para que la operación sea válida. Se evalúa sobre el objeto `command`. |
-| `errorCode` | SCREAMING_SNAKE | ✅ | Error a lanzar si la expresión es `false`. Debe existir en `errors[]`. |
+| `expression` | lenguaje natural | ✅ | Descripción de negocio de la condición que debe cumplirse. Sin código Java. |
+| `errorCode` | SCREAMING_SNAKE | ✅ | Error a lanzar si la condición no se cumple. Debe existir en `errors[]`. |
 | `description` | texto | no | Solo referencia. |
 
-**Código Java generado** en el handler:
+**Código generado** en el handler:
 ```java
-// [G20] cross-field validation VAL-001
-if (!(command.discountValue() <= 100 || !DiscountType.PERCENTAGE.equals(command.discountType()))) {
-    throw new InvalidPercentageDiscountError();
-}
+// [G20] cross-field validations — derived_from useCases[UC-PRD-004].validations[]
+// TODO useCase(UC-PRD-004, validations[VAL-001]): enforce expression
+//   `discountValue must be between 0 and 100 when discountType is PERCENTAGE`
+//   and throw new InvalidPercentageDiscountError() on violation.
 
-// [G20] cross-field validation VAL-002
-if (!(command.startDate().isBefore(command.endDate()))) {
-    throw new InvalidDateRangeError();
-}
+// TODO useCase(UC-PRD-004, validations[VAL-002]): enforce expression
+//   `startDate must be before endDate`
+//   and throw new InvalidDateRangeError() on violation.
 ```
 
 ---

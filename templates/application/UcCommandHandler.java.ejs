@@ -76,13 +76,8 @@ public class <%= useCaseName %>CommandHandler implements <% if (returnType) { %>
     public <%= returnType ? returnType : 'void' %> handle(<%= useCaseName %>Command command) {
 <% if (validations && validations.length > 0) { %>
         // [G20] cross-field validations — derived_from useCases[<%= useCaseId %>].validations[]
-<% validations.forEach(function(v) { %><% if (v.throwable && v.errorClass) { %>        // derived_from: validations[<%= v.id %>] — errors[<%= v.errorCode %>]
-        if (!(<%- v.expression %>)) {
-            throw new <%= v.errorClass %>();
-        }
-<% } else { %>        // TODO useCase(<%= useCaseId %>, validations[<%= v.id %>]): enforce expression `<%= v.expression %>` and throw <%= v.errorClass ? 'new ' + v.errorClass + '()' : 'the exception bound to errorCode "' + v.errorCode + '"' %> on violation.<% if (v.description && v.description.trim()) { %> // <%- v.description.trim() %><% } %>
-
-<% } %><% }); %><% } %><% if (implementation === 'scaffold') { %>
+<% validations.forEach(function(v) { %>        // TODO useCase(<%= useCaseId %>, validations[<%= v.id %>]): enforce `<%= v.expression %>` and throw <%= v.errorClass ? 'new ' + v.errorClass + '()' : 'the exception bound to errorCode "' + v.errorCode + '"' %> on violation.<% if (v.description && v.description.trim()) { %> // <%- v.description.trim() %><% } %>
+<% }); %><% } %><% if (implementation === 'scaffold') { %>
 <% if (authContextFields && authContextFields.length > 0) { %>
 <% authContextFields.forEach(function(f) { %>        // TODO (authContext): inject <%- f.javaType %> <%- f.name %> from SecurityContextHolder.getContext().getAuthentication()
 <% }); %><% } %>

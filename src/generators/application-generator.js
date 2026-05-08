@@ -131,25 +131,10 @@ function additionalLookups(uc) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// [Phase 3, Gap E9] Decorate UC `validations[]` entries with metadata that
-// lets the Java template emit either a real throw (when the expression is a
-// recognizable Java boolean predicate) or an enriched TODO that nominates the
-// concrete error class for copy/paste. No inference: a malformed expression
-// stays as a TODO.
-//
-// Heuristic — an expression is treated as Java when it contains any of:
-//   ==  !=  <=  >=  <  >  &&  ||  leading !
-// (the same family already used for trigger.event filter expressions).
+// Decorate UC `validations[]` entries with the resolved error class name.
+// `expression` is always natural language (design-time, technology-agnostic).
+// The generator always emits a // TODO — Fase 3 implements the predicate in Java.
 // ─────────────────────────────────────────────────────────────────────────────
-function looksLikeJavaBoolean(expr) {
-  if (!expr || typeof expr !== 'string') return false;
-  const trimmed = expr.trim();
-  if (!trimmed) return false;
-  return /==|!=|<=|>=|&&|\|\||(^|[^a-zA-Z0-9_])(true|false)(?![a-zA-Z0-9_])/.test(trimmed)
-      || /[<>]/.test(trimmed)
-      || /^!\s*[a-zA-Z(]/.test(trimmed);
-}
-
 function enrichValidations(validations, errorMap) {
   if (!Array.isArray(validations)) return [];
   return validations.map((v) => {
@@ -158,17 +143,15 @@ function enrichValidations(validations, errorMap) {
     return {
       ...v,
       errorClass,
-      throwable: errorClass != null && looksLikeJavaBoolean(v.expression),
     };
   });
 }
 
-// Collects FQNs of error classes that the handler must import because
-// `enrichValidations` flagged the entry as throwable.
+// Collects FQNs of error classes that the handler must import.
 function validationErrorImports(enriched, packageName, moduleName) {
   const out = new Set();
   for (const v of enriched) {
-    if (v.throwable && v.errorClass) {
+    if (v.errorClass) {
       out.add(`${packageName}.${moduleName}.domain.errors.${v.errorClass}`);
     }
   }
