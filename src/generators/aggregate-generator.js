@@ -314,7 +314,7 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
   let rulesComment = '';
   if (validateRules.length > 0) rulesComment += `\n        // Validate: ${validateRules.join(', ')}`;
   if (sideEffectRules.length > 0) rulesComment += `\n        // Side effects: ${sideEffectRules.join(', ')}`;
-  const scaffoldBody = `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}`;
+  const scaffoldBody = `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}\n        throw new UnsupportedOperationException("Not implemented yet");`;
 
   const { name: methodName, params } = sig;
 

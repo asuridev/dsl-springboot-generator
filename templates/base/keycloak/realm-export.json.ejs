@@ -1,0 +1,158 @@
+{
+  "id": "<%= realmName %>",
+  "realm": "<%= realmName %>",
+  "displayName": "<%= realmName %>",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": false,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "editUsernameAllowed": false,
+  "accessTokenLifespan": 300,
+  "ssoSessionMaxLifespan": 36000,
+
+  "roles": {
+    "realm": [
+<% realmRoles.forEach(function(role, i) { %>      {
+        "id": "<%= role %>",
+        "name": "<%= role %>",
+        "composite": false,
+        "clientRole": false,
+        "containerId": "<%= realmName %>"
+      }<%= i < realmRoles.length - 1 ? ',' : '' %>
+<% }); %>    ],
+    "client": {
+      "<%= publicClientId %>": [
+<% clientRoles.forEach(function(role, i) { %>        {
+          "id": "<%= role %>",
+          "name": "<%= role %>",
+          "composite": false,
+          "clientRole": true,
+          "containerId": "<%= publicClientId %>"
+        }<%= i < clientRoles.length - 1 ? ',' : '' %>
+<% }); %>      ]
+    }
+  },
+
+  "clients": [
+    {
+      "clientId": "<%= publicClientId %>",
+      "name": "<%= publicClientId %>",
+      "description": "Public client — Authorization Code + PKCE. Use for Postman / browser testing.",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "redirectUris": ["*"],
+      "webOrigins": ["*"],
+      "defaultClientScopes": ["openid", "profile", "email"],
+      "optionalClientScopes": [<% clientScopes.forEach(function(scope, i) { %>"<%= scope %>"<%= i < clientScopes.length - 1 ? ', ' : '' %><% }); %>],
+      "protocolMappers": [
+        {
+          "name": "permissions-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "permissions",
+            "jsonType.label": "String",
+            "usermodel.clientRoleMapping.clientId": "<%= publicClientId %>"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "<%= confidentialClientId %>",
+      "name": "<%= confidentialClientId %>",
+      "description": "Confidential client — Client Credentials. Use for M2M / automated tests.",
+      "enabled": true,
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": true,
+      "secret": "<%= confidentialClientSecret %>",
+      "redirectUris": [],
+      "webOrigins": [],
+      "defaultClientScopes": ["openid", "profile", "email"],
+      "optionalClientScopes": [],
+      "protocolMappers": [
+        {
+          "name": "permissions-mapper",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-client-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "permissions",
+            "jsonType.label": "String",
+            "usermodel.clientRoleMapping.clientId": "<%= publicClientId %>"
+          }
+        }
+      ]
+    }
+  ],
+
+  "clientScopes": [
+<% clientScopes.forEach(function(scope, i) { %>    {
+      "name": "<%= scope %>",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true",
+        "display.on.consent.screen": "true"
+      },
+      "protocolMappers": [
+        {
+          "name": "<%= scope %>-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "<%= publicClientId %>",
+            "id.token.claim": "false",
+            "access.token.claim": "true"
+          }
+        }
+      ]
+    }<%= i < clientScopes.length - 1 ? ',' : '' %>
+<% }); %>  ],
+
+  "users": [
+<% testUsers.forEach(function(user, i) { %>    {
+      "username": "<%= user.username %>",
+      "enabled": true,
+      "emailVerified": true,
+      "email": "<%= user.username %>@example.com",
+      "firstName": "<%= user.username %>",
+      "lastName": "Test",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "<%= user.password %>",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [<% user.realmRoles.forEach(function(r, ri) { %>"<%= r %>"<%= ri < user.realmRoles.length - 1 ? ', ' : '' %><% }); %>],
+      "clientRoles": {
+        "<%= publicClientId %>": [<% user.clientRoles.forEach(function(r, ri) { %>"<%= r %>"<%= ri < user.clientRoles.length - 1 ? ', ' : '' %><% }); %>]
+      }
+    },
+<% }); %>    {
+      "username": "service-account-<%= confidentialClientId %>",
+      "enabled": true,
+      "serviceAccountClientId": "<%= confidentialClientId %>",
+      "realmRoles": [<% realmRoles.forEach(function(r, i) { %>"<%= r %>"<%= i < realmRoles.length - 1 ? ', ' : '' %><% }); %>],
+      "clientRoles": {
+        "<%= publicClientId %>": [<% clientRoles.forEach(function(r, i) { %>"<%= r %>"<%= i < clientRoles.length - 1 ? ', ' : '' %><% }); %>]
+      }
+    }
+  ]
+}

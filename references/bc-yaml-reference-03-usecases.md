@@ -803,6 +803,102 @@ authorization block — authorization will be ignored for this endpoint.
 
 ---
 
+### 6.6 Obtener un access token para pruebas (Keycloak)
+
+El generador produce dos clientes Keycloak cuyo `clientId` se deriva del `systemName` configurado en `dsl-springboot.json`:
+
+| Cliente | Tipo | Uso |
+|---|---|---|
+| `{systemName}-app` | Público | Usuarios humanos — Password Grant (Postman, curl) |
+| `{systemName}-service` | Confidencial | M2M — Client Credentials (servicios, tests automatizados) |
+
+Y un usuario de prueba por cada `actor` declarado en los use cases: contraseña = `{actor}123`.
+
+#### Password Grant — usuario de prueba (cliente público)
+
+```bash
+# actor: admin
+curl -s -X POST \
+  http://localhost:8180/realms/{systemName}/protocol/openid-connect/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=password" \
+  -d "client_id={systemName}-app" \
+  -d "username=admin" \
+  -d "password=admin123"
+
+# actor: customer
+curl -s -X POST \
+  http://localhost:8180/realms/{systemName}/protocol/openid-connect/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=password" \
+  -d "client_id={systemName}-app" \
+  -d "username=customer" \
+  -d "password=customer123"
+```
+
+#### Client Credentials — M2M (cliente confidencial)
+
+```bash
+curl -s -X POST \
+  http://localhost:8180/realms/{systemName}/protocol/openid-connect/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials" \
+  -d "client_id={systemName}-service" \
+  -d "client_secret={systemName}-secret"
+```
+
+> El `client_secret` se genera como `{systemName}-secret`. Se puede cambiar en la consola de Keycloak en `Clients → {systemName}-service → Credentials`.
+
+#### Ejemplo real — `systemName: "test-auth-keycloak-system"`
+
+```bash
+# Token de admin
+curl -s -X POST \
+  http://localhost:8180/realms/test-auth-keycloak-system/protocol/openid-connect/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=password" \
+  -d "client_id=test-auth-keycloak-system-app" \
+  -d "username=admin" \
+  -d "password=admin123"
+
+# Token M2M
+curl -s -X POST \
+  http://localhost:8180/realms/test-auth-keycloak-system/protocol/openid-connect/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials" \
+  -d "client_id=test-auth-keycloak-system-service" \
+  -d "client_secret=test-auth-keycloak-system-secret"
+```
+
+#### Usar el token en requests a la API
+
+```bash
+# bash — extraer y reutilizar el token
+TOKEN=$(curl -s -X POST \
+  http://localhost:8180/realms/test-auth-keycloak-system/protocol/openid-connect/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=password" \
+  -d "client_id=test-auth-keycloak-system-app" \
+  -d "username=admin" \
+  -d "password=admin123" | jq -r '.access_token')
+
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/products
+```
+
+```powershell
+# PowerShell
+$TOKEN = (Invoke-RestMethod -Method Post `
+  -Uri "http://localhost:8180/realms/test-auth-keycloak-system/protocol/openid-connect/token" `
+  -ContentType "application/x-www-form-urlencoded" `
+  -Body "grant_type=password&client_id=test-auth-keycloak-system-app&username=admin&password=admin123"
+).access_token
+
+Invoke-RestMethod -Uri "http://localhost:8080/api/v1/products" `
+  -Headers @{ Authorization = "Bearer $TOKEN" }
+```
+
+---
+
 ## 7. Bloque `pagination`
 
 Habilita la paginación de resultados en queries de tipo lista.

@@ -76,7 +76,7 @@ function validateProperties(properties, context, enums = []) {
         }
       } else if (enumNames.has(typeBase)) {
         const enumDef = (enums || []).find((e) => e.name === typeBase);
-        const validValues = (enumDef?.values || []).map((v) => (typeof v === 'object' ? v.value : v));
+        const validValues = (enumDef?.values || []).map((v) => (typeof v === 'object' ? v.name : v));
         if (!validValues.includes(dv)) {
           fail(`Property "${prop.name}" in ${context}: defaultValue "${dv}" is not a valid value of enum ${typeBase}. Valid values: ${validValues.join(', ')}.`);
         }

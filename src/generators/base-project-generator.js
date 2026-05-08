@@ -490,10 +490,11 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
 
     // auth-server.yaml (only when an inbound auth provider is configured)
     if (authServerEnabled) {
+      const realmName = systemName.toLowerCase().replace(/[_\s]/g, '-');
       await renderAndWrite(
         path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'auth-server.yaml.ejs'),
         path.join(paramDir, 'auth-server.yaml'),
-        { env, authProviderMeta }
+        { env, authProviderMeta, realmName }
       );
     }
 

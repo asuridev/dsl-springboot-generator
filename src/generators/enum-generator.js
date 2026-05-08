@@ -31,8 +31,8 @@ async function generateEnums(bcYaml, config, outputDir) {
     if (hasTransitionsInValues) {
       for (const valueObj of enumDef.values) {
         for (const t of valueObj.transitions || []) {
-          if (t && t.to) {
-            transitions.push({ from: valueObj.value, to: t.to });
+          if (t) {
+            transitions.push({ from: valueObj.name, to: t });
           }
         }
       }
@@ -43,7 +43,7 @@ async function generateEnums(bcYaml, config, outputDir) {
       bc,
       name: enumDef.name,
       description: enumDef.description || '',
-      values: enumDef.values.map((v) => v.value),
+      values: enumDef.values.map((v) => v.name),
       hasTransitions: transitions.length > 0,
       transitions,
     };

@@ -9,6 +9,7 @@ const { configExists, readConfig, writeConfig, loadParameters } = require('../ut
 const { readSystemYaml, validateArchDirectory } = require('../utils/system-yaml-reader');
 const { generateBaseProject, generateBrokerTopologyYaml } = require('../generators/base-project-generator');
 const { generateDockerFiles } = require('../generators/docker-generator');
+const { generateKeycloakRealm } = require('../generators/keycloak-realm-generator');
 const { generateEnums } = require('../generators/enum-generator');
 const { generateValueObjects, generateEventDtos } = require('../generators/value-object-generator');
 const { generateAggregates } = require('../generators/aggregate-generator');
@@ -328,6 +329,18 @@ async function buildCommand(options = {}) {
     } catch (err) {
       dockerSpinner.fail(`Docker generation failed: ${err.message}`);
       throw err;
+    }
+
+    // ── 5.5 Keycloak realm export ─────────────────────────────────────────────
+    if (resolvedConfig.authProvider === 'keycloak') {
+      const keycloakSpinner = ora('Generating Keycloak realm export…').start();
+      try {
+        await generateKeycloakRealm(allBcYamls, resolvedConfig, outputDir);
+        keycloakSpinner.succeed('Keycloak realm export generated → keycloak/realm-export.json');
+      } catch (err) {
+        keycloakSpinner.fail(`Keycloak realm export generation failed: ${err.message}`);
+        throw err;
+      }
     }
 
     // ── 6. Per-BC domain layer generation (SP-3) ───────────────────────────
