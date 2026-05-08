@@ -86,6 +86,7 @@ useCases:
 | `type` | `command` \| `query` | ✅ | Determina si el UC modifica estado o solo lo consulta. |
 | `actor` | string | no | Actor que desencadena el UC. Si `system.yaml` declara `actors[]`, debe ser uno de los declarados (validación G14). |
 | `description` | texto | no | Solo referencia. |
+| `public` | boolean | no | Si `true`, el endpoint no requiere JWT ni verificación de identidad. El path se añade a `permitAll()` en `SecurityConfig` y se omite `@PreAuthorize`. Solo válido para `trigger.kind: http`. Default: `false`. |
 | `aggregate` | PascalCase | no | Agregado principal del UC. Requerido para comandos que declaran `method`. |
 | `method` | camelCase | no | Método del dominio a invocar. Debe declararse en `aggregates[].domainMethods`. |
 
@@ -744,6 +745,64 @@ private Collection<GrantedAuthority> extractAuthorities(Jwt jwt) {
 
 ---
 
+### 6.5 Propiedad `public`
+
+Marca el endpoint del use case como **completamente público**: no requiere JWT ni ninguna
+verificación de identidad. Cualquier cliente puede llamarlo sin token.
+
+```yaml
+- id: UC-PRD-010
+  name: GetProductById
+  type: query
+  public: true
+  trigger:
+    kind: http
+    operationId: getProductById
+  # sin bloque authorization
+```
+
+| Propiedad | Tipo | Requerido | Descripción |
+|---|---|---|---|
+| `public` | boolean | no | Si `true`, el endpoint no requiere JWT. Se añade el path a `permitAll()` en `SecurityConfig` y se omite `@PreAuthorize`. Solo válido para `trigger.kind: http`. Default: `false`. |
+
+**Efectos en el código generado:**
+
+1. **`SecurityConfig.java`** — el path del endpoint se añade automáticamente al bloque `permitAll()`:
+```java
+.requestMatchers(
+    "/actuator/health/**",
+    "/swagger-ui/**",
+    "/api-docs/**",
+    "/api/v1/products/*"    // ← derivado de getProductById (public: true); {pathVar} → *
+).permitAll()
+```
+
+2. **Controller** — no se emite `@PreAuthorize`:
+```java
+// Sin @PreAuthorize — cualquier cliente puede llamar a este endpoint sin token
+@GetMapping("/products/{productId}")
+public ProductDetail getProductById(@PathVariable String productId) { ... }
+```
+
+**Interacción con `authorization`:**
+
+Si un use case declara `public: true` y también un bloque `authorization`, el generador
+emite una advertencia en build y `public: true` tiene **precedencia**: no se genera
+`@PreAuthorize` y el path se añade a `permitAll()`. El bloque `authorization` es ignorado
+por completo.
+
+```
+[bc-yaml-reader] Warning: Use case "GetProductById" declares public: true with an
+authorization block — authorization will be ignored for this endpoint.
+```
+
+**Restricciones:**
+- Solo válido para use cases con `trigger.kind: http`. En `trigger.kind: event`, el campo no tiene efecto (no hay endpoint HTTP que proteger).
+- El valor debe ser un booleano (`true` o `false`). Cualquier otro tipo causa error de validación en build.
+- No reemplaza la necesidad de configurar `authProvider` en `dsl-springboot.json`. La `SecurityConfig` sigue existiendo; `public: true` solo añade excepciones a ella.
+
+---
+
 ## 7. Bloque `pagination`
 
 Habilita la paginación de resultados en queries de tipo lista.
@@ -846,8 +905,47 @@ recibe `409 Conflict` en lugar de ejecutarse dos veces.
 | Propiedad | Tipo | Requerido | Descripción |
 |---|---|---|---|
 | `header` | string | ✅ | Nombre del header HTTP (e.g. `Idempotency-Key`). |
-| `ttl` | ISO-8601 duration | ✅ | Tiempo de retención de la clave. Ejemplos: `PT1H`, `P1D`, `PT24H`. |
+| `ttl` | ISO-8601 duration | ✅ | Tiempo de retención de la clave. Ejemplos: `PT1H`, `P1D`, `PT24H`. Ver detalle abajo. |
 | `storage` | `cache` | ✅ | Siempre `cache`. El proveedor concreto (Redis o Valkey) se configura en `dsl-springboot.json`. Ver nota de migración abajo. |
+
+### Formato del campo `ttl` — ISO-8601 Duration
+
+El valor es una **duración ISO-8601**, no un timestamp ni una fecha. El formato es:
+
+```
+P[nY][nM][nD][T[nH][nM][nS]]
+│                │
+│                └── T separa la parte de fecha de la parte de tiempo
+└── P es el prefijo obligatorio ("Period")
+```
+
+| Componente | Significado | Ejemplo |
+|---|---|---|
+| `P` | Prefijo obligatorio | siempre presente |
+| `nD` | días | `P7D` = 7 días |
+| `T` | separador — obligatorio antes de horas, minutos o segundos | |
+| `nH` | horas | `PT2H` = 2 horas |
+| `nM` | minutos | `PT30M` = 30 minutos |
+| `nS` | segundos | `PT90S` = 90 segundos |
+
+Los componentes se combinan libremente:
+
+| Valor YAML | Duración resultante |
+|---|---|
+| `PT1H` | 1 hora |
+| `PT24H` | 24 horas (equivale a `P1D`) |
+| `PT30M` | 30 minutos |
+| `P1D` | 1 día |
+| `P7D` | 7 días |
+| `PT1H30M` | 1 hora y 30 minutos |
+| `P1DT12H` | 1 día y 12 horas |
+
+> **Recomendación práctica:** usa `PT24H` para operaciones de negocio estándar (órdenes,
+> pagos). Usa valores más cortos (`PT1H`, `PT30M`) para operaciones de alta frecuencia
+> donde el riesgo de colisión de key es mayor. El TTL define el tiempo durante el cual
+> un cliente puede reintentar con la misma `Idempotency-Key` y recibir la respuesta
+> original en lugar de ejecutar la operación de nuevo. Pasado el TTL, la key desaparece
+> de Redis y el mismo valor se trata como una nueva operación.
 
 > **Restricción:** solo válido en use cases de `type: command`.
 
@@ -998,6 +1096,51 @@ implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 
 > **Sin migración Flyway:** la idempotencia basada en caché no genera ninguna tabla
 > SQL ni migración Flyway. Todo el estado se almacena en Redis/Valkey con TTL nativo.
+
+### Notas de compatibilidad — `IdempotencyFilter`
+
+#### Import de `RequestMappingHandlerMapping`
+
+La clase `RequestMappingHandlerMapping` pertenece al paquete
+`org.springframework.web.servlet.mvc.method.annotation`, **no** a
+`org.springframework.web.servlet.handler`. El template genera el import correcto:
+
+```java
+// correcto
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
+
+// incorrecto (causa "cannot find symbol" en compilación)
+import org.springframework.web.servlet.handler.RequestMappingHandlerMapping;
+```
+
+#### Ambigüedad de bean con `spring-boot-starter-actuator`
+
+Cuando `spring-boot-starter-actuator` está en el classpath, Spring Boot registra un
+segundo bean de tipo `RequestMappingHandlerMapping` — `controllerEndpointHandlerMapping`
+— para sus propios endpoints (`/actuator/health`, etc.). Sin calificación explícita,
+Spring no puede resolver cuál de los dos inyectar y falla en startup con:
+
+```
+Parameter 1 of constructor in IdempotencyFilter required a single bean, but 2 were found:
+  - requestMappingHandlerMapping
+  - controllerEndpointHandlerMapping
+```
+
+El template genera `@Qualifier("requestMappingHandlerMapping")` en el constructor para
+forzar el bean del MVC principal:
+
+```java
+import org.springframework.beans.factory.annotation.Qualifier;
+
+public IdempotencyFilter(IdempotencyStore store,
+        @Qualifier("requestMappingHandlerMapping") RequestMappingHandlerMapping handlerMapping) {
+    this.store = store;
+    this.handlerMapping = handlerMapping;
+}
+```
+
+El bean `requestMappingHandlerMapping` es el único que tiene registradas las anotaciones
+`@Idempotent` de los controllers de dominio.
 
 ---
 

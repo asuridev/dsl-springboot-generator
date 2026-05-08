@@ -10,12 +10,13 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.HexFormat;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.web.method.HandlerMethod;
 import org.springframework.web.servlet.HandlerExecutionChain;
-import org.springframework.web.servlet.handler.RequestMappingHandlerMapping;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 import org.springframework.web.util.ContentCachingRequestWrapper;
 import org.springframework.web.util.ContentCachingResponseWrapper;
 
@@ -39,7 +40,7 @@ public class IdempotencyFilter extends OncePerRequestFilter {
     private final IdempotencyStore store;
     private final RequestMappingHandlerMapping handlerMapping;
 
-    public IdempotencyFilter(IdempotencyStore store, RequestMappingHandlerMapping handlerMapping) {
+    public IdempotencyFilter(IdempotencyStore store, @Qualifier("requestMappingHandlerMapping") RequestMappingHandlerMapping handlerMapping) {
         this.store = store;
         this.handlerMapping = handlerMapping;
     }
