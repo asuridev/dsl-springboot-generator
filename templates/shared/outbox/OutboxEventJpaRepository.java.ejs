@@ -3,8 +3,16 @@ package <%= packageName %>.shared.infrastructure.outbox;
 
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+<% if (purgeEnabled) { %>
+import org.springframework.data.jpa.repository.Modifying;
+<% } %>
 import org.springframework.data.jpa.repository.Query;
-
+<% if (purgeEnabled) { %>
+import org.springframework.data.repository.query.Param;
+<% } %>
+<% if (purgeEnabled) { %>
+import java.time.Instant;
+<% } %>
 import java.util.List;
 import java.util.UUID;
 
@@ -16,4 +24,15 @@ public interface OutboxEventJpaRepository extends JpaRepository<OutboxEventJpa, 
      */
     @Query("select o from OutboxEventJpa o where o.publishedAt is null order by o.createdAt asc")
     List<OutboxEventJpa> findPending(Pageable pageable);
+<% if (purgeEnabled) { %>
+    /**
+     * Deletes all published rows older than {@code cutoff}.
+     * Called by {@link OutboxRelay#purge()} on a scheduled basis.
+     *
+     * @return number of rows deleted
+     */
+    @Modifying
+    @Query("delete from OutboxEventJpa o where o.publishedAt is not null and o.publishedAt < :cutoff")
+    int deletePublishedBefore(@Param("cutoff") Instant cutoff);
+<% } %>
 }

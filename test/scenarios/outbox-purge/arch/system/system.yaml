@@ -1,0 +1,38 @@
+system:
+  name: test-outbox-purge-system
+  description: Test system verifying outboxRetentionDays generates purge job.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products and publishes lifecycle events.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+  - name: inventory
+    type: supporting
+    purpose: Maintains stock levels. Reacts to catalog events.
+    aggregates:
+      - name: InventoryItem
+        root: InventoryItem
+        entities: []
+
+integrations:
+  - from: catalog
+    to: inventory
+    pattern: event
+    channel: message-broker
+    contracts:
+      - name: ProductActivated
+        channel: catalog.product.activated
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc
+  reliability:
+    outbox: true
+    outboxRetentionDays: 7

@@ -26,6 +26,10 @@ async function generateOutboxArtifacts(system, config, outputDir) {
   const outboxEnabled = !!reliability.outbox;
   const idempotencyEnabled = !!reliability.consumerIdempotency;
 
+  const outboxRetentionDays = typeof reliability.outboxRetentionDays === 'number' ? reliability.outboxRetentionDays : null;
+  const purgeEnabled = outboxRetentionDays !== null && outboxRetentionDays >= 1;
+  const retentionDays = purgeEnabled ? outboxRetentionDays : 7;
+
   if (!outboxEnabled && !idempotencyEnabled) {
     return { outboxEnabled: false, idempotencyEnabled: false, sqlGenerated: false };
   }
@@ -48,7 +52,7 @@ async function generateOutboxArtifacts(system, config, outputDir) {
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'shared', 'outbox', 'OutboxEventJpaRepository.java.ejs'),
       path.join(outboxDir, 'OutboxEventJpaRepository.java'),
-      { packageName }
+      { packageName, purgeEnabled, retentionDays }
     );
 
     const relayTemplate = config.broker === 'kafka'
@@ -57,7 +61,7 @@ async function generateOutboxArtifacts(system, config, outputDir) {
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'shared', 'outbox', relayTemplate),
       path.join(outboxDir, 'OutboxRelay.java'),
-      { packageName }
+      { packageName, purgeEnabled, retentionDays }
     );
   }
 

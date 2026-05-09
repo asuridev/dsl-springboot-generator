@@ -1,0 +1,29 @@
+{
+  "src/main/java/com/test/shared/infrastructure/outbox/OutboxRelay.java": {
+    "_comment": "outboxRetentionDays: 7 must emit purge() with @Scheduled(cron), ChronoUnit, @Value retention-days, and deletePublishedBefore call.",
+    "contains": [
+      "KafkaTemplate",
+      "OutboxEventJpaRepository",
+      "purge",
+      "deletePublishedBefore",
+      "ChronoUnit",
+      "outbox.purge.cron",
+      "outbox.purge.retention-days:7",
+      "retentionDays"
+    ],
+    "notContains": [
+      "RabbitTemplate"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/outbox/OutboxEventJpaRepository.java": {
+    "_comment": "outboxRetentionDays: 7 must emit deletePublishedBefore with @Modifying and @Param.",
+    "contains": [
+      "deletePublishedBefore",
+      "@Modifying",
+      "@Param",
+      "Instant cutoff",
+      "publishedAt is not null and o.publishedAt < :cutoff"
+    ]
+  }
+}

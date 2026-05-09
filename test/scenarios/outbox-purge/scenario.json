@@ -1,0 +1,4 @@
+{
+  "description": "outbox: true + outboxRetentionDays: 7 must emit purge() in OutboxRelay and deletePublishedBefore() in OutboxEventJpaRepository. Broker: kafka.",
+  "expectFailure": false
+}

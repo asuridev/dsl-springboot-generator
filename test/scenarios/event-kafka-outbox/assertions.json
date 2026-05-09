@@ -55,13 +55,16 @@
   },
 
   "src/main/java/com/test/shared/infrastructure/outbox/OutboxRelay.java": {
-    "_comment": "OutboxRelay debe ser la variante Kafka (usa KafkaTemplate, no RabbitTemplate).",
+    "_comment": "OutboxRelay debe ser la variante Kafka (usa KafkaTemplate, no RabbitTemplate). Sin outboxRetentionDays no debe generarse purge.",
     "contains": [
       "KafkaTemplate",
       "OutboxEventJpaRepository"
     ],
     "notContains": [
-      "RabbitTemplate"
+      "RabbitTemplate",
+      "purge",
+      "deletePublishedBefore",
+      "ChronoUnit"
     ]
   }
 }
