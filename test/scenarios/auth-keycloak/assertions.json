@@ -15,8 +15,8 @@
   },
   "src/main/resources/parameters/local/auth-server.yaml": {
     "contains": [
-      "localhost:8180/realms/my-realm/protocol/openid-connect/certs",
-      "localhost:8180/realms/my-realm"
+      "localhost:8180/realms/test-auth-keycloak-system/protocol/openid-connect/certs",
+      "localhost:8180/realms/test-auth-keycloak-system"
     ],
     "notContains": [
       "localhost:8080"

@@ -32,7 +32,9 @@ async function generateEnums(bcYaml, config, outputDir) {
       for (const valueObj of enumDef.values) {
         for (const t of valueObj.transitions || []) {
           if (t) {
-            transitions.push({ from: valueObj.name, to: t });
+            const fromValue = valueObj.value || valueObj.name;
+            const toValue = typeof t === 'string' ? t : t.to;
+            transitions.push({ from: fromValue, to: toValue });
           }
         }
       }
@@ -43,7 +45,7 @@ async function generateEnums(bcYaml, config, outputDir) {
       bc,
       name: enumDef.name,
       description: enumDef.description || '',
-      values: enumDef.values.map((v) => v.name),
+      values: enumDef.values.map((v) => v.value || v.name),
       hasTransitions: transitions.length > 0,
       transitions,
     };
