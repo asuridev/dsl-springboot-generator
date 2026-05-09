@@ -1,0 +1,6 @@
+openapi: "3.0.3"
+info:
+  title: Catalog API
+  version: "1.0.0"
+  description: Minimal OpenAPI for consumer-idempotency test — no public endpoints.
+paths: {}

@@ -60,6 +60,7 @@ infrastructure:
   messageBroker: true    # flag: el sistema usa mensajería asíncrona
   reliability:
     outbox: true
+    outboxRetentionDays: 7   # opcional — días de retención para filas publicadas
 ```
 
 La propiedad que controla todo es `system.infrastructure.reliability.outbox: true`.
@@ -71,6 +72,29 @@ const outboxEnabled = !!reliability.outbox;
 
 No existe ninguna propiedad en el `{bc}.yaml` que controle el outbox — la decisión
 es a nivel de sistema, no de BC.
+
+### `outboxRetentionDays` — purga de filas publicadas
+
+`outboxRetentionDays` es un entero ≥ 1 **opcional**. Cuando está presente, el generador
+añade al `OutboxRelay` un método `purge()` programado que elimina las filas con
+`published_at IS NOT NULL` más antiguas que el umbral. También añade
+`deletePublishedBefore()` al repositorio.
+
+Cuando está ausente o es menor que 1, **no se genera ningún código de purga**;
+la tabla `outbox_event` crece indefinidamente (ver [§8](#8-limitaciones-conocidas-del-generador)).
+
+El generador deriva internamente:
+
+```js
+const outboxRetentionDays = typeof reliability.outboxRetentionDays === 'number'
+    ? reliability.outboxRetentionDays : null;
+const purgeEnabled = outboxRetentionDays !== null && outboxRetentionDays >= 1;
+const retentionDays = purgeEnabled ? outboxRetentionDays : 7;  // valor de respaldo para el default del @Value
+```
+
+`retentionDays` se usa como **valor por defecto** del `@Value` en el relay:
+`${outbox.purge.retention-days:<retentionDays>}`. Puede sobreescribirse en
+`application.yaml` sin regenear código.
 
 ---
 
@@ -248,6 +272,8 @@ public class OutboxEventJpa {
 **Ruta:** `src/main/java/{pkg}/shared/infrastructure/outbox/OutboxEventJpaRepository.java`
 **Template:** `templates/shared/outbox/OutboxEventJpaRepository.java.ejs`
 
+#### Sin `outboxRetentionDays`
+
 ```java
 public interface OutboxEventJpaRepository extends JpaRepository<OutboxEventJpa, UUID> {
 
@@ -261,6 +287,32 @@ Solo tiene un método custom. El relay pasa `PageRequest.of(0, BATCH_SIZE)` dond
 
 ```sql
 SELECT * FROM outbox_event WHERE published_at IS NULL ORDER BY created_at ASC LIMIT 100;
+```
+
+#### Con `outboxRetentionDays` (purge habilitado)
+
+```java
+public interface OutboxEventJpaRepository extends JpaRepository<OutboxEventJpa, UUID> {
+
+    @Query("select o from OutboxEventJpa o where o.publishedAt is null order by o.createdAt asc")
+    List<OutboxEventJpa> findPending(Pageable pageable);
+
+    @Modifying
+    @Query("delete from OutboxEventJpa o where o.publishedAt is not null and o.publishedAt < :cutoff")
+    int deletePublishedBefore(@Param("cutoff") Instant cutoff);
+}
+```
+
+`deletePublishedBefore` es un DELETE JPQL en bulk. Requiere `@Modifying` (Spring Data)
+y `@Param` para el binding del parámetro. Solo se genera cuando `purgeEnabled = true`;
+los imports de `@Modifying`, `@Param` e `Instant` son también condicionales.
+
+La query SQL equivalente:
+
+```sql
+DELETE FROM outbox_event
+WHERE published_at IS NOT NULL
+  AND published_at < :cutoff;
 ```
 
 ---
@@ -281,6 +333,10 @@ public class OutboxRelay {
 
     private final OutboxEventJpaRepository outboxRepository;
     private final RabbitTemplate rabbitTemplate;
+
+    // Solo presente si outboxRetentionDays está configurado:
+    @Value("${outbox.purge.retention-days:7}")
+    private int retentionDays;
 
     @Scheduled(fixedDelayString = "${outbox.relay.fixed-delay-ms:1000}")
     @Transactional
@@ -311,6 +367,17 @@ public class OutboxRelay {
             }
         }
     }
+
+    // Solo presente si outboxRetentionDays está configurado:
+    @Scheduled(cron = "${outbox.purge.cron:0 0 3 * * *}")
+    @Transactional
+    public void purge() {
+        Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
+        int deleted = outboxRepository.deletePublishedBefore(cutoff);
+        if (deleted > 0) {
+            log.info("Outbox purge: deleted {} published rows older than {} days", deleted, retentionDays);
+        }
+    }
 }
 ```
 
@@ -324,6 +391,10 @@ public class OutboxRelay {
 
     private final OutboxEventJpaRepository outboxRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
+
+    // Solo presente si outboxRetentionDays está configurado:
+    @Value("${outbox.purge.retention-days:7}")
+    private int retentionDays;
 
     @Scheduled(fixedDelayString = "${outbox.relay.fixed-delay-ms:1000}")
     @Transactional
@@ -345,6 +416,17 @@ public class OutboxRelay {
             }
         }
     }
+
+    // Solo presente si outboxRetentionDays está configurado:
+    @Scheduled(cron = "${outbox.purge.cron:0 0 3 * * *}")
+    @Transactional
+    public void purge() {
+        Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
+        int deleted = outboxRepository.deletePublishedBefore(cutoff);
+        if (deleted > 0) {
+            log.info("Outbox purge: deleted {} published rows older than {} days", deleted, retentionDays);
+        }
+    }
 }
 ```
 
@@ -359,6 +441,36 @@ public class OutboxRelay {
 | `catch` | `RuntimeException` | `Exception` (por el checked `InterruptedException` de `Future.get()`) |
 | `row.routingKey` | Routing key de RabbitMQ | Partition key de Kafka (puede ser null) |
 | `row.destination` | Nombre del exchange | Nombre del topic |
+
+#### Método `purge()` — retención de filas publicadas
+
+Cuando `outboxRetentionDays` está configurado, **ambas variantes** generan idéntico
+código de purga (la lógica es agnóstica al broker):
+
+```java
+@Scheduled(cron = "${outbox.purge.cron:0 0 3 * * *}")
+@Transactional
+public void purge() {
+    Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
+    int deleted = outboxRepository.deletePublishedBefore(cutoff);
+    if (deleted > 0) {
+        log.info("Outbox purge: deleted {} published rows older than {} days", deleted, retentionDays);
+    }
+}
+```
+
+| Propiedad configurable | Default generado | Descripción |
+|---|---|---|
+| `outbox.purge.cron` | `0 0 3 * * *` | Expresión cron de Spring — por defecto a las 03:00 cada día |
+| `outbox.purge.retention-days` | Valor de `outboxRetentionDays` en el YAML | Días de retención para filas publicadas |
+
+El valor por defecto del `@Value` (`${outbox.purge.retention-days:<N>}`) se rellena
+automáticamente con el valor declarado en `system.yaml`. Ambos pueden sobreescribirse
+en `application.yaml` en cada entorno sin regenerar código.
+
+La purga es **idempotente y segura con múltiples instancias**: si varias instancias
+ejecutan `purge()` simultáneamente, cada DELETE elimina las filas que encuentra;
+la segunda instancia simplemente borra 0 filas. No se requiere locking distribuido.
 
 #### `@Scheduled` y `@Transactional`
 
@@ -688,6 +800,17 @@ ejecutarán `findPending()` simultáneamente. No hay `SELECT FOR UPDATE SKIP LOC
 ni ningún mecanismo de locking. Múltiples instancias pueden leer las mismas filas
 y enviar el mismo mensaje al broker varias veces. Los consumidores deben ser
 idempotentes (`consumerIdempotency: true`) para tolerar esto.
+
+### La tabla `outbox_event` crece sin límite si no se configura `outboxRetentionDays`
+
+Cuando `outboxRetentionDays` está ausente, el generador no emite ningún mecanismo
+de purga. Las filas con `published_at IS NOT NULL` se acumulan indefinidamente.
+Para activar la purga automática, añadir `outboxRetentionDays: <N>` en
+`system.yaml#/infrastructure/reliability` (ver [§2](#2-cómo-activarlo)).
+
+Cuando la purga está activa, solo se eliminan filas **ya publicadas**
+(`published_at IS NOT NULL`). Las filas pendientes nunca se purgan, independientemente
+de su antigüedad o número de intentos.
 
 ---
 

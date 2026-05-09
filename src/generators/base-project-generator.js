@@ -323,6 +323,8 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   const reliability         = (system.infrastructure && system.infrastructure.reliability) || {};
   const outboxEnabled       = !!reliability.outbox;
   const idempotencyEnabled  = !!reliability.consumerIdempotency;
+  const idempotencyPurgeEnabled = typeof reliability.processedEventRetentionDays === 'number' && reliability.processedEventRetentionDays >= 1;
+  const schedulingEnabled   = outboxEnabled || idempotencyPurgeEnabled;
   const persistentProjectionsPresent = hasAnyPersistentProjection(allBcYamls);
   // [G2] Request idempotency — uses Redis (no Flyway migration needed).
   const requestIdempotencyPresent = (allBcYamls || []).some((bc) =>
@@ -405,7 +407,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'application', 'Application.java.ejs'),
     path.join(javaMainDir, `${applicationClassName}.java`),
-    { packageName, applicationClassName, systemName, outboxEnabled }
+    { packageName, applicationClassName, systemName, outboxEnabled, schedulingEnabled }
   );
 
   // ── application.yaml (base — profile-agnostic) ──────────────────────────

@@ -1,0 +1,4 @@
+{
+  "description": "consumerIdempotency: true + processedEventRetentionDays: 14 must emit purge() in IdempotencyGuard and deleteProcessedBefore() in ProcessedEventJpaRepository.",
+  "expectFailure": false
+}

@@ -1,0 +1,34 @@
+{
+  "src/main/java/com/test/shared/infrastructure/idempotency/IdempotencyGuard.java": {
+    "_comment": "Without processedEventRetentionDays, purge code must NOT be generated.",
+    "contains": [
+      "IdempotencyGuard",
+      "tryRecord",
+      "REQUIRES_NEW",
+      "ProcessedEventJpaRepository"
+    ],
+    "notContains": [
+      "purge",
+      "deleteProcessedBefore",
+      "ChronoUnit",
+      "processed-event.purge"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/idempotency/ProcessedEventJpaRepository.java": {
+    "_comment": "Without processedEventRetentionDays, deleteProcessedBefore must NOT be generated.",
+    "notContains": [
+      "deleteProcessedBefore",
+      "@Modifying"
+    ]
+  },
+
+  "src/main/java/com/test/inventory/infrastructure/kafkaListener/ProductActivatedKafkaListener.java": {
+    "_comment": "Listener must use IdempotencyGuard.",
+    "contains": [
+      "IdempotencyGuard",
+      "HANDLER_ID",
+      "tryRecord"
+    ]
+  }
+}

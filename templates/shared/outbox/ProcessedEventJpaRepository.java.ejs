@@ -2,7 +2,26 @@
 package <%= packageName %>.shared.infrastructure.idempotency;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+<% if (idempotencyPurgeEnabled) { %>
+import org.springframework.data.jpa.repository.Modifying;
+<% } %>
+import org.springframework.data.jpa.repository.Query;
+<% if (idempotencyPurgeEnabled) { %>
+import org.springframework.data.repository.query.Param;
+import java.time.Instant;
+<% } %>
 
 public interface ProcessedEventJpaRepository
     extends JpaRepository<ProcessedEventJpa, ProcessedEventJpa.ProcessedEventId> {
+<% if (idempotencyPurgeEnabled) { %>
+    /**
+     * Deletes all processed-event rows older than {@code cutoff}.
+     * Called by {@link IdempotencyGuard#purge()} on a scheduled basis.
+     *
+     * @return number of rows deleted
+     */
+    @Modifying
+    @Query("delete from ProcessedEventJpa o where o.processedAt < :cutoff")
+    int deleteProcessedBefore(@Param("cutoff") Instant cutoff);
+<% } %>
 }

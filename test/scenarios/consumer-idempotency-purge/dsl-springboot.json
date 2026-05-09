@@ -1,0 +1,8 @@
+{
+  "packageName": "com.test",
+  "javaVersion": "21",
+  "springBootVersion": "3.4.5",
+  "database": "postgresql",
+  "broker": "kafka",
+  "systemName": "test-consumer-idempotency-purge-system"
+}

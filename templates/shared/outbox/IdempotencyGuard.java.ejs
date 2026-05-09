@@ -1,11 +1,17 @@
 // derived_from: system.yaml#/infrastructure/reliability/consumerIdempotency
 package <%= packageName %>.shared.infrastructure.idempotency;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
-
+<% if (idempotencyPurgeEnabled) { %>
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
+import java.time.temporal.ChronoUnit;
+<% } %>
 import java.time.Instant;
 
 /**
@@ -21,11 +27,27 @@ import java.time.Instant;
 @Component
 public class IdempotencyGuard {
 
-    private final ProcessedEventJpaRepository repository;
+    private static final Logger log = LoggerFactory.getLogger(IdempotencyGuard.class);
 
+    private final ProcessedEventJpaRepository repository;
+<% if (idempotencyPurgeEnabled) { %>
+    @Value("${processed-event.purge.retention-days:<%= idempotencyRetentionDays %>}")
+    private int retentionDays;
+<% } %>
     public IdempotencyGuard(ProcessedEventJpaRepository repository) {
         this.repository = repository;
     }
+<% if (idempotencyPurgeEnabled) { %>
+    @Scheduled(cron = "${processed-event.purge.cron:0 0 4 * * *}")
+    @Transactional
+    public void purge() {
+        Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
+        int deleted = repository.deleteProcessedBefore(cutoff);
+        if (deleted > 0) {
+            log.info("Idempotency purge: deleted {} processed rows older than {} days", deleted, retentionDays);
+        }
+    }
+<% } %>
 
     /**
      * Returns {@code true} if this is the first time the pair is seen and the

@@ -24,6 +24,7 @@ por un template, un generator o un test concreto.
 10. [Relación con `outbox: true`](#10-relación-con-outbox-true)
 11. [Limitaciones conocidas](#11-limitaciones-conocidas)
 12. [Comparativa: con vs sin `consumerIdempotency: true`](#12-comparativa-con-vs-sin-consumeridempotency-true)
+13. [Purga automática: `processedEventRetentionDays`](#13-purga-automática-processedeventretentiondays)
 
 ---
 
@@ -229,6 +230,8 @@ sin necesidad de queries JPQL custom. Ver §7 para el análisis del diseño de l
 **Ruta:** `src/main/java/{pkg}/shared/infrastructure/idempotency/ProcessedEventJpaRepository.java`
 **Template:** `templates/shared/outbox/ProcessedEventJpaRepository.java.ejs`
 
+**Sin `processedEventRetentionDays`:**
+
 ```java
 // derived_from: system.yaml#/infrastructure/reliability/consumerIdempotency
 package com.mycompany.shared.infrastructure.idempotency;
@@ -240,11 +243,42 @@ public interface ProcessedEventJpaRepository
 }
 ```
 
-No declara ningún método custom. Toda la lógica de consulta e inserción se hace a través
-de los métodos heredados de `JpaRepository`:
+**Con `processedEventRetentionDays: N`** — se añade el método de purga:
+
+```java
+// derived_from: system.yaml#/infrastructure/reliability/consumerIdempotency
+package com.mycompany.shared.infrastructure.idempotency;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
+import java.time.Instant;
+
+public interface ProcessedEventJpaRepository
+    extends JpaRepository<ProcessedEventJpa, ProcessedEventJpa.ProcessedEventId> {
+
+    /**
+     * Deletes all processed-event rows older than {@code cutoff}.
+     * Called by {@link IdempotencyGuard#purge()} on a scheduled basis.
+     *
+     * @return number of rows deleted
+     */
+    @Modifying
+    @Query("delete from ProcessedEventJpa o where o.processedAt < :cutoff")
+    int deleteProcessedBefore(@Param("cutoff") Instant cutoff);
+}
+```
+
+Toda la lógica de consulta e inserción de deduplicación se hace a través de los métodos
+heredados de `JpaRepository`:
 
 - `existsById(ProcessedEventId pk)` → `SELECT COUNT(*) FROM processed_event WHERE handler_id=? AND event_id=?`
 - `save(ProcessedEventJpa entity)` → `INSERT INTO processed_event (handler_id, event_id, processed_at) VALUES (?,?,?)`
+
+El método `deleteProcessedBefore` usa `@Modifying` porque ejecuta un DELETE JPQL. El nombre
+de entidad en la query es `ProcessedEventJpa` (clase JPA) y `processedAt` es el atributo Java.
+No hay filtro `IS NOT NULL` porque `processed_at` es `NOT NULL` en todas las filas (ver §5).
 
 ---
 
@@ -253,10 +287,14 @@ de los métodos heredados de `JpaRepository`:
 **Ruta:** `src/main/java/{pkg}/shared/infrastructure/idempotency/IdempotencyGuard.java`
 **Template:** `templates/shared/outbox/IdempotencyGuard.java.ejs`
 
+**Sin `processedEventRetentionDays`** (el `Logger` se genera siempre; no hay `purge()`):
+
 ```java
 // derived_from: system.yaml#/infrastructure/reliability/consumerIdempotency
 package com.mycompany.shared.infrastructure.idempotency;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
@@ -276,6 +314,8 @@ import java.time.Instant;
  */
 @Component
 public class IdempotencyGuard {
+
+    private static final Logger log = LoggerFactory.getLogger(IdempotencyGuard.class);
 
     private final ProcessedEventJpaRepository repository;
 
@@ -307,6 +347,44 @@ public class IdempotencyGuard {
             return false;
         }
     }
+}
+```
+
+**Con `processedEventRetentionDays: N`** — se añaden el campo `retentionDays` y el método `purge()` antes de `tryRecord()`. Se muestran solo los elementos adicionales respecto al caso base:
+
+```java
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
+import java.time.temporal.ChronoUnit;
+// ↑ imports adicionales, generados condicionalmente
+
+@Component
+public class IdempotencyGuard {
+
+    private static final Logger log = LoggerFactory.getLogger(IdempotencyGuard.class);
+
+    private final ProcessedEventJpaRepository repository;
+
+    @Value("${processed-event.purge.retention-days:N}")   // N = valor de processedEventRetentionDays
+    private int retentionDays;
+
+    public IdempotencyGuard(ProcessedEventJpaRepository repository) {
+        this.repository = repository;
+    }
+
+    @Scheduled(cron = "${processed-event.purge.cron:0 0 4 * * *}")
+    @Transactional
+    public void purge() {
+        Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
+        int deleted = repository.deleteProcessedBefore(cutoff);
+        if (deleted > 0) {
+            log.info("Idempotency purge: deleted {} processed rows older than {} days",
+                     deleted, retentionDays);
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public boolean tryRecord(String handlerId, String eventId) { ... }
 }
 ```
 
@@ -580,10 +658,10 @@ necesidad de un `SELECT` previo en condiciones de carrera. Ver §8.
 No hay `@GeneratedValue`. El generador no necesita ningún mecanismo de generación de IDs
 porque la PK es siempre conocida antes del INSERT.
 
-**Consecuencia — crecimiento indefinido de la tabla:**
+**Consecuencia — crecimiento indefinido de la tabla (sin purga configurada):**
 
-La tabla crece una fila por mensaje procesado, indefinidamente. No hay ningún mecanismo
-de purga generado. Ver §11.
+La tabla crece una fila por mensaje procesado, indefinidamente. Si no se activa
+`processedEventRetentionDays`, no hay ningún mecanismo de purga generado. Ver §11 y §13.
 
 ---
 
@@ -667,15 +745,16 @@ reliability:
 
 ## 11. Limitaciones conocidas
 
-### La tabla `processed_event` crece indefinidamente
+### La tabla `processed_event` crece indefinidamente si no se configura la purga
 
-No hay ningún mecanismo de TTL ni purga generado. Cada mensaje procesado exitosamente añade
-una fila que nunca se borra. En sistemas con alto throughput de eventos, la tabla puede
-crecer a millones de filas con el tiempo, degradando la performance del `existsById`.
+Cada mensaje procesado exitosamente añade una fila. En sistemas con alto throughput de
+eventos, la tabla puede crecer a millones de filas con el tiempo, degradando la performance
+del `existsById`.
 
-La estrategia de purga debe implementarse manualmente (p.ej. un job programado que borre
-filas con `processed_at` anterior a N días, asumiendo que mensajes con más de N días de
-antigüedad ya no serán reentregados por el broker).
+El generador puede emitir un job de purga automático activando `processedEventRetentionDays`
+en el YAML de sistema (ver §13). Si no se activa, la estrategia de purga debe implementarse
+manualmente (p.ej. un job programado que borre filas con `processed_at` anterior a N días,
+asumiendo que mensajes con más de N días de antigüedad ya no serán reentregados por el broker).
 
 ### La fila en `processed_event` persiste aunque el use case falle
 
@@ -713,6 +792,100 @@ en tiempo de generación que verifique que los eventos publicados incluyen `even
 | Comportamiento ante redelivery | Use case ejecutado N veces (una por entrega) | Use case ejecutado 1 vez; duplicados confirmados silenciosamente |
 | Comportamiento si `eventId` es null | Normal (dispatch) | Normal (dispatch) — guardia no opera |
 | Comportamiento si use case falla | No ack → broker reintenta → use case puede reintentar | No ack → broker reintenta → fila ya existe → use case **no** reintenta |
-| Crecimiento de tabla | N/A | Una fila por mensaje procesado, sin purga automática |
+| Crecimiento de tabla | N/A | Una fila por mensaje procesado; purga automática opcional con `processedEventRetentionDays` (ver §13) |
 | Protección contra race conditions | N/A | `DataIntegrityViolationException` capturada en `tryRecord` |
 | Relación con `outbox: true` | Independiente | Complementaria — forman effectively-exactly-once juntas |
+
+---
+
+## 13. Purga automática: `processedEventRetentionDays`
+
+### Cómo activarla
+
+```yaml
+# arch/system/system.yaml
+infrastructure:
+  reliability:
+    consumerIdempotency: true
+    processedEventRetentionDays: 14   # días de retención; entero ≥ 1
+```
+
+`processedEventRetentionDays` requiere que `consumerIdempotency: true` esté activo.
+Si `consumerIdempotency` es falso, el campo no tiene efecto (no se generan artefactos
+de idempotencia y por tanto no hay tabla `processed_event` que purgar).
+
+### Qué genera el generador
+
+Activar `processedEventRetentionDays: N` produce dos cambios adicionales en los artefactos
+de idempotencia:
+
+**1. `ProcessedEventJpaRepository.java`** — método de borrado por fecha:
+
+```java
+@Modifying
+@Query("delete from ProcessedEventJpa o where o.processedAt < :cutoff")
+int deleteProcessedBefore(@Param("cutoff") Instant cutoff);
+```
+
+**2. `IdempotencyGuard.java`** — campo `retentionDays` configurable + método `purge()` planificado:
+
+```java
+@Value("${processed-event.purge.retention-days:N}")
+private int retentionDays;
+
+@Scheduled(cron = "${processed-event.purge.cron:0 0 4 * * *}")
+@Transactional
+public void purge() {
+    Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
+    int deleted = repository.deleteProcessedBefore(cutoff);
+    if (deleted > 0) {
+        log.info("Idempotency purge: deleted {} processed rows older than {} days",
+                 deleted, retentionDays);
+    }
+}
+```
+
+**3. `Application.java`** — `@EnableScheduling` se activa cuando `outbox: true` **o**
+`processedEventRetentionDays ≥ 1`. Un proyecto con solo `consumerIdempotency: true` +
+`processedEventRetentionDays: N` (sin `outbox: true`) también recibe `@EnableScheduling`.
+
+### Semántica del job de purga
+
+| Aspecto | Valor |
+|---|---|
+| Cron por defecto | `0 0 4 * * *` (diariamente a las 04:00) |
+| Cron configurable en runtime | `${processed-event.purge.cron:...}` |
+| Retención por defecto | Valor de `processedEventRetentionDays` en el YAML |
+| Retención configurable en runtime | `${processed-event.purge.retention-days:N}` |
+| Propagación de transacción | `@Transactional` REQUIRED — DELETE en batch, sin aislamiento especial |
+| Log si no hay filas eliminadas | Sin log (silencioso) |
+| Log si hay filas eliminadas | `INFO` — número de filas + días de retención |
+
+### Cron default: 04:00
+
+El cron del job de idempotencia es `0 0 4 * * *` (04:00), una hora después del cron del
+purge de `OutboxRelay` que es `0 0 3 * * *` (03:00). Esta separación es intencional:
+evita que ambos jobs compitan por conexiones de base de datos simultáneamente.
+
+### Criterio de purga
+
+El criterio de purga es:
+
+```
+processed_at < NOW() - retentionDays DAYS
+```
+
+Una fila se purga cuando su `processed_at` es anterior al corte. El criterio asume que
+el broker **no reentregará** mensajes con más de `retentionDays` días de antigüedad.
+
+Si el broker reentregara un mensaje con `eventId` cuya fila ya fue purgada, ese mensaje
+se procesaría como nuevo (la guardia no lo detectaría como duplicado). Configurar
+`processedEventRetentionDays` con un valor inferior al tiempo de retención del broker
+es un error de configuración.
+
+### Sin cambios en el DDL
+
+La purga no requiere cambios en `V1__reliability.sql`. La columna `processed_at TIMESTAMP NOT NULL`
+ya existe y es el campo usado en el DELETE JPQL. No se añaden índices adicionales porque
+el DELETE por `processedAt` es un full-scan esperado en un job batch planificado — no es
+una query de latencia crítica.

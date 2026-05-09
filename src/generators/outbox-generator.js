@@ -30,6 +30,10 @@ async function generateOutboxArtifacts(system, config, outputDir) {
   const purgeEnabled = outboxRetentionDays !== null && outboxRetentionDays >= 1;
   const retentionDays = purgeEnabled ? outboxRetentionDays : 7;
 
+  const processedEventRetentionDays = typeof reliability.processedEventRetentionDays === 'number' ? reliability.processedEventRetentionDays : null;
+  const idempotencyPurgeEnabled = processedEventRetentionDays !== null && processedEventRetentionDays >= 1;
+  const idempotencyRetentionDays = idempotencyPurgeEnabled ? processedEventRetentionDays : 7;
+
   if (!outboxEnabled && !idempotencyEnabled) {
     return { outboxEnabled: false, idempotencyEnabled: false, sqlGenerated: false };
   }
@@ -77,13 +81,13 @@ async function generateOutboxArtifacts(system, config, outputDir) {
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'shared', 'outbox', 'ProcessedEventJpaRepository.java.ejs'),
       path.join(idemDir, 'ProcessedEventJpaRepository.java'),
-      { packageName }
+      { packageName, idempotencyPurgeEnabled, idempotencyRetentionDays }
     );
 
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'shared', 'outbox', 'IdempotencyGuard.java.ejs'),
       path.join(idemDir, 'IdempotencyGuard.java'),
-      { packageName }
+      { packageName, idempotencyPurgeEnabled, idempotencyRetentionDays }
     );
   }
 

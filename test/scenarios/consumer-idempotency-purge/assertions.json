@@ -1,0 +1,38 @@
+{
+  "src/main/java/com/test/shared/infrastructure/idempotency/IdempotencyGuard.java": {
+    "_comment": "With processedEventRetentionDays: 14, purge() method and all related code must be generated.",
+    "contains": [
+      "IdempotencyGuard",
+      "tryRecord",
+      "REQUIRES_NEW",
+      "ProcessedEventJpaRepository",
+      "purge",
+      "deleteProcessedBefore",
+      "ChronoUnit",
+      "processed-event.purge.cron",
+      "processed-event.purge.retention-days:14",
+      "retentionDays",
+      "@Scheduled",
+      "@Transactional"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/idempotency/ProcessedEventJpaRepository.java": {
+    "_comment": "With processedEventRetentionDays: 14, deleteProcessedBefore() must be generated.",
+    "contains": [
+      "deleteProcessedBefore",
+      "@Modifying",
+      "@Param",
+      "Instant",
+      "processedAt < :cutoff"
+    ]
+  },
+
+  "src/main/java/com/test/inventory/infrastructure/kafkaListener/ProductActivatedKafkaListener.java": {
+    "_comment": "Listener must use IdempotencyGuard when consumerIdempotency is enabled.",
+    "contains": [
+      "IdempotencyGuard",
+      "tryRecord"
+    ]
+  }
+}
