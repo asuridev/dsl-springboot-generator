@@ -76,7 +76,7 @@ function validateProperties(properties, context, enums = []) {
         }
       } else if (enumNames.has(typeBase)) {
         const enumDef = (enums || []).find((e) => e.name === typeBase);
-        const validValues = (enumDef?.values || []).map((v) => (typeof v === 'object' ? v.name : v));
+        const validValues = (enumDef?.values || []).map((v) => (typeof v === 'object' ? (v.value || v.name) : v));
         if (!validValues.includes(dv)) {
           fail(`Property "${prop.name}" in ${context}: defaultValue "${dv}" is not a valid value of enum ${typeBase}. Valid values: ${validValues.join(', ')}.`);
         }
@@ -130,6 +130,8 @@ function validate(doc, opts = {}) {
     'loadAggregate',
     // public endpoint — no JWT required (overrides authorization if both declared)
     'public',
+    // informational-only — ignored by generator; documents implementation intent
+    'notes',
   ]);
   const ALLOWED_UC_VALIDATION_KEYS = new Set(['id', 'expression', 'errorCode', 'description']);
   const ALLOWED_UC_TRIGGER_KEYS = new Set([
@@ -1474,6 +1476,8 @@ function validateRepositories(doc) {
     'name', 'params', 'returns', 'derivedFrom', 'signature',
     // queryMethods may additionally declare ordering hints:
     'defaultSort', 'sortable',
+    // informational-only — accepted and ignored by generator:
+    'description',
   ]);
   const ALLOWED_PARAM_KEYS = new Set([
     'name', 'type', 'required', 'filterOn', 'operator',
