@@ -568,6 +568,14 @@ function buildMapperFields(agg, packageName, moduleName, voNames = new Set(), bc
     if (prop.hidden || prop.internal) continue;
     javaTypeForDto(prop.type, packageName, moduleName, imports, voNames, bcYaml); // side-effect: collect imports
     const baseGetter = getterName(prop.name);
+    // Url type — domain holds URI, DTO expects String; emit an explicit conversion.
+    if (prop.type === 'Url') {
+      const expr = prop.required
+        ? `domain.${baseGetter}().toString()`
+        : `domain.${baseGetter}() != null ? domain.${baseGetter}().toString() : null`;
+      fields.push({ name: prop.name, expr });
+      continue;
+    }
     // List[T] with single-prop VO inner type → stream().map(Vo::getValue).toList()
     const listInnerMatch = /^List\[(.+)\]$/.exec(prop.type);
     let getter;
@@ -932,8 +940,25 @@ function appendOwnershipGuard(lines, extraImports, uc, aggVarName, packageName) 
   const getter = `get${field.charAt(0).toUpperCase() + field.slice(1)}`;
   lines.push(`        // [G3] Ownership guard — derived_from: useCases[${uc.id}].authorization`);
   lines.push(`        if (!Objects.equals(String.valueOf(${aggVarName}.${getter}()), SecurityContextUtil.currentUserClaim("${claim}"))${bypassExpr}) {`);
-  lines.push(`            throw new ForbiddenException();`);
+  lines.push(`            throw new ForbiddenException("Access denied: you do not own this resource.");`);
   lines.push(`        }`);
+}
+
+// When the error has constructor args, `ErrorType::new` is not a valid Supplier<T>
+// (Supplier requires a no-arg functional interface). Emit a lambda instead.
+// rawExpr:  the raw String input expression  (e.g. command.productId())
+// uuidExpr: the UUID expression              (e.g. UUID.fromString(command.productId()))
+// The first arg's declared type decides which expression to use.
+function buildOrElseThrowExpr(errorType, errorEntry, rawExpr, uuidExpr) {
+  const args = Array.isArray(errorEntry?.args) ? errorEntry.args : [];
+  if (args.length === 0) return `orElseThrow(${errorType}::new)`;
+  const STRING_TYPES = new Set(['String', 'Email', 'Url', 'Text']);
+  function exprForArg(a, i) {
+    if (i !== 0) return `/* TODO: ${a.name} */`;
+    return STRING_TYPES.has(a.type) ? rawExpr : uuidExpr;
+  }
+  const argExprs = args.map((a, i) => exprForArg(a, i)).join(', ');
+  return `orElseThrow(() -> new ${errorType}(${argExprs}))`;
 }
 
 function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcYaml) {
@@ -959,8 +984,10 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
     const errorEntry = errorMap[primaryNotFound];
     const errorType = errorEntry ? errorEntry.errorType : 'NotFoundException';
     extraImports.add(`${packageName}.${moduleName}.domain.errors.${errorType}`);
+    const rawCmdExpr = `command.${loadAggInput.name}()`;
+    const uuidCmdExpr = `UUID.fromString(${rawCmdExpr})`;
     lines.push(
-      `        ${agg.name} ${aggVarName} = ${repoFieldName}.findById(UUID.fromString(command.${loadAggInput.name}())).orElseThrow(${errorType}::new);`
+      `        ${agg.name} ${aggVarName} = ${repoFieldName}.findById(${uuidCmdExpr}).${buildOrElseThrowExpr(errorType, errorEntry, rawCmdExpr, uuidCmdExpr)};`
     );
   }
 
@@ -1047,6 +1074,14 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
   } else {
     // Use domainMethod params as the source of truth for the call args
     for (const p of dmParams) {
+      // If the matching aggregate property declares source: authContext, inject from SecurityContext.
+      const aggPropDef = (aggDef?.properties || []).find((prop) => prop.name === p.name);
+      if (aggPropDef?.source === 'authContext') {
+        extraImports.add(`${packageName}.shared.infrastructure.security.SecurityContextUtil`);
+        extraImports.add('java.util.UUID');
+        callArgs.push(`UUID.fromString(SecurityContextUtil.currentUserClaim("sub"))`);
+        continue;
+      }
       // Check for List[MultiPropVO] — convert List<VoRequest> → List<DomainVo>
       const listInnerMatchP = /^List\[(.+)\]$/.exec(p.type);
       const listInnerVoNameP = listInnerMatchP ? listInnerMatchP[1] : null;
@@ -1116,11 +1151,24 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
     // When the UC method is "delete" on a softDelete aggregate, invoke softDelete() in the domain
     const effectiveMethod =
       uc.method === 'delete' && agg.softDelete === true ? 'softDelete' : uc.method;
-    lines.push(`        ${aggVarName}.${effectiveMethod}(${callArgs.join(', ')});`);
+    // The aggregate variable is only declared when the findById block above ran.
+    // If neither loadAggInput nor hasNotFoundError is set (e.g. readModel upsert with no
+    // notFoundError), aggVarName is undefined — fall back to scaffold to avoid broken code.
+    const aggWasDeclared = loadAggInput && hasNotFoundError;
+    if (aggWasDeclared) {
+      lines.push(`        ${aggVarName}.${effectiveMethod}(${callArgs.join(', ')});`);
+    } else {
+      lines.push(`        // TODO: load ${agg.name} (e.g. by unique key) then call .${effectiveMethod}(${callArgs.join(', ') || '...'}) — see ${moduleName}-flows.md`);
+      lines.push(`        throw new UnsupportedOperationException("Not implemented: ${uc.id} ${uc.name}");`);
+      extraImports.add('java.lang.UnsupportedOperationException');
+    }
   }
 
-  // Save
-  lines.push(`        ${repoFieldName}.save(${aggVarName});`);
+  // Save — only emit when the aggregate variable was actually declared.
+  const aggWasDeclaredForSave = isCreate || (loadAggInput && hasNotFoundError);
+  if (aggWasDeclaredForSave) {
+    lines.push(`        ${repoFieldName}.save(${aggVarName});`);
+  }
 
   return { body: lines.join('\n'), extraImports: [...extraImports].sort(), extraRepos };
 }
@@ -1184,8 +1232,10 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
     const errorType = errorEntry ? errorEntry.errorType : null;
     if (errorType) {
       extraImports.add(`${packageName}.${moduleName}.domain.errors.${errorType}`);
+      const rawQExpr = `query.${loadAggInput.name}()`;
+      const uuidQExpr = `UUID.fromString(${rawQExpr})`;
       lines.push(
-        `        ${agg.name} ${aggVarName} = ${repoFieldName}.findById(UUID.fromString(query.${loadAggInput.name}())).orElseThrow(${errorType}::new);`
+        `        ${agg.name} ${aggVarName} = ${repoFieldName}.findById(${uuidQExpr}).${buildOrElseThrowExpr(errorType, errorEntry, rawQExpr, uuidQExpr)};`
       );
     } else {
       lines.push(
@@ -1287,8 +1337,12 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
     const errorType = errorEntry ? errorEntry.errorType : null;
     if (errorType) {
       extraImports.add(`${packageName}.${moduleName}.domain.errors.${errorType}`);
+      // For path B (findBy{Field}), derive raw/uuid expressions from the first method param.
+      const firstParam = methodParams[0];
+      const pathBRawExpr = firstParam ? `query.${firstParam.name}()` : callArgs;
+      const pathBUuidExpr = (firstParam?.type === 'Uuid') ? `UUID.fromString(${pathBRawExpr})` : pathBRawExpr;
       lines.push(
-        `        ${agg.name} entity = ${repoFieldName}.${repoMethodName}(${callArgs}).orElseThrow(${errorType}::new);`
+        `        ${agg.name} entity = ${repoFieldName}.${repoMethodName}(${callArgs}).${buildOrElseThrowExpr(errorType, errorEntry, pathBRawExpr, pathBUuidExpr)};`
       );
     } else {
       lines.push(
@@ -1487,17 +1541,28 @@ async function generateDomainErrors(errors, errorMap, moduleName, packageName, b
     const args = Array.isArray(entry.args) ? entry.args : [];
     const argNames = args.map((a) => a.name);
     const messageExpr = compileMessageTemplate(entry.messageTemplate, argNames);
-    // Java imports for arg types that are fully-qualified (contain a dot) and
-    // not already in java.lang. Generic parameters are stripped before checking.
+    // Java imports for arg types.
+    // Handles both FQN types (contain a dot) and well-known short names that
+    // need an explicit import (UUID, BigDecimal, Instant, etc.).
+    const WELL_KNOWN_ARG_IMPORTS = {
+      UUID: 'java.util.UUID',
+      BigDecimal: 'java.math.BigDecimal',
+      BigInteger: 'java.math.BigInteger',
+      Instant: 'java.time.Instant',
+      LocalDate: 'java.time.LocalDate',
+      Duration: 'java.time.Duration',
+    };
     const javaImports = [];
     const seen = new Set();
     for (const a of args) {
       const raw = String(a.type).split('<')[0].trim();
-      if (!raw.includes('.')) continue;
-      if (raw.startsWith('java.lang.')) continue;
       if (seen.has(raw)) continue;
       seen.add(raw);
-      javaImports.push(raw);
+      if (WELL_KNOWN_ARG_IMPORTS[raw]) {
+        javaImports.push(WELL_KNOWN_ARG_IMPORTS[raw]);
+      } else if (raw.includes('.') && !raw.startsWith('java.lang.')) {
+        javaImports.push(raw);
+      }
     }
     // Constructor-parameter typed declarations (using short names where imported).
     const ctorParams = args
@@ -1574,6 +1639,14 @@ async function generateApplicationMapper(agg, moduleName, packageName, bcDir, vo
         javaTypeForDto(prop.type, packageName, moduleName, importsSet, voNames, bcYaml);
         const aggProp = aggMap.get(prop.name);
         const baseGetter = getterName(prop.name);
+        // Url type — domain holds URI, DTO expects String; emit an explicit conversion.
+        if (aggProp.type === 'Url') {
+          const expr = aggProp.required
+            ? `domain.${baseGetter}().toString()`
+            : `domain.${baseGetter}() != null ? domain.${baseGetter}().toString() : null`;
+          pmFields.push({ name: prop.name, expr });
+          continue;
+        }
         // List[T] with single-prop VO inner type — same handling as response mapper
         const listInnerMatch = /^List\[(.+)\]$/.exec(aggProp.type || '');
         let getter;
@@ -2516,11 +2589,19 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
         }
         // When the response schema is a projection, use the bare name (no Dto suffix).
         const isProjectionResponse = responseSchemaName && bcProjectionNames.has(responseSchemaName);
-        const responseReturnType = responseSchemaName
+        // [G-INTERNAL-RETURN] When uc.returns is set (including synthesized projections from
+        // inline arrays), it is the canonical Java return type declared in the YAML.
+        // The internal API response schema only describes the wire format — the YAML wins.
+        // Using the YAML-declared type keeps Query<R>, QueryHandler<Q,R>, and the controller
+        // return type consistent (all three generators read uc.returns, not the OpenAPI schema).
+        const responseReturnTypeFromSchema = responseSchemaName
           ? (isListResponse
             ? `List<${isProjectionResponse ? responseSchemaName : `${responseSchemaName}Dto`}>`
             : (isProjectionResponse ? responseSchemaName : `${responseSchemaName}Dto`))
           : 'void';
+        const responseReturnType = uc.returns
+          ? buildQueryReturnType(uc, agg, repoMethods)
+          : responseReturnTypeFromSchema;
         if (responseReturnType !== 'void') {
           const innerMatch = /^(?:List<)?([A-Za-z0-9_]+)>?$/.exec(responseReturnType);
           const innerClassName = innerMatch ? innerMatch[1] : responseReturnType;

@@ -57,7 +57,9 @@ public class HandlerExceptions {
      */
     private static final Map<String, java.util.function.Supplier<? extends DomainException>> CONSTRAINT_TO_ERROR = Map.ofEntries(
 <% constraintMap.forEach((c, i) => { -%>
-        Map.entry("<%= c.constraintName.toLowerCase() %>", <%= c.errorClassSimple %>::new)<%= i < constraintMap.length - 1 ? ',' : '' %>
+<%   const hasArgs = Array.isArray(c.args) && c.args.length > 0; -%>
+<%   const nullArgs = hasArgs ? c.args.map(() => 'null').join(', ') : ''; -%>
+        Map.entry("<%= c.constraintName.toLowerCase() %>", <% if (!hasArgs) { %><%= c.errorClassSimple %>::new<% } else { %>() -> new <%= c.errorClassSimple %>(<%= nullArgs %>)<% } %>)<%= i < constraintMap.length - 1 ? ',' : '' %>
 <% }); -%>
     );
 <% } -%>

@@ -162,6 +162,8 @@ function buildConstraintErrorMap(packageName, allBcYamls) {
           constraintName: rule.constraintName,
           errorClassFqn: `${packageName}.${bc.bc}.domain.errors.${err.errorType}`,
           errorClassSimple: err.errorType,
+          // args needed by the template to decide ::new vs () -> new XxxError(null, ...)
+          args: Array.isArray(err.args) ? err.args : [],
         });
       }
     }

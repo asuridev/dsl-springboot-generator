@@ -17,6 +17,7 @@ public class <%= aggregateName %>ApplicationMapper {
         return new <%= aggregateName %>ResponseDto(
 <%- fields.map((f, i) => {
   const comma = i < fields.length - 1 ? ',' : '';
+  if (f.expr !== undefined) return '            ' + f.expr + comma;
   return '            domain.' + f.getter + '()' + comma;
 }).join('\n') %>
         );
@@ -32,6 +33,7 @@ public class <%= aggregateName %>ApplicationMapper {
         return new <%= pm.projectionName %>(
 <%- pm.fields.map((f, i) => {
   const comma = i < pm.fields.length - 1 ? ',' : '';
+  if (f.expr !== undefined) return '            ' + f.expr + comma;
   return '            domain.' + f.getter + '()' + comma;
 }).join('\n') %>
         );

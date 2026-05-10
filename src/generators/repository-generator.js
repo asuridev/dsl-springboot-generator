@@ -591,6 +591,40 @@ function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
     const a = jpaEntityName.charAt(0).toLowerCase();
     const filterParams = (params || [])
       .filter((p) => p.type !== 'PageRequest' && p.name !== 'pageable');
+
+    // Detect {subEntityName}Ids params — the IDs belong to a sub-entity, not a
+    // field on the aggregate root. Require a JOIN to navigate to the collection.
+    // E.g. variantIds → SELECT p FROM ProductJpa p JOIN p.productVariants v WHERE v.id IN :variantIds
+    const subEntityIdsParam = filterParams.find((p) => {
+      if (!p.name.endsWith('Ids')) return false;
+      const entitySuffix = p.name.slice(0, -3).toLowerCase(); // "variant" from "variantIds"
+      return (aggregate.entities || []).some(
+        (e) => e.name.toLowerCase() === entitySuffix || e.name.toLowerCase().endsWith(entitySuffix)
+      );
+    });
+    if (subEntityIdsParam) {
+      const entitySuffix = subEntityIdsParam.name.slice(0, -3).toLowerCase();
+      const matchedEntity = (aggregate.entities || []).find(
+        (e) => e.name.toLowerCase() === entitySuffix || e.name.toLowerCase().endsWith(entitySuffix)
+      );
+      const isOneToOne = matchedEntity.cardinality === 'oneToOne';
+      const collectionField = isOneToOne
+        ? toCamelCase(matchedEntity.name)
+        : toCamelCase(pluralizeWord(matchedEntity.name));
+      const vChar = matchedEntity.name.charAt(0).toLowerCase();
+      const v = vChar !== a ? vChar : `${vChar}2`;
+      // Remaining params (non-sub-entity-id) add standard WHERE conditions on the root
+      const otherParams = filterParams.filter((p) => p !== subEntityIdsParam);
+      const otherConds = otherParams.map((p) => {
+        const pred = buildParamPredicate(p, a);
+        return pred.includes(' OR ') ? `(${pred})` : pred;
+      });
+      const joinCond = `${v}.id IN :${subEntityIdsParam.name}`;
+      const allConds = [joinCond, ...otherConds];
+      const orderBy = buildOrderByClause(method, a);
+      return `SELECT ${a} FROM ${jpaEntityName} ${a} JOIN ${a}.${collectionField} ${v} WHERE ${allConds.join(' AND ')}${orderBy}`;
+    }
+
     // Reuse the same operator dispatcher used by Page[T] queries so a YAML
     // declaring `operator: GTE` produces consistent SQL regardless of whether
     // the return type is List or Page.
@@ -609,6 +643,33 @@ function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
     const where = allConds.length > 0 ? ` WHERE ${allConds.join(' AND ')}` : '';
     const orderBy = buildOrderByClause(method, a);
     return `SELECT ${a} FROM ${jpaEntityName} ${a}${where}${orderBy}`;
+  }
+
+  // find{EntityName}By{Field} — the field lives on a sub-entity, not the aggregate root.
+  // Spring Data cannot derive this from the method name; emit an explicit JOIN query.
+  // E.g. findVariantBySku → SELECT p FROM ProductJpa p JOIN p.productVariants v WHERE v.sku = :sku
+  const subEntityMatch = /^find([A-Z][a-zA-Z]*)By([A-Z][a-zA-Z]*)$/.exec(name);
+  if (subEntityMatch) {
+    const entityNameSuffix = subEntityMatch[1]; // e.g. "Variant"
+    const fieldCap = subEntityMatch[2];          // e.g. "Sku"
+    const field = fieldCap.charAt(0).toLowerCase() + fieldCap.slice(1); // "sku"
+    const matchedEntity = (aggregate.entities || []).find(
+      (e) => e.name === entityNameSuffix || e.name.endsWith(entityNameSuffix)
+    );
+    if (matchedEntity) {
+      const isOneToOne = matchedEntity.cardinality === 'oneToOne';
+      const collectionField = isOneToOne
+        ? toCamelCase(matchedEntity.name)
+        : toCamelCase(pluralizeWord(matchedEntity.name));
+      const a = jpaEntityName.charAt(0).toLowerCase();
+      // Use the entity-name suffix (e.g. "Variant") for the JOIN alias to avoid
+      // collision when the sub-entity's full name starts with the same letter as
+      // the aggregate (e.g. ProductVariant → alias "v", not "p").
+      const vChar = entityNameSuffix.charAt(0).toLowerCase();
+      const v = vChar !== a ? vChar : `${vChar}2`;
+      const paramName = (params && params[0] && params[0].name) || field;
+      return `SELECT ${a} FROM ${jpaEntityName} ${a} JOIN ${a}.${collectionField} ${v} WHERE ${v}.${field} = :${paramName}`;
+    }
   }
 
   return null;
@@ -1054,6 +1115,15 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
     return `return mapper.toDomain(jpaRepository.save(mapper.toJpa(${entityParam})));`;
   }
 
+  // upsert is semantically equivalent to save for read-model aggregates (no domain events).
+  // JpaRepository.save() covers both insert and update via Spring Data merge semantics.
+  if (name === 'upsert') {
+    if (methodReturnType === 'void') {
+      return `jpaRepository.save(mapper.toJpa(${entityParam}));`;
+    }
+    return `return mapper.toDomain(jpaRepository.save(mapper.toJpa(${entityParam})));`;
+  }
+
   if (name === 'delete') {
     return `jpaRepository.deleteById(${paramNames});`;
   }
@@ -1345,7 +1415,7 @@ function buildRepoImplContext(aggregateName, normalizedMethods, aggregate, bc, p
     // R20: methods that mutate state must run inside a read-write transaction.
     // The class-level annotation defaults everything to readOnly=true; these
     // methods opt back in to a writable transaction.
-    const isWrite = m.name === 'save' || m.name === 'delete' || m.name === 'softDelete'
+    const isWrite = m.name === 'save' || m.name === 'upsert' || m.name === 'delete' || m.name === 'softDelete'
       || /^delete[A-Z]/.test(m.name) || /^save[A-Z]/.test(m.name);
     return { name: m.name, returnType, params, body, isWrite };
   });

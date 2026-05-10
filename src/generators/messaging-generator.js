@@ -677,7 +677,7 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
       return {
         name:          ev.name,
         channel:       ev.channel || null,
-        producer:      ev.channel ? ev.channel.split('.')[0] : 'unknown',
+        producer:      ev.channel ? ev.channel.split('.')[0] : (ev.sourceBc || 'unknown'),
         command:       uc.name,
         useCase:       uc.id,
         queueKey,
@@ -725,12 +725,30 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
       return { name: paramName, type: prop ? prop.type : 'String' };
     });
 
+    // No payload declared on the consumed event — check uc.input[] for source:body fields.
+    // When present, those fields drive both the event.data() extraction and the command constructor.
+    const ucBodyInputs = (uc.input || []).filter((i) => i.source !== 'authContext');
+    if (ucBodyInputs.length > 0) {
+      const commandPayload = ucBodyInputs.map((i) => ({ name: i.name, type: i.type || 'String' }));
+      return {
+        name:          ev.name,
+        channel:       ev.channel || null,
+        producer:      ev.channel ? ev.channel.split('.')[0] : (ev.sourceBc || 'unknown'),
+        command:       uc.name,
+        useCase:       uc.id,
+        queueKey,
+        payload:       commandPayload,
+        commandPayload,
+        filterExpr:    uc.trigger.filter || null,
+      };
+    }
+
     // No payload declared and no uc.input[] — command is empty, listener calls new XyzCommand().
     // The UC handler resolves what it needs from the aggregate repository using the event metadata.
     return {
       name:          ev.name,
       channel:       ev.channel || null,
-      producer:      ev.channel ? ev.channel.split('.')[0] : 'unknown',
+      producer:      ev.channel ? ev.channel.split('.')[0] : (ev.sourceBc || 'unknown'),
       command:       uc.name,
       useCase:       uc.id,
       queueKey,
@@ -891,8 +909,9 @@ function buildRabbitMQTopology(allBcYamls) {
       queueMap.set(queueKey, `${bcName}.${eventKebab}`);
       rkMap.set(queueKey,    routingKey);
       // Add producer BC exchange derived from channel (e.g. "inventory.stock-item.reserved" → "inventory")
-      // This ensures external producer exchanges are declared even if that BC is not in allBcYamls.
-      const producerBc = event.channel ? event.channel.split('.')[0] : null;
+      // or from sourceBc when channel is not declared. This ensures external producer exchanges are
+      // declared even if that BC is not in allBcYamls.
+      const producerBc = (event.channel ? event.channel.split('.')[0] : null) || event.sourceBc || null;
       if (producerBc && !exchangeMap.has(producerBc)) {
         exchangeMap.set(producerBc, `${producerBc}.events`);
       }
