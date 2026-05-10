@@ -225,11 +225,15 @@ function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParam
     switch (src) {
       case 'aggregate': {
         const field = p.field || p.name;
+        // 'id' or '{aggregateName}Id' (e.g. productId, orderId) both resolve to this.getId()
+        if (field === 'id' || field === aggregateCamelId) {
+          return 'this.getId()';
+        }
         if (!aggregatePropNames.has(field)) {
           unresolved.push(`${p.name} (source: aggregate, field: ${field} not found)`);
           return `null /* TODO domainEvent(${event.name}, ${p.name}): source=aggregate but field "${field}" not in aggregate ${aggregate.name} */`;
         }
-        return field === 'id' ? 'this.getId()' : getterFor(field);
+        return getterFor(field);
       }
       case 'param': {
         const pname = p.param || p.name;

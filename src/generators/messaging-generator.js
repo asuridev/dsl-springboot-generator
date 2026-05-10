@@ -650,7 +650,11 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
     // Lightweight form — derive from matching use case
     const uc = ucByEventName.get(ev.name);
     if (!uc) {
-      logger.warn(`[${moduleName}] Consumed event "${ev.name}" has no use case with trigger.kind=event. No listener will be generated.`);
+      // listenerRequired: false → intentional saga-awareness-only subscription;
+      // suppress the warning — topology is still generated for the queue binding.
+      if (ev.listenerRequired !== false) {
+        logger.warn(`[${moduleName}] Consumed event "${ev.name}" has no use case with trigger.kind=event. No listener will be generated.`);
+      }
       return ev; // no command → no listener
     }
 

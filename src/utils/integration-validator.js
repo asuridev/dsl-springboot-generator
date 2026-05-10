@@ -333,7 +333,7 @@ function checkBcOutboundReciprocity(system, bcYamls, externalNames, diagnostics)
   }
 }
 
-function checkOrphanConsumers(bcYamls, diagnostics) {
+function checkOrphanConsumers(bcYamls, undesignedBcs, diagnostics) {
   // INT-007: cada consumed.name debe estar publicado por algún BC.
   const allPublished = new Map(); // event → producerBc
   for (const bc of bcYamls) {
@@ -346,10 +346,16 @@ function checkOrphanConsumers(bcYamls, diagnostics) {
     for (let k = 0; k < consumed.length; k++) {
       const ev = consumed[k];
       if (!allPublished.has(ev.name)) {
+        // If sourceBc is declared in system.yaml but not yet designed (no YAML in arch/),
+        // downgrade to warn — the producer BC simply hasn't been designed yet.
+        const sourceBc = ev.sourceBc;
+        const isUndesigned = sourceBc && undesignedBcs.has(sourceBc);
         diagnostics.push({
           code: 'INT-007',
-          level: 'error',
-          message: `${bc.bc} consumes event "${ev.name}" but no BC publishes it.`,
+          level: isUndesigned ? 'warn' : 'error',
+          message: isUndesigned
+            ? `${bc.bc} consumes event "${ev.name}" from "${sourceBc}" which is declared in system.yaml but not yet designed (no ${sourceBc}.yaml in arch/).`
+            : `${bc.bc} consumes event "${ev.name}" but no BC publishes it.`,
           location: `${bc.bc}.yaml#/domainEvents/consumed[${k}]`,
         });
       }
@@ -485,9 +491,24 @@ function checkPersistentProjections(bcYamls, bcIndex, diagnostics) {
   }
 }
 
-function checkSagas(system, bcIndex, diagnostics) {
+function checkSagas(system, bcIndex, undesignedBcs, diagnostics) {
   const sagas = system.sagas || [];
   if (sagas.length === 0) return;
+
+  // Build { eventName → Set<stepBc> } from all saga steps so we can identify
+  // which BC would produce each saga event even when that BC has no YAML yet.
+  const sagaEventsByBc = new Map();
+  for (const saga of sagas) {
+    for (const step of (saga.steps || [])) {
+      for (const field of ['onSuccess', 'onFailure', 'compensation']) {
+        const evName = step[field];
+        if (evName && step.bc) {
+          if (!sagaEventsByBc.has(evName)) sagaEventsByBc.set(evName, new Set());
+          sagaEventsByBc.get(evName).add(step.bc);
+        }
+      }
+    }
+  }
 
   // Build a map { eventName → producerBcSet } for fast lookup.
   const publishedBy = new Map();
@@ -540,10 +561,15 @@ function checkSagas(system, bcIndex, diagnostics) {
       if (step.triggeredBy) {
         const isTrigger = saga.trigger && saga.trigger.event === step.triggeredBy;
         if (!isTrigger && !publishedBy.has(step.triggeredBy)) {
+          // Check if the event would come from an undesigned BC (not yet in arch/)
+          const producers = sagaEventsByBc.get(step.triggeredBy) || new Set();
+          const isUndesigned = [...producers].some((bc) => undesignedBcs.has(bc));
           diagnostics.push({
             code: 'INT-012',
-            level: 'error',
-            message: `Saga "${saga.name}" step ${step.order || i + 1}: triggeredBy "${step.triggeredBy}" is neither the saga trigger nor published by any BC.`,
+            level: isUndesigned ? 'warn' : 'error',
+            message: isUndesigned
+              ? `Saga "${saga.name}" step ${step.order || i + 1}: triggeredBy "${step.triggeredBy}" would be published by an undesigned BC (not yet in arch/).`
+              : `Saga "${saga.name}" step ${step.order || i + 1}: triggeredBy "${step.triggeredBy}" is neither the saga trigger nor published by any BC.`,
             location: `${loc}/triggeredBy`,
           });
         }
@@ -560,15 +586,21 @@ function checkSagas(system, bcIndex, diagnostics) {
       const stepBc = step.bc;
       const stepBcYaml = stepBc ? bcIndex.get(stepBc) : null;
       const stepPublished = stepBcYaml ? publishedNames(stepBcYaml) : new Set();
+      const stepIsUndesigned = stepBc ? undesignedBcs.has(stepBc) : false;
 
       const checkProduced = (eventName, fieldName, allowAnyBc) => {
         if (!eventName) return;
         if (allowAnyBc) {
           if (!publishedBy.has(eventName)) {
+            // For compensation: check if any saga-declared producer of this event is undesigned
+            const producers = sagaEventsByBc.get(eventName) || new Set();
+            const isUndesigned = [...producers].some((bc) => undesignedBcs.has(bc)) || stepIsUndesigned;
             diagnostics.push({
               code: 'INT-014',
-              level: 'error',
-              message: `Saga "${saga.name}" step ${step.order || i + 1}: ${fieldName} "${eventName}" is not published by any BC.`,
+              level: isUndesigned ? 'warn' : 'error',
+              message: isUndesigned
+                ? `Saga "${saga.name}" step ${step.order || i + 1}: ${fieldName} "${eventName}" is not published by any designed BC yet (producer BC not yet in arch/).`
+                : `Saga "${saga.name}" step ${step.order || i + 1}: ${fieldName} "${eventName}" is not published by any BC.`,
               location: `${loc}/${fieldName}`,
             });
           }
@@ -576,8 +608,10 @@ function checkSagas(system, bcIndex, diagnostics) {
           if (!stepPublished.has(eventName)) {
             diagnostics.push({
               code: 'INT-014',
-              level: 'error',
-              message: `Saga "${saga.name}" step ${step.order || i + 1}: ${fieldName} "${eventName}" is not published by ${stepBc || '<missing-bc>'}.yaml#/domainEvents/published.`,
+              level: stepIsUndesigned ? 'warn' : 'error',
+              message: stepIsUndesigned
+                ? `Saga "${saga.name}" step ${step.order || i + 1}: ${fieldName} "${eventName}" is not published by ${stepBc}.yaml (BC not yet designed — no ${stepBc}.yaml in arch/).`
+                : `Saga "${saga.name}" step ${step.order || i + 1}: ${fieldName} "${eventName}" is not published by ${stepBc || '<missing-bc>'}.yaml#/domainEvents/published.`,
               location: `${loc}/${fieldName}`,
             });
           }
@@ -1181,11 +1215,17 @@ function validateIntegrationCoherence(system, bcYamls, archDir, asyncApiByBc) {
   const bcIndex = indexBcYamls(bcYamls);
   const externalNames = new Set((system.externalSystems || []).map((e) => e.name));
 
+  // BCs declared in system.yaml but without a YAML file yet (incremental design workflow).
+  // These are downgraded to warnings instead of errors so the generator can build
+  // already-designed BCs without waiting for all BCs to be designed first.
+  const declaredBcNames = new Set((system.boundedContexts || []).map((bc) => bc.name));
+  const undesignedBcs = new Set([...declaredBcNames].filter((n) => !bcIndex.has(n)));
+
   checkSystemIntegrations(system, bcIndex, archDir, externalNames, diagnostics);
   checkBcOutboundReciprocity(system, bcYamls, externalNames, diagnostics);
-  checkOrphanConsumers(bcYamls, diagnostics);
+  checkOrphanConsumers(bcYamls, undesignedBcs, diagnostics);
   checkPersistentProjections(bcYamls, bcIndex, diagnostics);
-  checkSagas(system, bcIndex, diagnostics);
+  checkSagas(system, bcIndex, undesignedBcs, diagnostics);
   checkAuthTypeValid(system, bcYamls, diagnostics);
   checkOAuth2ClientCredentials(system, bcYamls, diagnostics);
   checkExternalSchemas(system, diagnostics);
