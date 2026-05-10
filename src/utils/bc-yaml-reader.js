@@ -132,6 +132,13 @@ function validate(doc, opts = {}) {
     'public',
     // informational-only — ignored by generator; documents implementation intent
     'notes',
+    // [outbound HTTP] explicit port calls within a UC — used by design tooling to
+    // determine implementation: full/scaffold eligibility; generator reads the
+    // integrations.outbound section directly, not this field.
+    'outgoingCalls',
+    // [sagas] marks a UC as a saga step or compensation handler; generator reads
+    // saga definitions from system.yaml and messaging consumers from async-api.yaml.
+    'sagaStep',
   ]);
   const ALLOWED_UC_VALIDATION_KEYS = new Set(['id', 'expression', 'errorCode', 'description']);
   const ALLOWED_UC_TRIGGER_KEYS = new Set([
@@ -1210,6 +1217,9 @@ function validate(doc, opts = {}) {
     if (uc.type !== 'command' || !uc.method) continue;
     const agg = aggByName.get(uc.aggregate);
     if (!agg) continue;
+    // readModel aggregates have no business domainMethods — their upsert is
+    // auto-generated from sourceBC/sourceEvents by projection-updater-generator.
+    if (agg.readModel === true) continue;
     const dm = (agg.domainMethods || []).find((m) => m.name === uc.method);
     if (!dm) {
       fail(`Use case "${uc.id}" references method "${uc.method}" which is not declared in aggregate "${agg.name}" domainMethods.`);
@@ -1471,7 +1481,10 @@ function validateRepositories(doc) {
     fail(`"repositories" must be a list of repository entries, one per aggregate.`);
   }
 
-  const ALLOWED_REPO_KEYS = new Set(['aggregate', 'queryMethods', 'methods', 'bulkOperations', 'autoDerive']);
+  const ALLOWED_REPO_KEYS = new Set(['aggregate', 'queryMethods', 'methods', 'bulkOperations', 'autoDerive',
+    // marks repo as belonging to a readModel aggregate — generator skips write-method validation
+    'readModel',
+  ]);
   const ALLOWED_METHOD_KEYS = new Set([
     'name', 'params', 'returns', 'derivedFrom', 'signature',
     // queryMethods may additionally declare ordering hints:
@@ -1882,8 +1895,10 @@ async function readBcYaml(bcName, opts = {}) {
 
   // Pre-process: method signatures like `method: create(x, y?): ReturnType` contain
   // ": " which YAML interprets as a mapping entry. Quote these values before parsing.
+  // NOTE: use [ \t]+ (not \s+) after the colon so the match never crosses a newline
+  // and accidentally captures list items that follow a bare `returns:` on its own line.
   const preprocessed = raw.replace(
-    /^(\s+(?:returns|signature):\s+)([^\n"'`#][^\n]*)$/gm,
+    /^(\s+(?:returns|signature):[ \t]+)([^\n"'`#][^\n]*)$/gm,
     (match, prefix, value) => {
       if (value.startsWith('"') || value.startsWith("'")) return match;
       if (value.includes(': ') || value.includes('?')) {
