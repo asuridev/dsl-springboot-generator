@@ -57,7 +57,25 @@ La compilación Java es una compuerta opt-in por escenario para controlar el cos
 
 Los escenarios `cs-http-full` y `event-kafka-outbox` ejecutan `gradle build --no-daemon` como compuerta pesada representativa: cubren REST/integración HTTP y mensajería Kafka/outbox respectivamente. No se activa `build` en todos los escenarios para mantener la suite razonable en tiempo.
 
-Prerequisito local: debe existir un JDK válido. El runner resuelve Java en este orden: `scenario.json > javaHome`, variable `DSL_TEST_JAVA_HOME`, variable `JAVA_HOME`, y por último `C:\java\jdk-17` si existe en Windows.
+Prerequisito local: debe existir un JDK válido para los escenarios que compilan Java. Esta resolución no la hace el generador principal, sino el runner de tests antes de invocar el Gradle wrapper del proyecto generado.
+
+El runner resuelve la ruta de Java en este orden:
+
+1. `javaHome` declarado en `scenario.json`.
+2. Variable de entorno `DSL_TEST_JAVA_HOME`.
+3. Variable de entorno `JAVA_HOME`, solo si apunta a un JDK usable.
+4. Fallback local `C:\java\jdk-17`, solo en Windows y solo si existe.
+
+Un `JAVA_HOME` se considera usable si existe `{JAVA_HOME}/bin/java.exe` en Windows o `{JAVA_HOME}/bin/java` en Linux/macOS. Cuando el runner encuentra una ruta válida, ejecuta Gradle con ese valor en `JAVA_HOME` y antepone `{JAVA_HOME}/bin` al `PATH` del proceso hijo. Si no encuentra ninguna ruta, no fuerza `JAVA_HOME`; Gradle usará el entorno actual y puede fallar si no hay Java disponible.
+
+Ejemplo mínimo de `scenario.json` para activar la compilación Java con un JDK local fijo:
+
+```json
+{
+  "compileGeneratedJava": true,
+  "javaHome": "C:\\java\\jdk-17"
+}
+```
 
 ---
 
@@ -157,7 +175,7 @@ Los paths en las claves usan `/` (cross-platform). El runner los traduce a separ
 | `compileGeneratedJava` | boolean | Si `true`, compila el proyecto Java generado después de assertions/diff. Se ignora en escenarios con `expectFailure: true`. |
 | `allowNoExpected` | boolean | Si `true`, permite un escenario exitoso sin `expected/`. Debe reservarse para smokes intencionales; por defecto un happy path sin golden files falla. |
 | `gradleTask` | string | Tarea Gradle a ejecutar cuando se compila. Default: `compileJava`. Para escenarios MVP completos puede usarse `build`. |
-| `javaHome` | string | Override de `JAVA_HOME` para el escenario. Si no se declara, se usa `DSL_TEST_JAVA_HOME`, `process.env.JAVA_HOME` o el fallback local de Windows si existe. |
+| `javaHome` | string | Override de `JAVA_HOME` para el escenario. Tiene prioridad sobre `DSL_TEST_JAVA_HOME`, `process.env.JAVA_HOME` y el fallback local `C:\java\jdk-17` en Windows. |
 
 ---
 
