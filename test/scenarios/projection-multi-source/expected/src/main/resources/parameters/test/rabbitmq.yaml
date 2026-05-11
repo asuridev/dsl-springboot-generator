@@ -1,0 +1,40 @@
+spring:
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    virtual-host: /
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        acknowledge-mode: manual
+        concurrency: 1
+        prefetch: 1
+        retry:
+          enabled: true
+          max-attempts: 2
+          initial-interval: 500
+          multiplier: 1.0
+          max-interval: 1000
+          stateless: true
+
+exchanges:
+  catalog: catalog.events
+
+
+
+queues:
+  orders-projection-local-product-view-product-activated: orders.orders-projection-local-product-view-product-activated
+  orders-projection-local-product-view-product-price-changed: orders.orders-projection-local-product-view-product-price-changed
+
+
+
+routing-keys:
+  product-activated: catalog.product.activated
+  product-price-changed: catalog.product.price.changed
+  orders-projection-local-product-view-product-activated: product.activated
+  orders-projection-local-product-view-product-price-changed: product.price.changed
+
+

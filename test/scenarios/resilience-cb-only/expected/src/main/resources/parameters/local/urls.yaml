@@ -1,0 +1,5 @@
+integration:
+
+  health-api.base-url: https://api.health-api.example.com
+
+

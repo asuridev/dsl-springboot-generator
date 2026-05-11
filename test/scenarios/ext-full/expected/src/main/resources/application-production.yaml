@@ -1,0 +1,14 @@
+spring:
+  config:
+    import:
+      - "classpath:parameters/production/db.yaml"
+      - "classpath:parameters/production/cors.yaml"
+
+      - "classpath:parameters/production/urls.yaml"
+      - "classpath:parameters/production/resilience.yaml"
+
+
+
+springdoc:
+  swagger-ui:
+    enabled: false

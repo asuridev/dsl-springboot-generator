@@ -1186,6 +1186,8 @@ function validate(doc, opts = {}) {
       }
     }
 
+    validateDomainMethodParameters(agg);
+
     // domainMethods[].emits must reference a published event (S22: accept string or list)
     for (const dm of agg.domainMethods || []) {
       // S23: the 'create' domainMethod must return the aggregate name (not void).
@@ -1210,6 +1212,8 @@ function validate(doc, opts = {}) {
       dm.emitsList = dmEmitsList;
     }
   }
+
+  validateDomainEventPayloadMappings(doc);
 
   // command UCs must reference a declared domainMethod
   const aggByName = new Map((doc.aggregates || []).map((a) => [a.name, a]));
@@ -1774,6 +1778,108 @@ function validateRepositories(doc) {
   }
 }
 
+function validateDomainEventPayloadMappings(doc) {
+  const publishedByName = new Map(((doc.domainEvents || {}).published || []).map((event) => [event.name, event]));
+  const allowedExplicitSources = new Set(['aggregate', 'param', 'timestamp', 'constant']);
+
+  for (const aggregate of doc.aggregates || []) {
+    const aggregatePropNames = new Set((aggregate.properties || []).map((property) => property.name));
+    const aggregateCamelId = aggregate.name.charAt(0).toLowerCase() + aggregate.name.slice(1) + 'Id';
+
+    for (const domainMethod of aggregate.domainMethods || []) {
+      const emittedEvents = domainMethod.emitsList || [];
+      if (emittedEvents.length === 0) continue;
+      const methodParamNames = new Set((domainMethod.params || []).map((param) => param.name));
+
+      for (const eventName of emittedEvents) {
+        const event = publishedByName.get(eventName);
+        if (!event) continue;
+        const ctx = `domainEvents.published "${event.name}" emitted by aggregate "${aggregate.name}" domainMethod "${domainMethod.name}"`;
+
+        for (const payload of event.payload || []) {
+          if (!payload || !payload.name) continue;
+          if (payload.source) {
+            validateExplicitDomainEventPayloadSource(payload, ctx, aggregate, aggregatePropNames, aggregateCamelId, methodParamNames, allowedExplicitSources);
+            continue;
+          }
+
+          const resolvesImplicitly = payload.name === aggregateCamelId
+            || aggregatePropNames.has(payload.name)
+            || methodParamNames.has(payload.name)
+            || payload.type === 'DateTime'
+            || payload.type === 'Instant';
+
+          if (!resolvesImplicitly) {
+            fail(`${ctx} payload "${payload.name}" cannot be mapped deterministically. Declare source: aggregate with a valid field, source: param with a valid param, source: timestamp, or source: constant with value.`);
+          }
+        }
+      }
+    }
+  }
+}
+
+function validateDomainMethodParameters(aggregate) {
+  const aggregatePropNames = new Set((aggregate.properties || []).map((property) => property.name));
+  const childPropNames = new Set();
+  for (const entity of aggregate.entities || []) {
+    for (const property of entity.properties || []) {
+      childPropNames.add(property.name);
+    }
+  }
+
+  for (const domainMethod of aggregate.domainMethods || []) {
+    for (const param of domainMethod.params || []) {
+      if (!param || typeof param !== 'object' || Array.isArray(param)) {
+        fail(`domainMethod "${domainMethod.name}" in aggregate "${aggregate.name}" has a non-mapping param entry.`);
+      }
+      if (!param.name) {
+        fail(`domainMethod "${domainMethod.name}" in aggregate "${aggregate.name}" has a param without "name".`);
+      }
+      if (param.type) {
+        resolveType(param.type);
+        continue;
+      }
+
+      const conventionallyResolvable = aggregatePropNames.has(param.name)
+        || childPropNames.has(param.name)
+        || param.name === 'id'
+        || param.name.endsWith('Id')
+        || param.name.endsWith('At')
+        || param.name === 'password'
+        || param.name === 'passwordHash';
+
+      if (!conventionallyResolvable) {
+        fail(`domainMethod "${domainMethod.name}" in aggregate "${aggregate.name}" param "${param.name}" is missing "type" and cannot be resolved from an aggregate/entity property or a documented naming convention.`);
+      }
+    }
+  }
+}
+
+function validateExplicitDomainEventPayloadSource(payload, ctx, aggregate, aggregatePropNames, aggregateCamelId, methodParamNames, allowedExplicitSources) {
+  if (!allowedExplicitSources.has(payload.source)) {
+    fail(`${ctx} payload "${payload.name}" declares unsupported source "${payload.source}". Allowed sources for generated domain-event payloads: ${[...allowedExplicitSources].join(', ')}.`);
+  }
+
+  if (payload.source === 'aggregate') {
+    const field = payload.field || payload.name;
+    if (field === 'id' || field === aggregateCamelId) return;
+    if (!aggregatePropNames.has(field)) {
+      fail(`${ctx} payload "${payload.name}" declares source: aggregate field "${field}" but aggregate "${aggregate.name}" has no such property.`);
+    }
+  }
+
+  if (payload.source === 'param') {
+    const paramName = payload.param || payload.name;
+    if (!methodParamNames.has(paramName)) {
+      fail(`${ctx} payload "${payload.name}" declares source: param "${paramName}" but the emitting domainMethod has no such parameter.`);
+    }
+  }
+
+  if (payload.source === 'constant' && (payload.value === undefined || payload.value === null)) {
+    fail(`${ctx} payload "${payload.name}" declares source: constant but is missing required value.`);
+  }
+}
+
 // ─── Public API ──────────────────────────────────────────────────────────────
 
 /**
@@ -1884,6 +1990,17 @@ function normalizeAsyncReturns(doc) {
   }
 }
 
+function validateBlockingUseCaseFallbacks(doc) {
+  if (!Array.isArray(doc.useCases)) return;
+  for (const uc of doc.useCases) {
+    if (uc.type !== 'command') continue;
+    if (uc.implementation !== 'full') continue;
+    if (!uc.returns) continue;
+    if (uc.bulk || (uc.async && uc.async.mode === 'jobTracking')) continue;
+    fail(`Use case "${uc.id}" declares implementation: full and returns: "${uc.returns}", but the generator cannot produce a deterministic command return mapping. Use implementation: scaffold for Phase 3 mapping, remove returns, or model the result as query/read-model output.`);
+  }
+}
+
 async function readBcYaml(bcName, opts = {}) {
   const filePath = path.join(process.cwd(), 'arch', bcName, `${bcName}.yaml`);
 
@@ -1925,6 +2042,8 @@ async function readBcYaml(bcName, opts = {}) {
 
   // [G10] Async UCs return JobReference (jobTracking) or void (fireAndForget).
   normalizeAsyncReturns(doc);
+
+  validateBlockingUseCaseFallbacks(doc);
 
   return doc;
 }

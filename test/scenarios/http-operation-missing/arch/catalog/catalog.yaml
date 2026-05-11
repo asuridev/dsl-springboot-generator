@@ -1,0 +1,42 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+    domainMethods:
+      - name: create
+        returns: Product
+        params:
+          - name: name
+            type: String(200)
+
+useCases:
+  - id: UC-PRD-001
+    name: CreateProduct
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: createProduct
+    method: create
+    input:
+      - name: name
+        type: String(200)
+        source: body
+        required: true
+    implementation: scaffold
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: save
+        signature: "save(Product): Product"

@@ -1,8 +1,10 @@
 package <%= packageName %>.<%= moduleName %>.application.usecases;
 
 import <%= packageName %>.<%= moduleName %>.application.queries.<%= useCaseName %>Query;
+<% if (injectDependencies) { %>
 import <%= packageName %>.<%= moduleName %>.domain.repository.<%= repoName %>;
 import <%= packageName %>.<%= moduleName %>.application.mappers.<%= mapperName %>;
+<% } %>
 import <%= packageName %>.shared.domain.annotations.ApplicationComponent;
 import <%= packageName %>.shared.domain.annotations.LogExceptions;
 import <%= packageName %>.shared.domain.interfaces.QueryHandler;
@@ -21,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 <% } %>@ApplicationComponent
 public class <%= useCaseName %>QueryHandler implements QueryHandler<<%= useCaseName %>Query, <%- returnType %>> {
 
+<% if (injectDependencies) { %>
     private final <%= repoName %> <%= repoFieldName %>;
     private final <%= mapperName %> <%= mapperFieldName %>;
 
@@ -28,6 +31,7 @@ public class <%= useCaseName %>QueryHandler implements QueryHandler<<%= useCaseN
         this.<%= repoFieldName %> = <%= repoFieldName %>;
         this.<%= mapperFieldName %> = <%= mapperFieldName %>;
     }
+<% } %>
 
     @Override
     @Transactional(readOnly = true)

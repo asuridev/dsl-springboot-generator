@@ -30,6 +30,7 @@ const { generateMessagingLayer, generateSharedBrokerConfig, buildRabbitMQTopolog
 const { readBcYaml } = require('../utils/bc-yaml-reader');
 const { readOpenApiYaml, readAsyncApiYaml, readInternalApiYaml } = require('../utils/arch-yaml-reader');
 const { validateIntegrationCoherence, reportDiagnostics } = require('../utils/integration-validator');
+const { validateOpenApiUseCases } = require('../utils/openapi-usecase-validator');
 
 // ─── BC discovery ─────────────────────────────────────────────────────────────
 
@@ -169,6 +170,17 @@ async function promptConfig(systemName, system) {
   };
 }
 
+async function readOptionalOpenApiDoc(bcName, kind) {
+  try {
+    return kind === 'internal'
+      ? await readInternalApiYaml(bcName)
+      : await readOpenApiYaml(bcName);
+  } catch (err) {
+    if (err.message && err.message.includes('OpenAPI YAML not found')) return null;
+    throw err;
+  }
+}
+
 /**
  * Main handler for the `build` command.
  * Orchestrates the full code generation pipeline.
@@ -273,19 +285,28 @@ async function buildCommand(options = {}) {
       }
     }
     const diagnostics = validateIntegrationCoherence(system, allBcYamls, archDir, asyncApiByBc);
+    const openApiByBc = new Map();
+    const internalApiByBc = new Map();
+    for (const bcYaml of allBcYamls) {
+      const openApiDoc = await readOptionalOpenApiDoc(bcYaml.bc, 'public');
+      const internalApiDoc = await readOptionalOpenApiDoc(bcYaml.bc, 'internal');
+      if (openApiDoc) openApiByBc.set(bcYaml.bc, openApiDoc);
+      if (internalApiDoc) internalApiByBc.set(bcYaml.bc, internalApiDoc);
+      diagnostics.push(...validateOpenApiUseCases(bcYaml, openApiDoc, internalApiDoc));
+    }
     if (diagnostics.length === 0) {
-      validationSpinner.succeed('Integration coherence validated — no issues');
+      validationSpinner.succeed('Integration and HTTP contracts validated — no issues');
     } else {
       validationSpinner.stop();
       const { hasErrors, errors, warnings } = reportDiagnostics(diagnostics, logger);
       if (hasErrors && strict) {
-        logger.error(`Integration validation failed: ${errors} error(s), ${warnings} warning(s). Re-run with --no-strict to continue.`);
+        logger.error(`Validation failed: ${errors} error(s), ${warnings} warning(s). Re-run with --no-strict to continue.`);
         process.exit(1);
       }
       if (hasErrors) {
-        logger.warn(`Integration validation reported ${errors} error(s), ${warnings} warning(s) — continuing because --no-strict was set.`);
+        logger.warn(`Validation reported ${errors} error(s), ${warnings} warning(s) — continuing because --no-strict was set.`);
       } else {
-        logger.warn(`Integration validation reported ${warnings} warning(s).`);
+        logger.warn(`Validation reported ${warnings} warning(s).`);
       }
     }
 
@@ -391,7 +412,12 @@ async function buildCommand(options = {}) {
         await generateOutboundHttpAdapters(bcYaml, resolvedConfig, outputDir, system);
         outboundAdapterCount += outboundIntegrations.length;
       } catch (err) {
-        logger.warn(`Skipping outbound HTTP adapters for ${bcYaml.bc}: ${err.message}`);
+        const message = `Skipping outbound HTTP adapters for ${bcYaml.bc}: ${err.message}`;
+        if (strict) {
+          outboundSpinner.fail(message);
+          throw new Error(`${message}. Re-run with --no-strict to continue with a warning.`);
+        }
+        logger.warn(message);
       }
     }
     if (outboundAdapterCount > 0) {
@@ -407,7 +433,8 @@ async function buildCommand(options = {}) {
         allBcYamls,
         system,
         resolvedConfig,
-        outputDir
+        outputDir,
+        { strict }
       );
       if (adapters > 0) {
         externalSpinner.succeed(`External ACL adapters generated: ${adapters} system(s), ${extOpCount} operation(s)`);
@@ -525,7 +552,12 @@ async function buildCommand(options = {}) {
         const count = await generateControllerLayer(bcYaml, openApiDoc, internalApiDoc, resolvedConfig, outputDir);
         controllerCount += count;
       } catch (err) {
-        logger.warn(`Skipping controllers for ${bcYaml.bc}: ${err.message}`);
+        const message = `Skipping controllers for ${bcYaml.bc}: ${err.message}`;
+        if (strict) {
+          integrationSpinner.fail(message);
+          throw new Error(`${message}. Re-run with --no-strict to continue with a warning.`);
+        }
+        logger.warn(message);
       }
 
       // Messaging (integration events + port + adapter + listeners)
@@ -535,7 +567,12 @@ async function buildCommand(options = {}) {
           await generateMessagingLayer(bcYaml, asyncApiDoc, resolvedConfig, outputDir, reliabilityFlags, system.sagas || []);
         messagingCount += iec + lc;
       } catch (err) {
-        logger.warn(`Skipping messaging for ${bcYaml.bc}: ${err.message}`);
+        const message = `Skipping messaging for ${bcYaml.bc}: ${err.message}`;
+        if (strict) {
+          integrationSpinner.fail(message);
+          throw new Error(`${message}. Re-run with --no-strict to continue with a warning.`);
+        }
+        logger.warn(message);
       }
     }
     integrationSpinner.succeed(`Integration layer generated: ${controllerCount} controller(s), ${messagingCount} messaging artifact(s)`);

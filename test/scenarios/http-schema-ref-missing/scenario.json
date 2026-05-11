@@ -1,0 +1,5 @@
+{
+  "description": "OpenAPI response schemas with unresolved local $ref must fail before generation.",
+  "expectFailure": true,
+  "expectedErrorPattern": "HTTP-008"
+}

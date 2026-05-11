@@ -1,0 +1,68 @@
+package com.test.shared.infrastructure.auth;
+
+import feign.RequestInterceptor;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientProvider;
+import org.springframework.security.oauth2.client.OAuth2AuthorizedClientProviderBuilder;
+import org.springframework.security.oauth2.client.endpoint.OAuth2ClientCredentialsGrantRequest;
+import org.springframework.security.oauth2.client.endpoint.RestClientClientCredentialsTokenResponseClient;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizedClientManager;
+import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
+
+/**
+ * derived_from: system.yaml#/integrations/auth (type: oauth2-cc)
+ *
+ * Helper factory that builds Feign {@link RequestInterceptor} beans which
+ * fetch and attach an OAuth2 access token (client_credentials grant) to every
+ * outgoing HTTP request.
+ *
+ * <p>Each integration with {@code auth.type: oauth2-cc} declares a
+ * {@code credentialKey} that maps to a {@code spring.security.oauth2.client.registration.<key>}
+ * entry in {@code application.yaml}. The generated config classes call
+ * {@link #buildInterceptor(String)} to obtain a per-client interceptor bean.
+ */
+@Configuration
+public class OAuth2ClientCredentialsSupport {
+
+    private final OAuth2AuthorizedClientManager authorizedClientManager;
+
+    public OAuth2ClientCredentialsSupport(
+        ClientRegistrationRepository clientRegistrationRepository,
+        OAuth2AuthorizedClientRepository authorizedClientRepository
+    ) {
+        OAuth2AuthorizedClientProvider provider = OAuth2AuthorizedClientProviderBuilder.builder()
+            .clientCredentials()
+            .build();
+        DefaultOAuth2AuthorizedClientManager manager = new DefaultOAuth2AuthorizedClientManager(
+            clientRegistrationRepository,
+            authorizedClientRepository
+        );
+        manager.setAuthorizedClientProvider(provider);
+        this.authorizedClientManager = manager;
+    }
+
+    /**
+     * Builds a Feign {@link RequestInterceptor} that fetches a token for the
+     * given {@code registrationId} and attaches it as a Bearer header.
+     *
+     * @param registrationId Spring Security client registration id (matches the
+     *                       {@code credentialKey} declared in the YAML).
+     */
+    public RequestInterceptor buildInterceptor(String registrationId) {
+        return template -> {
+            OAuth2AuthorizeRequest request = OAuth2AuthorizeRequest.withClientRegistrationId(registrationId)
+                .principal("system")
+                .build();
+            OAuth2AuthorizedClient client = authorizedClientManager.authorize(request);
+            if (client != null && client.getAccessToken() != null) {
+                template.header("Authorization", "Bearer " + client.getAccessToken().getTokenValue());
+            }
+        };
+    }
+}

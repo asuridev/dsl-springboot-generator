@@ -1,7 +1,9 @@
 package <%= packageName %>.<%= moduleName %>.application.usecases;
 
 import <%= packageName %>.<%= moduleName %>.application.commands.<%= useCaseName %>Command;
+<% if (injectRepository) { %>
 import <%= packageName %>.<%= moduleName %>.domain.repository.<%= repoName %>;
+<% } %>
 import <%= packageName %>.shared.domain.annotations.ApplicationComponent;
 import <%= packageName %>.shared.domain.annotations.LogExceptions;
 <% if (returnType) { %>import <%= packageName %>.shared.domain.interfaces.ReturningCommandHandler;
@@ -30,7 +32,9 @@ import org.springframework.transaction.annotation.Transactional;
 <% } %>@ApplicationComponent
 public class <%= useCaseName %>CommandHandler implements <% if (returnType) { %>ReturningCommandHandler<<%= useCaseName %>Command, <%= returnType %>><% } else { %>CommandHandler<<%= useCaseName %>Command><% } %> {
 
+<% if (injectRepository) { %>
     private final <%= repoName %> <%= repoFieldName %>;
+<% } %>
 <% if (fkRepos && fkRepos.length > 0) { %>
 <% fkRepos.forEach(fk => { %>    private final <%= fk.repoName %> <%= fk.repoFieldName %>;
 <% }); %>
@@ -44,10 +48,14 @@ public class <%= useCaseName %>CommandHandler implements <% if (returnType) { %>
 <%
   const hasFkRepos  = fkRepos  && fkRepos.length  > 0;
   const hasFkPorts  = fkPorts  && fkPorts.length   > 0;
-  const hasExtra    = hasFkRepos || hasFkPorts || needsMapper;
+    const hasExtra    = hasFkRepos || hasFkPorts || needsMapper;
+    const hasPrimaryRepo = !!injectRepository;
+    const hasDependencies = hasPrimaryRepo || hasExtra;
 %>
+<% if (hasDependencies) { %>
     public <%= useCaseName %>CommandHandler(
-            <%= repoName %> <%= repoFieldName %><%= hasExtra ? ',' : '' %>
+<% if (hasPrimaryRepo) { %>            <%= repoName %> <%= repoFieldName %><%= hasExtra ? ',' : '' %>
+<% } %>
 <% if (hasFkRepos) { %>
 <% fkRepos.forEach((fk, i) => { %>            <%= fk.repoName %> <%= fk.repoFieldName %><%= (i < fkRepos.length - 1 || hasFkPorts || needsMapper) ? ',' : '' %>
 <% }); %>
@@ -58,7 +66,8 @@ public class <%= useCaseName %>CommandHandler implements <% if (returnType) { %>
 <% } %>
 <% if (needsMapper) { %>            <%= mapperName %> <%= mapperFieldName %>
 <% } %>) {
-        this.<%= repoFieldName %> = <%= repoFieldName %>;
+<% if (hasPrimaryRepo) { %>        this.<%= repoFieldName %> = <%= repoFieldName %>;
+<% } %>
 <% if (hasFkRepos) { %>
 <% fkRepos.forEach(fk => { %>        this.<%= fk.repoFieldName %> = <%= fk.repoFieldName %>;
 <% }); %>
@@ -69,6 +78,7 @@ public class <%= useCaseName %>CommandHandler implements <% if (returnType) { %>
 <% } %>
 <% if (needsMapper) { %>        this.<%= mapperFieldName %> = <%= mapperFieldName %>;
 <% } %>    }
+<% } %>
 
     @Override
     @Transactional

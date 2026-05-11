@@ -1,3 +1,4 @@
 {
-  "description": "Enum generation: lifecycle enum (VALID_TRANSITIONS + canTransitionTo + transitionTo) and classification enum (no machine). Verifies that the aggregate business method contains the transitionTo call detected from the enum transitions."
+  "description": "Enum generation: lifecycle enum (VALID_TRANSITIONS + canTransitionTo + transitionTo) and classification enum (no machine). Verifies that the aggregate business method contains the transitionTo call detected from the enum transitions.",
+  "compileGeneratedJava": true
 }

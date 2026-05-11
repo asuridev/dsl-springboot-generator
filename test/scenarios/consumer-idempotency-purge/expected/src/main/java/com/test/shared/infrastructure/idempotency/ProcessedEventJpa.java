@@ -1,0 +1,55 @@
+// derived_from: system.yaml#/infrastructure/reliability/consumerIdempotency
+package com.test.shared.infrastructure.idempotency;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Embeddable;
+import jakarta.persistence.EmbeddedId;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Table;
+import java.io.Serializable;
+import java.time.Instant;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+
+/**
+ * Idempotency log: records the {@code (handlerId, eventId)} pairs that have
+ * already been processed by a consumer. The {@code IdempotencyGuard} consults
+ * this table on every inbound message and short-circuits duplicates.
+ *
+ * derived_from: system.yaml#/infrastructure/reliability/consumerIdempotency
+ */
+@Entity
+@Table(name = "processed_event")
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Builder
+public class ProcessedEventJpa {
+
+    @EmbeddedId
+    private ProcessedEventId id;
+
+    @Column(name = "processed_at", nullable = false)
+    private Instant processedAt;
+
+    @Embeddable
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Builder
+    @EqualsAndHashCode
+    public static class ProcessedEventId implements Serializable {
+
+        @Column(name = "handler_id", nullable = false, length = 512)
+        private String handlerId;
+
+        @Column(name = "event_id", nullable = false, length = 64)
+        private String eventId;
+    }
+}

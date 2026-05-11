@@ -1,0 +1,36 @@
+bc: item
+version: "1.0.0"
+
+aggregates:
+  - name: Item
+    root: Item
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(100)
+    domainMethods:
+      - name: create
+        returns: Item
+        params:
+          - name: name
+            type: String(100)
+
+useCases:
+  - id: calculate-item-price
+    name: CalculateItemPrice
+    type: command
+    aggregate: Item
+    returns: Decimal
+    trigger:
+      kind: http
+      operationId: calculateItemPrice
+    input:
+      - name: itemId
+        type: Uuid
+        source: path
+        required: true
+    implementation: scaffold

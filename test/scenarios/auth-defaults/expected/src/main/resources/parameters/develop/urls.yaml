@@ -1,0 +1,10 @@
+integration:
+
+  catalog.base-url: ${CATALOG_URL:https://api.catalog.example.com}
+
+
+  # ── auth secrets — configure via environment variables ──────────────────
+
+  # integration.catalog.bearer-token: ${CATALOG_BEARER_TOKEN}
+
+

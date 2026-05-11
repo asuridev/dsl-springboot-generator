@@ -343,7 +343,8 @@ async function generateForExternal(bcYaml, ext, config, outputDir, system = {}) 
 
 // ─── Public API ──────────────────────────────────────────────────────────────
 
-async function generateExternalAdapters(allBcYamls, system, config, outputDir) {
+async function generateExternalAdapters(allBcYamls, system, config, outputDir, options = {}) {
+  const strict = options.strict === true;
   const externalsByName = new Map((system.externalSystems || []).map((e) => [e.name, e]));
   if (externalsByName.size === 0) return { adapters: 0, operations: 0 };
 
@@ -359,9 +360,11 @@ async function generateExternalAdapters(allBcYamls, system, config, outputDir) {
       const ext = externalsByName.get(ob.name);
       if (!ext) continue;
       if (!ext.operations || ext.operations.length === 0) {
-        logger.info(
-          `External system "${ext.name}" has no operations declared in system.yaml — skipping ACL adapter generation for ${bcYaml.bc} → ${ext.name}.`
-        );
+        const message = `External system "${ext.name}" has no operations declared in system.yaml — skipping ACL adapter generation for ${bcYaml.bc} → ${ext.name}.`;
+        if (strict) {
+          throw new Error(`${message} Re-run with --no-strict to continue with a warning.`);
+        }
+        logger.info(message);
         continue;
       }
 
@@ -372,7 +375,11 @@ async function generateExternalAdapters(allBcYamls, system, config, outputDir) {
           operations += opCount;
         }
       } catch (err) {
-        logger.warn(`Skipping external ACL adapter for ${bcYaml.bc} → ${ext.name}: ${err.message}`);
+        const message = `Skipping external ACL adapter for ${bcYaml.bc} → ${ext.name}: ${err.message}`;
+        if (strict) {
+          throw new Error(`${message}. Re-run with --no-strict to continue with a warning.`);
+        }
+        logger.warn(message);
       }
     }
   }

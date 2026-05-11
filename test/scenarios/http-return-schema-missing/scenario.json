@@ -1,0 +1,5 @@
+{
+  "description": "HTTP-006: HTTP use case returns must have a 2xx OpenAPI response schema.",
+  "expectFailure": true,
+  "expectedErrorPattern": "HTTP-006"
+}

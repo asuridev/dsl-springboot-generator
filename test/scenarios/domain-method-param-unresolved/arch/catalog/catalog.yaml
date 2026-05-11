@@ -1,0 +1,44 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+    domainMethods:
+      - name: create
+        returns: Product
+        params:
+          - name: name
+            type: String(200)
+      - name: renameWithAlias
+        returns: void
+        params:
+          - name: alias
+
+useCases:
+  - id: UC-PRD-001
+    name: RenameProductAlias
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: renameProductAlias
+    method: renameWithAlias
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+      - name: alias
+        type: String(100)
+        source: body
+        required: true
+    implementation: scaffold

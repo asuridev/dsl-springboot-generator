@@ -1,0 +1,5 @@
+{
+  "description": "HTTP-003: HTTP use case path/query/header inputs must exist as OpenAPI parameters.",
+  "expectFailure": true,
+  "expectedErrorPattern": "HTTP-003"
+}

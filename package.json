@@ -10,6 +10,7 @@
     "start": "node bin/dsl-springboot.js",
     "test": "node test/runner.js",
     "test:scenario": "node test/runner.js --scenario",
+    "test:compile": "node test/runner.js --compile",
     "test:accept": "node test/runner.js --accept",
     "test:verbose": "node test/runner.js --verbose"
   },

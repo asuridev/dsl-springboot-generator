@@ -1,0 +1,5 @@
+{
+  "description": "HTTP-001: HTTP use case operationId must exist in public OpenAPI or Internal API.",
+  "expectFailure": true,
+  "expectedErrorPattern": "HTTP-001"
+}

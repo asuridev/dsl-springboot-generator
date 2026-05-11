@@ -1,0 +1,10 @@
+integration:
+
+  billing-service.base-url: ${BILLING_SERVICE_URL}
+
+
+  # ── auth secrets — configure via environment variables ──────────────────
+
+  # integration.billing-service.token: ${BILLING_SERVICE_BEARER_TOKEN}
+
+

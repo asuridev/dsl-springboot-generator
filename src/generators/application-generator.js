@@ -883,7 +883,7 @@ function buildQueryReturnType(uc, agg, repoMethods) {
   // Normalize OpenAPI schema name → Java class name for aggregate ResponseDtos
   // e.g. "CategoryResponse" → "CategoryResponseDto", "ProductResponse" → "ProductResponseDto"
   const normalize = (name) =>
-    name === `${agg.name}Response` ? `${agg.name}ResponseDto` : name;
+    (name === agg.name || name === `${agg.name}Response`) ? `${agg.name}ResponseDto` : name;
 
   // Page[SomeDto] → PagedResponse<SomeDto>
   const pageMatch = /^Page\[(.+)\]$/.exec(raw);
@@ -1887,6 +1887,7 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
       mapperName: '',
       mapperFieldName: '',
       authContextFields,
+      injectRepository: uc.implementation === 'full' && !uc.async,
       implementation: (uc.async ? 'full' : (uc.implementation || 'scaffold')),
       body,
       imports: extraImports,
@@ -2154,6 +2155,7 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
   // Scaffold if: sub-entity query, OR custom DTO that is NOT a derivable projection.
   const isCustomNonProjection = !isAggResponseDto && !isDerivableProjection;
   const effectiveImpl = (isSubEntityQuery(uc, agg) || isCustomNonProjection) ? 'scaffold' : (uc.implementation || 'scaffold');
+  const injectDependencies = effectiveImpl !== 'scaffold';
 
   let body = '';
   let extraImports = [];
@@ -2220,6 +2222,7 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
       repoFieldName,
       mapperName,
       mapperFieldName,
+      injectDependencies,
       returnType,
       implementation: effectiveImpl,
       body,

@@ -1,0 +1,8 @@
+package com.test.shared.domain.annotations;
+
+public enum LogLevel {
+    TRACE,
+    DEBUG,
+    INFO,
+    WARN
+}

@@ -1,0 +1,11 @@
+spring:
+  config:
+    import:
+      - "classpath:parameters/local/db.yaml"
+      - "classpath:parameters/local/cors.yaml"
+
+
+
+
+
+      - "classpath:parameters/local/auth-server.yaml"

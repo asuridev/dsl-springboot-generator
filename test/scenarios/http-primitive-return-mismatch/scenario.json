@@ -1,0 +1,5 @@
+{
+  "description": "HTTP-007: Primitive use case returns must match the 2xx OpenAPI response schema.",
+  "expectFailure": true,
+  "expectedErrorPattern": "HTTP-007"
+}

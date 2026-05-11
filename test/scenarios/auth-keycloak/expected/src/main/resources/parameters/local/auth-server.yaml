@@ -1,0 +1,6 @@
+# Authorization server — local profile
+# Default values for Keycloak running via docker-compose (port 8180).
+# Admin console: http://localhost:8180 — user: admin / password: admin
+auth:
+  jwks-uri: http://localhost:8180/realms/test-auth-keycloak-system/protocol/openid-connect/certs
+  issuer-uri: http://localhost:8180/realms/test-auth-keycloak-system

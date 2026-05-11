@@ -1,0 +1,18 @@
+system:
+  name: test-http-operation-duplicate-system
+  description: Test system for duplicate HTTP operation validation.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

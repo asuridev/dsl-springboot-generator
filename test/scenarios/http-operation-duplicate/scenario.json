@@ -1,0 +1,5 @@
+{
+  "description": "HTTP-002: OpenAPI operationId values must be unique within a BC contract.",
+  "expectFailure": true,
+  "expectedErrorPattern": "HTTP-002"
+}

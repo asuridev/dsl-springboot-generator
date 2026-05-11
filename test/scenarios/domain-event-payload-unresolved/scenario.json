@@ -1,0 +1,5 @@
+{
+  "description": "Domain event payload mappings must be deterministic; invalid aggregate fields fail before generation.",
+  "expectFailure": true,
+  "expectedErrorPattern": "has no such property"
+}

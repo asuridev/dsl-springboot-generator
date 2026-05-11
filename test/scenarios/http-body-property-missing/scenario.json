@@ -1,0 +1,5 @@
+{
+  "description": "HTTP-005: HTTP use case body inputs must exist in the OpenAPI requestBody schema.",
+  "expectFailure": true,
+  "expectedErrorPattern": "HTTP-005"
+}

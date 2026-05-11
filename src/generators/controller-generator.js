@@ -4,6 +4,7 @@ const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toCamelCase, toPackagePath } = require('../utils/naming');
 const { mapType, resolveCanonicalReturnType } = require('../utils/type-mapper');
+const { buildOpenApiOperationMap } = require('../utils/openapi-contract');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -18,55 +19,39 @@ const CTRL_RANGE_T_RE = /^Range\[(.+)\]$/;
  */
 function buildOpsMap(openApiDoc) {
   const map = new Map();
-  const paths = openApiDoc.paths || {};
-  const componentParams = openApiDoc.components?.parameters || {};
+  const operations = buildOpenApiOperationMap(openApiDoc);
 
-  // Resolve a parameter that might be a $ref to components/parameters
-  function resolveParam(p) {
-    if (p.$ref) {
-      const refName = p.$ref.split('/').pop();
-      return componentParams[refName] || null;
-    }
-    return p;
-  }
+  for (const [operationId, entry] of operations.entries()) {
+    const operation = entry.operation;
+    const opParams = entry.parameters || [];
+    const pathParams = opParams.filter((p) => p.in === 'path').map((p) => p.name);
+    const queryParams = opParams
+      .filter((p) => p.in === 'query')
+      .map((p) => ({
+        name: p.name,
+        required: p.required === true,
+        defaultValue: p.schema?.default ?? null,
+        type: resolveOApiParamType(p.schema),
+      }));
 
-  for (const [fullPath, pathItem] of Object.entries(paths)) {
-    const pathLevelParams = (pathItem.parameters || []).map(resolveParam).filter(Boolean);
+    const responses = operation.responses || {};
+    const primaryCode = Object.keys(responses).find((c) => c !== 'default') || '200';
+    const responseBody = responses[primaryCode];
+    const responseSchema = responseBody?.content?.['application/json']?.schema;
+    const responseSchemaRef = responseSchema?.$ref || responseSchema?.items?.$ref || null;
+    const isResponseArray = !responseSchema?.$ref && responseSchema?.type === 'array' && !!responseSchema?.items?.$ref;
 
-    for (const [httpMethod, operation] of Object.entries(pathItem)) {
-      if (httpMethod === 'parameters') continue;
-      if (typeof operation !== 'object' || !operation.operationId) continue;
-
-      const opParams = [...pathLevelParams, ...(operation.parameters || []).map(resolveParam).filter(Boolean)];
-      const pathParams = opParams.filter((p) => !p.$ref && p.in === 'path').map((p) => p.name);
-      const queryParams = opParams
-        .filter((p) => !p.$ref && p.in === 'query')
-        .map((p) => ({
-          name: p.name,
-          required: p.required === true,
-          defaultValue: p.schema?.default ?? null,
-          type: resolveOApiParamType(p.schema),
-        }));
-
-      const responses = operation.responses || {};
-      const primaryCode = Object.keys(responses).find((c) => c !== 'default') || '200';
-      const responseBody = responses[primaryCode];
-      const responseSchema = responseBody?.content?.['application/json']?.schema;
-      const responseSchemaRef = responseSchema?.$ref || responseSchema?.items?.$ref || null;
-      const isResponseArray = !responseSchema?.$ref && responseSchema?.type === 'array' && !!responseSchema?.items?.$ref;
-
-      map.set(operation.operationId, {
-        httpMethod: httpMethod.toUpperCase(),
-        fullPath,
-        pathParams,
-        queryParams,
-        hasRequestBody: !!operation.requestBody,
-        primaryResponseCode: parseInt(primaryCode, 10),
-        summary: operation.summary || operation.operationId,
-        responseSchemaRef,
-        isResponseArray,
-      });
-    }
+    map.set(operationId, {
+      httpMethod: entry.httpMethod,
+      fullPath: entry.fullPath,
+      pathParams,
+      queryParams,
+      hasRequestBody: !!operation.requestBody,
+      primaryResponseCode: parseInt(primaryCode, 10),
+      summary: operation.summary || operationId,
+      responseSchemaRef,
+      isResponseArray,
+    });
   }
 
   return map;
@@ -397,7 +382,7 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
   const isAsyncJobTracking = !isQuery && uc.async && uc.async.mode === 'jobTracking';
   const isAsyncFireForget = !isQuery && uc.async && uc.async.mode === 'fireAndForget';
   const normalizeInner = (inner) =>
-    inner === `${agg.name}Response` ? `${agg.name}ResponseDto` : inner;
+    (inner === agg.name || inner === `${agg.name}Response`) ? `${agg.name}ResponseDto` : inner;
   const returnType = isQuery
     ? paged
       ? (() => {
@@ -733,7 +718,7 @@ function buildInternalOperation(uc, internalApiOp, commonPrefix, agg, repoMethod
   // Use uc.returns as source of truth (same normalisation as buildQueryReturnType) so that
   // projection / custom names like "ProductPriceSnapshot" are not incorrectly suffixed with Dto.
   const normalizeInner = (inner) =>
-    inner === `${agg.name}Response` ? `${agg.name}ResponseDto` : inner;
+    (inner === agg.name || inner === `${agg.name}Response`) ? `${agg.name}ResponseDto` : inner;
   const returnType = isCommand
     ? 'void'
     : uc.returns

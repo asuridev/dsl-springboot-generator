@@ -16,9 +16,10 @@ const { spawnSync } = require('child_process');
  * @param {string} opts.generatorRoot - absolute path to the generator root
  * @param {boolean} opts.accept       - if true, copy generated output to expected/
  * @param {boolean} opts.verbose      - if true, print build stdout/stderr
+ * @param {boolean} opts.forceCompile - if true, compile generated Java even when scenario config does not opt in
  * @returns {Promise<{passed: boolean, errors: string[], accepted: number}>}
  */
-async function runScenario({ name, scenarioDir, generatorRoot, accept, verbose }) {
+async function runScenario({ name, scenarioDir, generatorRoot, accept, verbose, forceCompile = false }) {
   const errors = [];
   let tmpDir = null;
 
@@ -67,7 +68,7 @@ async function runScenario({ name, scenarioDir, generatorRoot, accept, verbose }
           errors.push(`Expected error pattern "${expectedErrorPattern}" not found in output`);
           const relevant = (stdout + stderr)
             .split('\n')
-            .filter((l) => l.includes('INT-') || l.toLowerCase().includes('error'))
+            .filter((l) => l.includes('INT-') || l.includes('HTTP-') || l.toLowerCase().includes('error'))
             .slice(0, 4);
           relevant.forEach((l) => errors.push(`  ${l.trim()}`));
         }
@@ -79,7 +80,7 @@ async function runScenario({ name, scenarioDir, generatorRoot, accept, verbose }
       errors.push(`Build failed with exit code ${exitCode}`);
       const relevant = (stdout + stderr)
         .split('\n')
-        .filter((l) => l.includes('INT-') || l.toLowerCase().includes('error'))
+        .filter((l) => l.includes('INT-') || l.includes('HTTP-') || l.toLowerCase().includes('error'))
         .slice(0, 6);
       relevant.forEach((l) => errors.push(`  ${l.trim()}`));
       return { passed: false, errors, accepted: 0 };
@@ -114,8 +115,22 @@ async function runScenario({ name, scenarioDir, generatorRoot, accept, verbose }
         );
         errors.push(...resourcesDiffErrors);
       }
+    } else if (scenarioConfig.allowNoExpected === true) {
+      console.log(`    ℹ  No expected/ directory — scenario.json allowNoExpected=true`);
     } else {
-      console.log(`    ℹ  No expected/ directory — run with --accept to create golden files`);
+      errors.push('[diff] Missing expected/ directory for successful scenario. Run with --accept to create golden files, or set scenario.json allowNoExpected=true for intentional smoke scenarios.');
+    }
+
+    // ── Generated Java compilation ───────────────────────────────────────────
+    const shouldCompile = !expectFailure && (forceCompile || scenarioConfig.compileGeneratedJava === true);
+    if (shouldCompile) {
+      const compileTask = scenarioConfig.gradleTask || 'compileJava';
+      const compileErrors = await compileGeneratedJava(tmpDir, {
+        task: compileTask,
+        javaHome: scenarioConfig.javaHome || null,
+        verbose,
+      });
+      errors.push(...compileErrors);
     }
 
     return { passed: errors.length === 0, errors, accepted };
@@ -124,6 +139,91 @@ async function runScenario({ name, scenarioDir, generatorRoot, accept, verbose }
       await fs.remove(tmpDir).catch(() => {});
     }
   }
+}
+
+// ─── Generated Java compilation ──────────────────────────────────────────────
+
+async function compileGeneratedJava(generatedDir, { task, javaHome, verbose }) {
+  const errors = [];
+  const wrapperName = process.platform === 'win32' ? 'gradlew.bat' : 'gradlew';
+  const wrapperPath = path.join(generatedDir, wrapperName);
+
+  if (!(await fs.pathExists(wrapperPath))) {
+    return [`[compile] Gradle wrapper not found: ${wrapperName}`];
+  }
+
+  const resolvedJavaHome = await resolveJavaHome(javaHome);
+  const env = { ...process.env };
+  if (resolvedJavaHome) {
+    env.JAVA_HOME = resolvedJavaHome;
+    env.PATH = path.join(resolvedJavaHome, 'bin') + path.delimiter + (env.PATH || '');
+  }
+
+  const result = spawnSync(wrapperPath, [task, '--no-daemon'], {
+    cwd: generatedDir,
+    encoding: 'utf8',
+    env,
+    shell: process.platform === 'win32',
+  });
+
+  const stdout = result.stdout || '';
+  const stderr = result.stderr || '';
+  const exitCode = result.status;
+
+  if (verbose) {
+    if (stdout) process.stdout.write(stdout);
+    if (stderr) process.stderr.write(stderr);
+  }
+
+  if (result.error) {
+    errors.push(`[compile] Failed to run Gradle wrapper: ${result.error.message}`);
+    return errors;
+  }
+
+  if (exitCode !== 0) {
+    errors.push(`[compile] Gradle ${task} failed with exit code ${exitCode}`);
+    summarizeCompileOutput(stdout + stderr).forEach((line) => errors.push(`  ${line}`));
+  }
+
+  return errors;
+}
+
+async function resolveJavaHome(configuredJavaHome) {
+  if (configuredJavaHome) return configuredJavaHome;
+  if (process.env.DSL_TEST_JAVA_HOME) return process.env.DSL_TEST_JAVA_HOME;
+  if (process.env.JAVA_HOME && await isUsableJavaHome(process.env.JAVA_HOME)) return process.env.JAVA_HOME;
+
+  const windowsDefault = 'C:\\java\\jdk-17';
+  if (process.platform === 'win32' && await isUsableJavaHome(windowsDefault)) {
+    return windowsDefault;
+  }
+
+  return null;
+}
+
+async function isUsableJavaHome(javaHome) {
+  const javaExecutable = process.platform === 'win32' ? 'java.exe' : 'java';
+  return fs.pathExists(path.join(javaHome, 'bin', javaExecutable));
+}
+
+function summarizeCompileOutput(output) {
+  const lines = output
+    .split('\n')
+    .map((line) => line.trimEnd())
+    .filter(Boolean);
+
+  const relevant = lines.filter((line) => {
+    const lower = line.toLowerCase();
+    return lower.includes('error:')
+      || lower.includes('cannot find symbol')
+      || lower.includes('location:')
+      || lower.includes('build failed')
+      || lower.includes('compilation failed')
+      || lower.includes('execution failed')
+      || lower.includes('java_home');
+  });
+
+  return (relevant.length > 0 ? relevant : lines.slice(-12)).slice(0, 12);
 }
 
 // ─── Assertions ───────────────────────────────────────────────────────────────
@@ -278,4 +378,4 @@ function normalizeContent(content) {
     .trim();
 }
 
-module.exports = { runScenario, checkAssertions, diffDirectories, acceptScenario };
+module.exports = { runScenario, checkAssertions, diffDirectories, acceptScenario, compileGeneratedJava };

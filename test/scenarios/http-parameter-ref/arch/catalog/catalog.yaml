@@ -1,0 +1,42 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+    domainMethods:
+      - name: create
+        returns: Product
+        params:
+          - name: name
+            type: String(200)
+
+useCases:
+  - id: UC-PRD-001
+    name: GetProductById
+    type: query
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: getProductById
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+    returns: ProductDetail
+    loadAggregate: true
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product"

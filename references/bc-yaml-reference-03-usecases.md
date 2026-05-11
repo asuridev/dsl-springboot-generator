@@ -112,6 +112,20 @@ trigger:
 | `kind` | `http` | ✅ | |
 | `operationId` | camelCase | ✅ | Referencia a una operación en `{bc}-open-api.yaml`. Determina método HTTP, path y parámetros del endpoint. |
 
+El build en modo estricto valida el contrato OpenAPI/Internal API antes de generar código. Diagnósticos activos:
+
+| Código | Nivel | Descripción |
+|---|---|---|
+| `HTTP-001` | error | `trigger.operationId` no existe ni en `{bc}-open-api.yaml` ni en `{bc}-internal-api.yaml`. |
+| `HTTP-002` | error | `operationId` duplicado dentro de un documento o compartido entre OpenAPI público e internal API del mismo BC. |
+| `HTTP-003` | error | Un input `path`, `query` o `header` del use case no existe como parámetro OpenAPI. |
+| `HTTP-004` | error | El use case declara inputs `source: body` pero la operación no declara `requestBody`. |
+| `HTTP-005` | error | Un input `source: body` no existe como propiedad del schema de `requestBody`. |
+| `HTTP-006` | error | El use case declara `returns` pero la operación no tiene schema de respuesta 2xx. |
+| `HTTP-007` | error | `returns` primitivo no es compatible con el schema de respuesta 2xx. |
+| `HTTP-008` | error | Un schema OpenAPI referencia un `$ref` local inexistente en `components.schemas`. |
+| `HTTP-009` | error | Un schema OpenAPI tiene una propiedad sin `type`, `$ref` ni composición, o un array sin `items`. |
+
 **Código Java generado** — fragmento del controller:
 ```java
 @PostMapping("/products")

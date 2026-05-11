@@ -1,0 +1,5 @@
+# Authorization server — test profile
+# Set AUTH_JWKS_URI and AUTH_ISSUER_URI in your environment or CI/CD pipeline.
+auth:
+  jwks-uri: ${AUTH_JWKS_URI}
+  issuer-uri: ${AUTH_ISSUER_URI}

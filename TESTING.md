@@ -31,6 +31,10 @@ npm run test:scenario -- ext-full
 # Ver el stdout/stderr del build durante la ejecución
 npm run test:verbose
 
+# Forzar compilación Java generada en escenarios happy path
+npm run test:compile
+npm run test:compile -- --scenario domain-enums
+
 # Aceptar el output generado como golden files (ver sección Flujo de aceptación)
 npm run test:accept
 npm run test:accept -- --scenario ext-full
@@ -45,8 +49,15 @@ npm run test:accept -- --scenario ext-full
 3. Ejecuta `bin/dsl-springboot.js build --strict` en ese directorio (**proceso hijo** — nunca termina el propio runner).
 4. Si el build falla con exit code ≠ 0: **FAIL** (a menos que `expectFailure: true`).
 5. Verifica las **assertions** declaradas en `assertions.json`.
-6. Compara el `src/main/java/` generado contra los golden files en `expected/`.
-7. Limpia el directorio temporal.
+6. Compara el `src/main/java/` generado contra los golden files en `expected/`. En escenarios exitosos, `expected/` es obligatorio salvo `allowNoExpected: true`.
+7. Si `scenario.json` declara `compileGeneratedJava: true` o el runner se ejecuta con `--compile`, ejecuta el Gradle wrapper del proyecto generado.
+8. Limpia el directorio temporal.
+
+La compilación Java es una compuerta opt-in por escenario para controlar el coste de la suite. En escenarios seleccionados ejecuta `compileJava --no-daemon` por defecto y resume errores de compilación sin volcar todo el log, salvo que se use `--verbose`.
+
+Los escenarios `cs-http-full` y `event-kafka-outbox` ejecutan `gradle build --no-daemon` como compuerta pesada representativa: cubren REST/integración HTTP y mensajería Kafka/outbox respectivamente. No se activa `build` en todos los escenarios para mantener la suite razonable en tiempo.
+
+Prerequisito local: debe existir un JDK válido. El runner resuelve Java en este orden: `scenario.json > javaHome`, variable `DSL_TEST_JAVA_HOME`, variable `JAVA_HOME`, y por último `C:\java\jdk-17` si existe en Windows.
 
 ---
 
@@ -55,9 +66,9 @@ npm run test:accept -- --scenario ext-full
 Al crear un escenario nuevo, `expected/` no existe todavía. Pasos:
 
 ```bash
-# 1. Primera ejecución — el build debe pasar, las assertions deben cumplirse
+# 1. Primera ejecución — el build y las assertions deben pasar, pero faltará expected/
 npm run test:scenario -- mi-escenario
-# → "ℹ No expected/ directory — run with --accept to create golden files"
+# → "[diff] Missing expected/ directory..."
 
 # 2. Inspeccionar el output manualmente (opcional — usa --verbose para ver el path del temp)
 npm run test:verbose -- --scenario mi-escenario
@@ -130,7 +141,11 @@ Los paths en las claves usan `/` (cross-platform). El runner los traduce a separ
 {
   "description": "Descripción del escenario",
   "expectFailure": false,
-  "expectedErrorPattern": "INT-022"
+  "expectedErrorPattern": "INT-022",
+  "compileGeneratedJava": true,
+  "allowNoExpected": false,
+  "gradleTask": "compileJava",
+  "javaHome": "C:\\java\\jdk-17"
 }
 ```
 
@@ -139,6 +154,10 @@ Los paths en las claves usan `/` (cross-platform). El runner los traduce a separ
 | `description` | string | Documentación del propósito del escenario. |
 | `expectFailure` | boolean | Si `true`, el build debe terminar con exit code ≠ 0. |
 | `expectedErrorPattern` | string | (Solo si `expectFailure: true`) Texto que debe aparecer en stdout/stderr. |
+| `compileGeneratedJava` | boolean | Si `true`, compila el proyecto Java generado después de assertions/diff. Se ignora en escenarios con `expectFailure: true`. |
+| `allowNoExpected` | boolean | Si `true`, permite un escenario exitoso sin `expected/`. Debe reservarse para smokes intencionales; por defecto un happy path sin golden files falla. |
+| `gradleTask` | string | Tarea Gradle a ejecutar cuando se compila. Default: `compileJava`. Para escenarios MVP completos puede usarse `build`. |
+| `javaHome` | string | Override de `JAVA_HOME` para el escenario. Si no se declara, se usa `DSL_TEST_JAVA_HOME`, `process.env.JAVA_HOME` o el fallback local de Windows si existe. |
 
 ---
 
@@ -146,6 +165,8 @@ Los paths en las claves usan `/` (cross-platform). El runner los traduce a separ
 
 | Escenario | Descripción |
 |---|---|
+| `cs-http-full` | Happy path customer-supplier HTTP con OpenAPI, internal API, resiliencia completa y `gradle build` del proyecto generado. |
+| `event-kafka-outbox` | Happy path/event regression con Kafka, outbox transaccional, consumidor y `gradle build` del proyecto generado. |
 | `ext-full` | Happy path: `externalSystems` con `schemas` anidados (`List<SchemaName>`), `domain` block, auth `api-key`, resilience `circuitBreaker` + `retries`, path variable. |
 
 ---

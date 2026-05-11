@@ -80,8 +80,8 @@ function resolveParamType(paramName, aggregateProps, childEntities, typeHint, bc
   if (aggrProp) {
     try {
       return mapType(aggrProp.type, aggrProp).javaType;
-    } catch (_) {
-      return 'Object';
+    } catch (err) {
+      throw new Error(`Cannot resolve Java type for domain method param "${paramName}" from aggregate property type "${aggrProp.type}": ${err.message}`);
     }
   }
 
@@ -91,8 +91,8 @@ function resolveParamType(paramName, aggregateProps, childEntities, typeHint, bc
     if (entProp) {
       try {
         return mapType(entProp.type, entProp).javaType;
-      } catch (_) {
-        return 'Object';
+      } catch (err) {
+        throw new Error(`Cannot resolve Java type for domain method param "${paramName}" from child entity property type "${entProp.type}": ${err.message}`);
       }
     }
   }
@@ -102,7 +102,7 @@ function resolveParamType(paramName, aggregateProps, childEntities, typeHint, bc
   if (paramName.endsWith('At')) return 'Instant';
   if (paramName === 'password' || paramName === 'passwordHash') return 'String';
 
-  return 'Object';
+  throw new Error(`Cannot resolve Java type for domain method param "${paramName}". Declare params[].type or use a documented naming convention.`);
 }
 
 // ─── Helper: parse method signature string ────────────────────────────────────

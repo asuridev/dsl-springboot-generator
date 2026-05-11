@@ -1,0 +1,18 @@
+system:
+  name: test-command-full-return-unmapped
+  description: Test system for blocking command return mapping fallbacks.
+  domainType: core
+
+boundedContexts:
+  - name: item
+    type: core
+    purpose: Manages inventory items.
+    aggregates:
+      - name: Item
+        root: Item
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

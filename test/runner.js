@@ -9,6 +9,7 @@
  *   node test/runner.js --scenario ext-full    # run one scenario
  *   node test/runner.js --accept               # accept generated output as golden files
  *   node test/runner.js --verbose              # print build output
+ *   node test/runner.js --compile              # compile generated Java for successful scenarios
  *
  * Workflow:
  *   1. First run with --accept creates expected/ golden files from generated output.
@@ -23,6 +24,7 @@ const { runScenario } = require('./utils/scenario-runner');
 const args = process.argv.slice(2);
 const acceptMode = args.includes('--accept');
 const verboseMode = args.includes('--verbose');
+const compileMode = args.includes('--compile');
 
 const scenarioIdx = args.indexOf('--scenario');
 const targetScenario = scenarioIdx >= 0 ? args[scenarioIdx + 1] : null;
@@ -56,6 +58,7 @@ async function main() {
   console.log('');
   console.log(`DSL Springboot Generator — Scenario Tests`);
   if (acceptMode) console.log('Mode: ACCEPT (generating golden files)');
+  if (compileMode) console.log('Mode: COMPILE (forcing generated Java compilation)');
   console.log(`Scenarios: ${scenarios.join(', ')}`);
 
   const results = [];
@@ -79,6 +82,7 @@ async function main() {
         generatorRoot,
         accept: acceptMode,
         verbose: verboseMode,
+        forceCompile: compileMode,
       });
     } catch (err) {
       result = { passed: false, errors: [`Unexpected runner error: ${err.message}`], accepted: 0 };

@@ -1,0 +1,16 @@
+spring:
+  security:
+    oauth2:
+      client:
+        registration:
+
+          billing-provider:
+            authorization-grant-type: client_credentials
+            client-id: ${BILLING_PROVIDER_CLIENT_ID}
+            client-secret: ${BILLING_PROVIDER_CLIENT_SECRET}
+
+        provider:
+
+          billing-provider:
+            token-uri: https://auth.billing.example.com/oauth/token
+

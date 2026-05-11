@@ -1,0 +1,5 @@
+{
+  "description": "Commands with implementation: full and returns must fail instead of generating return null TODOs.",
+  "expectFailure": true,
+  "expectedErrorPattern": "cannot produce a deterministic command return mapping"
+}

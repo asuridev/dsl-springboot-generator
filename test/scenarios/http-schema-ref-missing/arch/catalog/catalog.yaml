@@ -1,0 +1,36 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+    domainMethods:
+      - name: getById
+        params:
+          - name: productId
+            type: Uuid
+
+useCases:
+  - id: get-product-by-id
+    name: GetProductById
+    type: query
+    aggregate: Product
+    returns: ProductDetail
+    trigger:
+      kind: http
+      operationId: getProductById
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+    method: getById
+    implementation: scaffold

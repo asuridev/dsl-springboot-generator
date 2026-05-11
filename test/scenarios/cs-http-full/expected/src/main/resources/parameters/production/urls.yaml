@@ -1,0 +1,5 @@
+integration:
+
+  catalog.base-url: ${CATALOG_URL}
+
+

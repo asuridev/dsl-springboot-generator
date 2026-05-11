@@ -1,0 +1,38 @@
+bc: item
+version: "1.0.0"
+
+aggregates:
+  - name: Item
+    root: Item
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(100)
+        required: true
+    domainMethods:
+      - name: create
+        returns: Item
+        params:
+          - name: name
+            type: String(100)
+
+useCases:
+  - id: create-item
+    name: CreateItem
+    type: command
+    aggregate: Item
+    method: create
+    returns: Uuid
+    trigger:
+      kind: http
+      operationId: createItem
+    input:
+      - name: name
+        type: String(100)
+        source: body
+        required: true
+    implementation: full

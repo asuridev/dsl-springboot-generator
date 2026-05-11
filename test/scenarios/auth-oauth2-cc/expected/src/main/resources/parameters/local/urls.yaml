@@ -1,0 +1,5 @@
+integration:
+
+  auth-service.base-url: https://api.auth-service.example.com
+
+

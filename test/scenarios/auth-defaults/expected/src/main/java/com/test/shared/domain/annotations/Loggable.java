@@ -1,0 +1,22 @@
+package com.test.shared.domain.annotations;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface Loggable {
+    boolean before() default true;
+
+    boolean after() default true;
+
+    boolean exceptions() default true;
+
+    boolean timer() default false;
+
+    LogLevel level() default LogLevel.INFO;
+
+    String[] excludeArgs() default {};
+}

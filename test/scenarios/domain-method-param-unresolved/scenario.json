@@ -1,0 +1,5 @@
+{
+  "description": "Domain method params without type must be resolvable; otherwise the generator must not fall back to Object.",
+  "expectFailure": true,
+  "expectedErrorPattern": "cannot be resolved"
+}

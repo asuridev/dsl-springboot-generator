@@ -1,0 +1,25 @@
+openapi: "3.0.3"
+info:
+  title: Item API
+  version: "1.0.0"
+paths:
+  /items:
+    post:
+      operationId: createItem
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+      responses:
+        "200":
+          description: The UUID of the created item.
+          content:
+            application/json:
+              schema:
+                type: string
+                format: uuid

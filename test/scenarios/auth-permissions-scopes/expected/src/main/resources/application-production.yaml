@@ -1,0 +1,15 @@
+spring:
+  config:
+    import:
+      - "classpath:parameters/production/db.yaml"
+      - "classpath:parameters/production/cors.yaml"
+
+
+
+
+
+      - "classpath:parameters/production/auth-server.yaml"
+
+springdoc:
+  swagger-ui:
+    enabled: false

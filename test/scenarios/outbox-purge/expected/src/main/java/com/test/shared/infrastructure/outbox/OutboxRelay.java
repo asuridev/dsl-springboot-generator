@@ -1,0 +1,81 @@
+// derived_from: system.yaml#/infrastructure/reliability/outbox
+package com.test.shared.infrastructure.outbox;
+
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
+
+/**
+ * Polls the {@code outbox_event} table and forwards pending rows to Kafka.
+ *
+ * The stored payload is the already-serialized {@code EventEnvelope} JSON; it
+ * is sent verbatim with the {@code routing_key} column used as the partition
+ * key.
+ *
+ * derived_from: system.yaml#/infrastructure/reliability/outbox
+ */
+@Component
+public class OutboxRelay {
+
+    private static final Logger log = LoggerFactory.getLogger(OutboxRelay.class);
+    private static final int BATCH_SIZE = 100;
+
+    private final OutboxEventJpaRepository outboxRepository;
+    private final KafkaTemplate<String, String> kafkaTemplate;
+
+    @Value("${outbox.purge.retention-days:7}")
+    private int retentionDays;
+
+    public OutboxRelay(OutboxEventJpaRepository outboxRepository, KafkaTemplate<String, String> kafkaTemplate) {
+        this.outboxRepository = outboxRepository;
+        this.kafkaTemplate = kafkaTemplate;
+    }
+
+    @Scheduled(fixedDelayString = "${outbox.relay.fixed-delay-ms:1000}")
+    @Transactional
+    public void relay() {
+        List<OutboxEventJpa> pending = outboxRepository.findPending(PageRequest.of(0, BATCH_SIZE));
+        if (pending.isEmpty()) return;
+
+        for (OutboxEventJpa row : pending) {
+            try {
+                kafkaTemplate.send(row.getDestination(), row.getRoutingKey(), row.getPayload()).get();
+                row.setPublishedAt(Instant.now());
+                outboxRepository.save(row);
+            } catch (Exception ex) {
+                row.setAttempts(row.getAttempts() + 1);
+                row.setLastError(truncate(ex.getMessage(), 1024));
+                outboxRepository.save(row);
+                log.warn(
+                    "Outbox relay failed for id={} (attempt {}): {}",
+                    row.getId(),
+                    row.getAttempts(),
+                    ex.getMessage()
+                );
+            }
+        }
+    }
+
+    @Scheduled(cron = "${outbox.purge.cron:0 0 3 * * *}")
+    @Transactional
+    public void purge() {
+        Instant cutoff = Instant.now().minus(retentionDays, ChronoUnit.DAYS);
+        int deleted = outboxRepository.deletePublishedBefore(cutoff);
+        if (deleted > 0) {
+            log.info("Outbox purge: deleted {} published rows older than {} days", deleted, retentionDays);
+        }
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return null;
+        return s.length() <= max ? s : s.substring(0, max);
+    }
+}
