@@ -410,3 +410,271 @@ Resultado esperado:
 Si el objetivo es consolidar este proyecto como MVP, el siguiente ajuste mas importante es incorporar compilacion del Java generado dentro del ciclo de pruebas. Eso convierte la promesa principal del generador en una garantia verificable.
 
 Despues de eso, conviene endurecer `--strict` para que no omita artefactos declarados y agregar validacion fuerte OpenAPI/Internal API contra use cases. Con esas tres mejoras, el generador pasaria de ser un scaffolder avanzado con buena cobertura documental a una herramienta mucho mas confiable para producir proyectos Spring Boot compilables de forma deterministica.
+
+---
+
+## Analisis complementario de Fase 1: `dsl-design-system`
+
+Proyecto revisado:
+
+```text
+C:\Documentos\dsl-project\dsl-design-system\src
+```
+
+### Objetivo de la revision
+
+Validar si el proyecto de Fase 1, responsable de guiar el diseno y producir los artefactos `arch/`, esta suficientemente alineado con lo que el generador de Fase 2 consume. La revision inicial se hizo sin modificar archivos de `dsl-design-system`; posteriormente se implementaron ajustes concretos de alineacion en ese repositorio.
+
+### Estado general
+
+La Fase 1 esta conceptualmente bien alineada con la vision. El repositorio declara claramente que no genera codigo y que su responsabilidad es producir artefactos YAML agnosticos. El CLI `dsl` tiene tres comandos principales:
+
+- `dsl init`: inicializa `arch/`, copia agents/skills y crea `tools/dsl-validate/`.
+- `dsl validate`: valida coherencia entre `system.yaml`, `bc.yaml` y AsyncAPI.
+- `dsl preview`: genera una vista navegable de diagramas y contratos.
+
+Los agentes principales tambien estan alineados:
+
+- `design-system`: produce `arch/system/system.yaml`, `system-spec.md`, `system-diagram.mmd` y `AGENTS.md`.
+- `design-bounded-context`: produce `bc.yaml`, `bc-spec.md`, `bc-flows.md`, OpenAPI, Internal API condicional, AsyncAPI y diagramas.
+
+La Fase 1 ya contiene mucho conocimiento especifico del generador: restricciones de `useCases[]`, `domainRules[]`, `repositories[]`, `eventDtos[]`, `projections[]`, auth/resilience, idempotencia, cache, AsyncAPI y eventos. Eso es positivo porque reduce la probabilidad de que el agente de diseno produzca YAML que el generador rechace.
+
+### Soporte actual relevante para la coherencia con Fase 2
+
+La Fase 1 ya soporta o documenta correctamente:
+
+- Estructura canonical de `arch/system/` y `arch/{bc}/`.
+- Validacion previa de que un BC exista en `system.yaml` antes de ejecutar Paso 2.
+- Separacion entre diseno estrategico y tactico.
+- Exclusion de `arch/review/` en el descubrimiento de BCs dentro del validador.
+- Uso de `tools/dsl-validate` como validador local copiado al workspace del usuario.
+- Reglas `INT-001..INT-027` para integraciones, eventos, AsyncAPI, auth y schemas externos.
+- Prohibicion de `source: auth-context` en payloads de eventos (`INT-025`).
+- Uso de `source: authContext` para inputs/campos derivados del contexto de autenticacion.
+- Reglas para `eventDtos[]`, proyecciones persistentes, `versionGuarded`, outbox/idempotencia, auth, resiliencia y cache.
+- Reglas practicas para evitar errores de build conocidos, por ejemplo `queries returns: CategoryResponse` en lugar de `Category`.
+
+### Estado posterior a los ajustes implementados
+
+Despues del analisis se aplicaron cambios en `dsl-design-system` para cerrar los puntos mas directos de coherencia con el generador:
+
+- `src/utils/integration-validator.js` quedo sincronizado con el validador del generador. La comparacion `diff` entre ambos archivos no muestra diferencias.
+- `dsl init` sigue copiando el validador actualizado hacia `tools/dsl-validate/` porque `src/commands/init.js` ya usa `DSL_VALIDATE_SOURCES` para copiar `src/utils/integration-validator.js`.
+- Se corrigieron referencias de Fase 1 que mostraban `source: auth-context` como fuente valida en payloads publicados. Ahora queda documentado como prohibido por `INT-025` y se muestra el patron valido con `source: authContext` en propiedad/input y `source: aggregate` o `source: param` en el evento.
+- Se ajusto la regla de `domainRules[].type: uniqueness`: `field` queda recomendado para generacion completa, obligatorio solo cuando se usa `constraintName`.
+- Se aclaro la politica de commands REST: CQRS sin response body sigue siendo el default, pero si OpenAPI declara `responses.<2xx>.content.application/json`, el command debe declarar `useCases[].returns` y coincidir con el schema.
+- Se agrego una suite minima de smoke tests en `dsl-design-system/test/runner.js` y se reemplazo el script placeholder de `npm test`.
+
+Validaciones ejecutadas en `dsl-design-system`:
+
+```bash
+npm test
+node bin/dsl.js --help
+git diff --check
+```
+
+Resultado observado:
+
+- `npm test`: 5/5 tests pasan.
+- `node bin/dsl.js --help`: exitoso.
+- `git diff --check`: sin errores.
+- El validador de Fase 1 y el del generador quedaron sin drift detectable por `diff`.
+
+La nueva suite cubre:
+
+- `dsl init` crea `arch/`, `.agents/skills`, `.github/agents`, `tools/dsl-validate/` y `tools/package.json`.
+- El `tools/dsl-validate/bin/dsl.js validate` copiado valida un fixture minimo correcto.
+- Un fixture con `source: auth-context` en payload publicado falla con `INT-025`.
+- Un flujo incremental con BC declarado pero aun no disenado emite warning, no error estricto.
+- Las referencias principales no vuelven a whitelistear `auth-context` como fuente valida de payload publicado.
+
+### Ajustes necesarios para mayor coherencia
+
+Estos ajustes fueron revisados despues de la implementacion. Algunos quedaron resueltos y otros siguen como trabajo futuro. No implican cambiar la responsabilidad de Fase 1 ni hacerla dependiente de Spring Boot; son ajustes de contrato para que produzca artefactos mas compatibles con el generador actual.
+
+#### 1. Sincronizar el validador de Fase 1 con el del generador
+
+Habia drift entre:
+
+```text
+dsl-design-system/src/utils/integration-validator.js
+dsl-springboot-generator/src/utils/integration-validator.js
+```
+
+Estado: resuelto en el ajuste implementado.
+
+La diferencia mas importante era el manejo de BCs declarados en `system.yaml` pero todavia no disenados en `arch/{bc}/`. El generador ya degradaba algunos casos a warning para permitir un flujo incremental, mientras que el validador de Fase 1 tendia a marcarlos como error.
+
+Riesgo:
+
+- Durante el diseno incremental, Fase 1 puede bloquear al usuario por BCs que aun no han pasado por Paso 2.
+- Fase 1 y Fase 2 pueden reportar severidades distintas para el mismo set de artefactos.
+
+Accion aplicada:
+
+- Se sincronizo `dsl-design-system/src/utils/integration-validator.js` con `dsl-springboot-generator/src/utils/integration-validator.js`.
+- `INT-007`, `INT-012` e `INT-014` ahora consideran BCs declarados pero aun no disenados y degradan esos casos a warning cuando corresponde.
+- Se agrego un test smoke que valida el caso incremental.
+
+Pendiente recomendado:
+
+- Extraer las reglas `INT-*` a un paquete o modulo compartido versionado, usado por ambos proyectos.
+- Agregar una prueba simple en ambos repos que compare codigos de diagnostico activos (`INT-001..INT-027`) para detectar drift futuro.
+
+Prioridad: alta.
+
+#### 2. Corregir contradiccion documental sobre `source: auth-context` en eventos
+
+Estado: resuelto en el ajuste implementado.
+
+El skill tactico principal indicaba correctamente que `source: auth-context` esta prohibido en `domainEvents.published[].payload[]`. Sin embargo, una referencia interna de Fase 1 conservaba un ejemplo y una tabla donde aparecia como fuente valida del payload.
+
+Ejemplo de inconsistencia detectada:
+
+```yaml
+- { name: triggeredBy, type: String, source: auth-context, claim: sub }
+```
+
+Esto contradice `INT-025`, que el generador y el validador ya aplican como error.
+
+Riesgo:
+
+- El agente puede leer la referencia antigua y generar un payload invalido.
+- El usuario recibe una regla contradictoria: una seccion dice que esta prohibido y otra lo muestra como permitido.
+
+Accion aplicada:
+
+- Se elimino `auth-context` de la whitelist de payloads en las referencias de Fase 1.
+- Se reemplazo el ejemplo por el patron valido:
+
+```yaml
+properties:
+  - name: createdBy
+    type: Uuid
+    readOnly: true
+    source: authContext
+
+domainEvents:
+  published:
+    - name: OrderConfirmed
+      payload:
+        - name: triggeredBy
+          type: Uuid
+          source: aggregate
+          field: createdBy
+```
+
+Prioridad: alta.
+
+#### 3. Alinear la politica de responses en commands REST
+
+Estado: parcialmente resuelto.
+
+La referencia OpenAPI de Fase 1 promueve CQRS estricto: commands sin response body (`POST` con `201 + Location`, `PATCH/DELETE` con `204`). Pero el skill tactico tambien reconoce que el generador soporta `returns` en commands cuando el OpenAPI declara body JSON.
+
+Riesgo:
+
+- El agente puede producir OpenAPI sin body por seguir CQRS estricto, pero luego declarar `returns` en el UC, o al reves.
+- El generador soporta ambas rutas, pero necesita coherencia exacta entre OpenAPI y `useCases[].returns`.
+
+Accion aplicada:
+
+- Se mantuvo CQRS estricto como default de diseno.
+- Se declaro una excepcion explicita y unica: si un command tiene `responses.<2xx>.content.application/json`, entonces `useCases[].returns` es obligatorio y debe coincidir con el schema de respuesta.
+
+Pendiente recomendado:
+
+- Agregar esta regla al validador de Fase 1 si se decide ampliar `dsl validate` para leer OpenAPI. Por ahora quedo documentada y reflejada en el checklist de refinamiento.
+
+Prioridad: media-alta.
+
+#### 4. Resolver la tension sobre `domainRules[].type: uniqueness` y `field`
+
+Estado: resuelto en el ajuste implementado.
+
+El generador permite `uniqueness` sin `field`: valida, pero genera TODO enriquecido porque no puede emitir una guardia ejecutable completa. Solo exige `field` cuando se declara `constraintName`. Algunas instrucciones de Fase 1 decian que `field` era obligatorio y que sin el fallaba el build.
+
+Riesgo:
+
+- No rompe el generador, pero confunde el contrato: una regla de calidad de diseno aparece como si fuera restriccion tecnica estricta.
+- El agente puede sobrerrestringir casos donde el diseno aun no tiene informacion suficiente.
+
+Accion aplicada:
+
+- Se ajusto el texto de Fase 1:
+  - `field` recomendado para generacion completa.
+  - `field` obligatorio solo si se usa `constraintName`.
+  - Sin `field`, el diseno es aceptado pero queda como scaffold/TODO enriquecido, por lo que debe clasificarse como alerta de robustez, no como error estructural.
+
+Prioridad: media.
+
+#### 5. Agregar una validacion de contrato Fase 1 -> Fase 2
+
+Estado: parcialmente resuelto.
+
+Fase 1 tiene `dsl validate`, pero el MVP necesita una prueba mas cercana al flujo real: tomar artefactos producidos por Fase 1 y pasarlos por el generador en modo estricto.
+
+Riesgo:
+
+- Fase 1 puede pasar su propio validador y aun asi producir YAML que el generador rechaza por una whitelist mas nueva.
+- Los skills pueden quedar por delante o por detras del generador.
+
+Accion aplicada:
+
+- Se agregaron smoke tests de Fase 1 que validan `dsl init`, el validador copiado en `tools/dsl-validate`, un fixture valido, un fixture invalido con `INT-025` y el flujo incremental con BC aun no disenado.
+
+Pendiente recomendado:
+
+- Crear un escenario fixture compartido o reproducible:
+  1. Fase 1 produce un `arch/` completo de ejemplo.
+  2. Fase 1 ejecuta `tools/dsl-validate`.
+  3. Fase 2 ejecuta `dsl-springboot build --strict` sobre ese `arch/`.
+  4. Fase 2 compila `./gradlew compileJava` sobre el proyecto generado.
+- Este test puede vivir inicialmente como script manual documentado y luego subir a CI.
+
+Prioridad: alta.
+
+#### 6. Agregar tests minimos al proyecto `dsl-design-system`
+
+Estado: resuelto en el ajuste implementado.
+
+El `package.json` de Fase 1 tenia:
+
+```json
+"test": "echo \"Error: no test specified\" && exit 1"
+```
+
+Riesgo:
+
+- Cambios en skills, validador o templates del CLI no tienen una red de seguridad.
+- `dsl init` podria dejar de copiar `tools/dsl-validate` correctamente sin que se detecte.
+
+Accion aplicada:
+
+- Se agregaron tests minimos de smoke:
+  - `dsl init` en un directorio temporal crea `.agents/skills`, `.github/agents`, `arch/` y `tools/dsl-validate`.
+  - `tools/dsl-validate/bin/dsl.js validate` ejecuta contra un fixture minimo valido.
+  - Un fixture invalido dispara un codigo `INT-*` esperado.
+
+El script `npm test` ahora ejecuta `node test/runner.js`.
+
+Prioridad: media-alta.
+
+### Ajustes no necesarios por ahora
+
+No considero necesario que Fase 1 genere codigo, compile Java ni conozca detalles de Gradle/Spring Boot. Eso pertenece a Fase 2.
+
+Tampoco considero necesario que Fase 1 deje de ser agnostica. Las reglas que menciona del generador deben entenderse como contrato del DSL, no como decisiones tecnologicas. Donde aparezcan terminos de Spring, Java o runtime, conviene moverlos a notas de compatibilidad o a referencias del generador, pero no al lenguaje de diseno principal.
+
+### Recomendacion final para Fase 1
+
+La Fase 1 es coherente con el generador en la arquitectura general y en la mayoria del schema. Despues de los ajustes aplicados, los riesgos mas inmediatos bajaron: el validador esta sincronizado, la contradiccion de `auth-context` fue corregida, `uniqueness.field` ya esta alineado con el comportamiento real, y existe una suite minima de smoke tests.
+
+Los pendientes mas valiosos ahora son:
+
+1. Extraer `integration-validator.js` o las reglas `INT-*` a un modulo compartido para evitar drift futuro.
+2. Convertir la regla command response body vs `useCases[].returns` en validacion ejecutable si `dsl validate` empieza a leer OpenAPI.
+3. Agregar un test de contrato Fase 1 -> Fase 2 que termine en `compileJava`.
+
+Con los ajustes ya aplicados, el disenador queda mas cerca de producir artefactos que el generador pueda consumir sin friccion, manteniendo intacta la separacion de responsabilidades de la vision.
