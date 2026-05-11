@@ -52,7 +52,7 @@ function mapDslValidations(validations, type) {
         break;
 
       case 'pattern':
-        annotations.push(`@Pattern(regexp = "${value}")`);
+        annotations.push(`@Pattern(regexp = "${String(value).replace(/\\/g, '\\\\')}")`);
         imports.add(`${JAKARTA}.Pattern`);
         break;
 
@@ -251,7 +251,8 @@ function buildDomainChecks(prop) {
 
       case 'pattern':
         if (isString) {
-          lines.push(`if (${name} != null && !${name}.matches("${value}")) {`);
+          const escapedPattern = String(value).replace(/\\/g, '\\\\');
+          lines.push(`if (${name} != null && !${name}.matches("${escapedPattern}")) {`);
           lines.push(`    throw new IllegalArgumentException("${name} does not match required pattern");`);
           lines.push('}');
         }

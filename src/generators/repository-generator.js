@@ -1471,6 +1471,13 @@ async function generateRepositories(bcYaml, config, outputDir) {
     const allMethods = [...(repoEntry.queryMethods || []), ...(repoEntry.methods || [])];
     const normalizedMethods = allMethods.map((m) => {
       const normalized = normalizeMethod(m);
+      // Auto-inject the aggregate as the first param for save/upsert when the YAML
+      // omits params (a common shorthand: "name: save, returns: void, derivedFrom: implicit").
+      // Without this, the domain port interface generates void save() with no arguments.
+      if ((normalized.name === 'save' || normalized.name === 'upsert') && (!normalized.params || normalized.params.length === 0)) {
+        const paramName = aggregateName.charAt(0).toLowerCase() + aggregateName.slice(1);
+        normalized.params = [{ name: paramName, type: aggregateName, required: true }];
+      }
       return { ...normalized, derivedFrom: m.derivedFrom };
     });
 

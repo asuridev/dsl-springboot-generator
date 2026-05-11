@@ -204,22 +204,44 @@ function mapUniqueness(rule, ctx) {
   }
 
   // Build the value expression from the input type
-  let valueExpr = `command.${rule.field}()`;
-  if (inputField.type === 'Uuid') {
+  let valueExpr;
+  if (inputField.source === 'authContext') {
+    // Field is injected from SecurityContext, not from the command record
+    out.extraImports.push('org.springframework.security.core.context.SecurityContextHolder');
+    out.extraImports.push('java.util.UUID');
+    valueExpr = `UUID.fromString(SecurityContextHolder.getContext().getAuthentication().getName())`;
+  } else if (inputField.type === 'Uuid') {
     valueExpr = `UUID.fromString(command.${rule.field}())`;
     out.extraImports.push('java.util.UUID');
   } else if (inputField.type === 'Url') {
     valueExpr = `URI.create(command.${rule.field}())`;
     out.extraImports.push('java.net.URI');
+  } else {
+    valueExpr = `command.${rule.field}()`;
   }
 
   const findMethod = `findBy${rule.field.charAt(0).toUpperCase() + rule.field.slice(1)}`;
   out.extraImports.push(`${packageName}.${moduleName}.domain.errors.${errorType}`);
 
+  // Build constructor args: pass valueExpr for each declared error arg that matches
+  // a UC input field, so errors with messageArgs get the correct call signature.
+  const errorArgs = errorEntry?.args || [];
+  const ctorArgs = errorArgs.map((a) => {
+    const matchingInput = (uc.input || []).find((i) => i.name === a.name);
+    if (!matchingInput) return 'null';
+    if (matchingInput.source === 'authContext') {
+      return `UUID.fromString(SecurityContextHolder.getContext().getAuthentication().getName())`;
+    }
+    if (matchingInput.type === 'Uuid') return `UUID.fromString(command.${a.name}())`;
+    if (matchingInput.type === 'Url') return `URI.create(command.${a.name}())`;
+    return `command.${a.name}()`;
+  });
+  const ctorCallArgs = ctorArgs.join(', ');
+
   out.lines.push(`        // domainRule(${rule.id}): ${rule.errorCode}`);
   if (isCreate) {
     out.lines.push(`        if (${repoFieldName}.${findMethod}(${valueExpr}).isPresent()) {`);
-    out.lines.push(`            throw new ${errorType}();`);
+    out.lines.push(`            throw new ${errorType}(${ctorCallArgs});`);
     out.lines.push(`        }`);
   } else {
     // On update operations, allow the same aggregate to keep its current value.
@@ -227,7 +249,7 @@ function mapUniqueness(rule, ctx) {
     const aggVar = ctx.aggVarName;
     out.lines.push(`        ${repoFieldName}.${findMethod}(${valueExpr}).ifPresent(other -> {`);
     out.lines.push(`            if (!other.getId().equals(${aggVar}.getId())) {`);
-    out.lines.push(`                throw new ${errorType}();`);
+    out.lines.push(`                throw new ${errorType}(${ctorCallArgs});`);
     out.lines.push(`            }`);
     out.lines.push(`        });`);
   }

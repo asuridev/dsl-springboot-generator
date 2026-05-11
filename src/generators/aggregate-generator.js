@@ -812,7 +812,13 @@ async function generateAggregates(bcYaml, config, outputDir) {
       if (uc.method === 'create') {
         const dmCreate = (aggregate.domainMethods || []).find((m) => m.name === 'create');
         if (dmCreate && dmCreate.returns === aggregate.name) {
-          const factoryParams = (dmCreate.params || []).map((p) => ({
+          // Prefer explicit params[]; fall back to parsing signature: string
+          let rawParams = (dmCreate.params || []);
+          if (rawParams.length === 0 && dmCreate.signature) {
+            const parsed = parseMethodSignature(dmCreate.signature);
+            if (parsed) rawParams = parsed.params.map((p) => ({ name: p.name, type: p.typeHint }));
+          }
+          const factoryParams = rawParams.map((p) => ({
             name: p.name,
             javaType: resolveParamType(p.name, aggregate.properties, aggregate.entities, p.type, bcYaml),
           }));
@@ -857,11 +863,17 @@ async function generateAggregates(bcYaml, config, outputDir) {
       const dm = (aggregate.domainMethods || []).find((m) => m.name === uc.method);
       if (!dm) continue; // defensive — should have been caught by bc-yaml-reader validation
 
-      // Resolve Java types for each parameter using explicit dm.params[].type as typeHint
-      const params = (dm.params || []).map((p) => ({
+      // Resolve Java types for each parameter using explicit dm.params[].type as typeHint;
+      // fall back to parsing signature: string when params[] is absent.
+      let rawDmParams = (dm.params || []);
+      if (rawDmParams.length === 0 && dm.signature) {
+        const parsedDm = parseMethodSignature(dm.signature);
+        if (parsedDm) rawDmParams = parsedDm.params.map((p) => ({ name: p.name, type: p.typeHint, optional: p.optional }));
+      }
+      const params = rawDmParams.map((p) => ({
         name: p.name,
         javaType: resolveParamType(p.name, aggregate.properties, aggregate.entities, p.type, bcYaml),
-        optional: false,
+        optional: p.optional || false,
       }));
 
       // ── When aggregate has softDelete: true and the method is "delete",
@@ -874,7 +886,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
       const returnType = resolveReturnType(dm.returns, aggregate.name);
       // computeMethodBody receives a sig-like object with {name, params, emits}
       const dmEmits = (dm.emitsList && dm.emitsList.length > 0) ? dm.emitsList : null;
-      const sigForBody = { name: dm.name, params: (dm.params || []).map((p) => ({ name: p.name, optional: false, typeHint: p.type })), emits: dmEmits };
+      const sigForBody = { name: dm.name, params: rawDmParams.map((p) => ({ name: p.name, optional: p.optional || false, typeHint: p.type })), emits: dmEmits };
       const body = computeMethodBody(uc, sigForBody, aggregate, bcEnums, bc, aggregatePublishedEvents, eventConfig, terminalStateErrorClass);
 
       businessMethods.push({

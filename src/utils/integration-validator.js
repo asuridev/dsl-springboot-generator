@@ -1170,7 +1170,20 @@ function checkEventParamSourceCoverage(bcYamls, diagnostics) {
     const eventParamNames = new Map();
     for (const agg of bc.aggregates || []) {
       for (const dm of agg.domainMethods || []) {
-        const paramNames = new Set((dm.params || []).map((p) => p.name).filter(Boolean));
+        const paramNames = new Set();
+        if (Array.isArray(dm.params) && dm.params.length > 0) {
+          for (const p of dm.params) { if (p && p.name) paramNames.add(p.name); }
+        } else if (dm.signature) {
+          const sigMatch = dm.signature.match(/\(([^)]*)\)/);
+          if (sigMatch && sigMatch[1].trim()) {
+            for (const part of sigMatch[1].split(',')) {
+              const colonIdx = part.indexOf(':');
+              const raw = colonIdx >= 0 ? part.substring(0, colonIdx).trim() : part.trim();
+              const name = raw.replace('?', '').trim();
+              if (name) paramNames.add(name);
+            }
+          }
+        }
         for (const evName of dm.emitsList || []) {
           if (!eventParamNames.has(evName)) eventParamNames.set(evName, new Set());
           for (const n of paramNames) eventParamNames.get(evName).add(n);

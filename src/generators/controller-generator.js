@@ -205,6 +205,11 @@ function getQueryFields(uc, agg, repoMethods, bcYaml = null) {
     }
     if (type === 'Integer' && (input.name === 'page' || input.name === 'size')) {
       fields.push({ name: input.name, type: 'int' });
+    } else if (type === 'PageRequest' || type === 'Pageable') {
+      // PageRequest/Pageable input — expand to int page + int size pagination fields
+      const existing = new Set(fields.map((f) => f.name));
+      if (!existing.has('page')) fields.push({ name: 'page', type: 'int' });
+      if (!existing.has('size')) fields.push({ name: 'size', type: 'int' });
     } else if (enumNames.has(type)) {
       // [G5] Strong-typed enum query params: emit the enum class directly so Spring
       // performs automatic conversion (no manual Enum.valueOf in handler).

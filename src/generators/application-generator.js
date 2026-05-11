@@ -317,7 +317,8 @@ function parseMethodSignature(methodStr) {
       // Support inline type hint: "paramName: TypeHint"
       const colonIdx = clean.indexOf(':');
       const name = colonIdx !== -1 ? clean.substring(0, colonIdx).trim() : clean;
-      return { name, optional };
+      const typeHint = colonIdx !== -1 ? clean.substring(colonIdx + 1).trim() : null;
+      return { name, optional, typeHint };
     }),
     returnType,
   };
@@ -822,6 +823,11 @@ function buildQueryFields(uc, agg, repoMethods, bcYaml = null, packageName = nul
     if (type === 'Integer' && (input.name === 'page' || input.name === 'size')) {
       // Pagination primitives — no validation annotations
       fields.push({ type: 'int', name: input.name, annotations: [] });
+    } else if (type === 'PageRequest' || type === 'Pageable') {
+      // PageRequest/Pageable input — expand to int page + int size pagination fields
+      const existing = new Set(fields.map((f) => f.name));
+      if (!existing.has('page')) fields.push({ type: 'int', name: 'page', annotations: [] });
+      if (!existing.has('size')) fields.push({ type: 'int', name: 'size', annotations: [] });
     } else if (type === 'Uuid') {
       // Uuid path/query params come in as String
       const requiredAnnotations = isOptional ? [] : (() => {
@@ -961,6 +967,19 @@ function buildOrElseThrowExpr(errorType, errorEntry, rawExpr, uuidExpr) {
   return `orElseThrow(() -> new ${errorType}(${argExprs}))`;
 }
 
+// Returns a "throw new ErrorType(args)" expression, resolving constructor args from errorEntry.
+function buildThrowNewExpr(errorType, errorEntry, rawExpr, uuidExpr) {
+  const args = Array.isArray(errorEntry?.args) ? errorEntry.args : [];
+  if (args.length === 0) return `throw new ${errorType}()`;
+  const STRING_TYPES = new Set(['String', 'Email', 'Url', 'Text']);
+  function exprForArg(a, i) {
+    if (i !== 0) return `/* TODO: ${a.name} */`;
+    return STRING_TYPES.has(a.type) ? rawExpr : uuidExpr;
+  }
+  const argExprs = args.map((a, i) => exprForArg(a, i)).join(', ');
+  return `throw new ${errorType}(${argExprs})`;
+}
+
 function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcYaml) {
   const lines = [];
   const extraImports = new Set();
@@ -1015,11 +1034,13 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
     const fkParam = fk.param || fk.field; // support both schemas
     const fkAggregate = fk.aggregate || fk.references;
     if (!fkAggregate) continue;
+    const fkRawExpr = `command.${fkParam}()`;
+    const fkUuidExpr = `UUID.fromString(command.${fkParam}())`;
     if (hasLocalReadModel(fk, bcYaml || { bc: moduleName, aggregates: [] })) {
       const fkRepoFieldName = `${toCamelCase(fkAggregate)}Repository`;
       extraImports.add(`${packageName}.${moduleName}.domain.errors.${fkErrorType}`);
       lines.push(
-        `        if (${fkRepoFieldName}.findById(UUID.fromString(command.${fkParam}())).isEmpty()) throw new ${fkErrorType}();`
+        `        if (${fkRepoFieldName}.findById(${fkUuidExpr}).isEmpty()) ${buildThrowNewExpr(fkErrorType, fkErrorEntry, fkRawExpr, fkUuidExpr)};`
       );
     } else if (fk.bc) {
       // [G13] Cross-BC FK without local read model — invoke ServicePort.existsX(UUID).
@@ -1027,7 +1048,7 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
       const methodName = `exists${fkAggregate}`;
       extraImports.add(`${packageName}.${moduleName}.domain.errors.${fkErrorType}`);
       lines.push(
-        `        if (!${portFieldName}.${methodName}(UUID.fromString(command.${fkParam}()))) throw new ${fkErrorType}();`
+        `        if (!${portFieldName}.${methodName}(${fkUuidExpr})) ${buildThrowNewExpr(fkErrorType, fkErrorEntry, fkRawExpr, fkUuidExpr)};`
       );
     }
   }
@@ -1035,7 +1056,14 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
   // Resolve domainMethod params to build the call args
   const aggDef = (bcYaml?.aggregates || []).find((a) => a.name === agg.name);
   const dm = (aggDef?.domainMethods || []).find((m) => m.name === uc.method);
-  const dmParams = dm?.params || [];
+  // Prefer explicit params[]; fall back to parsing signature: string when params[] is absent.
+  let dmParams = dm?.params || [];
+  if (dmParams.length === 0 && dm?.signature) {
+    const parsedSig = parseMethodSignature(dm.signature);
+    if (parsedSig && parsedSig.params && parsedSig.params.length > 0) {
+      dmParams = parsedSig.params.map((p) => ({ name: p.name, type: p.typeHint || null }));
+    }
+  }
 
   const callArgs = [];
 
@@ -1156,7 +1184,12 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
     // notFoundError), aggVarName is undefined — fall back to scaffold to avoid broken code.
     const aggWasDeclared = loadAggInput && hasNotFoundError;
     if (aggWasDeclared) {
-      lines.push(`        ${aggVarName}.${effectiveMethod}(${callArgs.join(', ')});`);
+      if (uc.method === 'delete' && !agg.softDelete) {
+        // Physical delete — call repository.delete(id) directly; no domain method exists.
+        lines.push(`        ${repoFieldName}.delete(${aggVarName}.getId());`);
+      } else {
+        lines.push(`        ${aggVarName}.${effectiveMethod}(${callArgs.join(', ')});`);
+      }
     } else {
       lines.push(`        // TODO: load ${agg.name} (e.g. by unique key) then call .${effectiveMethod}(${callArgs.join(', ') || '...'}) — see ${moduleName}-flows.md`);
       lines.push(`        throw new UnsupportedOperationException("Not implemented: ${uc.id} ${uc.name}");`);
@@ -1165,7 +1198,9 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
   }
 
   // Save — only emit when the aggregate variable was actually declared.
-  const aggWasDeclaredForSave = isCreate || (loadAggInput && hasNotFoundError);
+  // Physical deletes call repository.delete() above — skip save.
+  const isPhysicalDelete = uc.method === 'delete' && !agg.softDelete;
+  const aggWasDeclaredForSave = !isPhysicalDelete && (isCreate || (loadAggInput && hasNotFoundError));
   if (aggWasDeclaredForSave) {
     lines.push(`        ${repoFieldName}.save(${aggVarName});`);
   }

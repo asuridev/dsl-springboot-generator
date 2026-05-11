@@ -554,7 +554,11 @@ function buildJpaEntityContext(aggregate, bcYaml, config) {
       fieldName: isOneToOne
         ? toCamelCase(entity.name)
         : toCamelCase(pluralizeWord(entity.name)),
-      joinColumn: `${toSnakeCase(aggregate.name)}_id`,
+      // @OneToMany: FK lives in the child table → parentAggregate_id (e.g. order_id in order_lines)
+      // @OneToOne:  FK lives in the parent table → childEntity_id   (e.g. delivery_address_snapshot_id in orders)
+      joinColumn: isOneToOne
+        ? `${toSnakeCase(entity.name)}_id`
+        : `${toSnakeCase(aggregate.name)}_id`,
       immutable: entity.immutable === true,
       cardinality,
       relationship,

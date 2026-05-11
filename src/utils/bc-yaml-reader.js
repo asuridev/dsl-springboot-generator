@@ -1224,6 +1224,9 @@ function validate(doc, opts = {}) {
     // readModel aggregates have no business domainMethods — their upsert is
     // auto-generated from sourceBC/sourceEvents by projection-updater-generator.
     if (agg.readModel === true) continue;
+    // 'delete' is a reserved repository operation — application-generator handles it
+    // via repository.deleteById(); no domainMethod declaration is required.
+    if (uc.method === 'delete') continue;
     const dm = (agg.domainMethods || []).find((m) => m.name === uc.method);
     if (!dm) {
       fail(`Use case "${uc.id}" references method "${uc.method}" which is not declared in aggregate "${agg.name}" domainMethods.`);
@@ -1692,8 +1695,8 @@ function validateRepositories(doc) {
         if (/^findBy[A-Z]/.test(m.name) && !/\?$/.test(ret) && !/^List\[/.test(ret) && !/^Page\[/.test(ret)) {
           fail(`${ctx} naming convention "findBy*" requires returns of T?, List[T] or Page[T]; got "${ret}".`);
         }
-        if (/^countBy[A-Z]/.test(m.name) && ret !== 'Int') {
-          fail(`${ctx} naming convention "countBy*" requires returns: Int; got "${ret}".`);
+        if (/^countBy[A-Z]/.test(m.name) && ret !== 'Int' && ret !== 'Long') {
+          fail(`${ctx} naming convention "countBy*" requires returns: Int or Long; got "${ret}".`);
         }
         if (/^existsBy[A-Z]/.test(m.name) && ret !== 'Boolean') {
           fail(`${ctx} naming convention "existsBy*" requires returns: Boolean; got "${ret}".`);
@@ -1763,6 +1766,9 @@ function validateRepositories(doc) {
   for (const uc of (doc.useCases || [])) {
     if (uc.type !== 'query') continue;
     if (uc.loadAggregate === true) continue;
+    // loadAggregate may also be declared on an individual input field
+    const hasLoadAggregateOnInput = Array.isArray(uc.input) && uc.input.some((f) => f.loadAggregate === true);
+    if (hasLoadAggregateOnInput) continue;
     const aggName = uc.aggregate;
     if (!aggName) continue;
     if (!aggregateNames.has(aggName)) continue; // covered elsewhere
@@ -1789,7 +1795,31 @@ function validateDomainEventPayloadMappings(doc) {
     for (const domainMethod of aggregate.domainMethods || []) {
       const emittedEvents = domainMethod.emitsList || [];
       if (emittedEvents.length === 0) continue;
-      const methodParamNames = new Set((domainMethod.params || []).map((param) => param.name));
+
+      // Build param names from explicit params[] or, when only signature: is
+      // declared, by parsing the signature string so that source: param validation
+      // correctly resolves parameter names like "lines" in
+      // "create(..., lines: List[OrderLineSnapshot]): Order".
+      let methodParamNames;
+      if (Array.isArray(domainMethod.params) && domainMethod.params.length > 0) {
+        methodParamNames = new Set(domainMethod.params.map((p) => p.name));
+      } else if (domainMethod.signature) {
+        const sigMatch = domainMethod.signature.match(/\(([^)]*)\)/);
+        if (sigMatch && sigMatch[1].trim()) {
+          methodParamNames = new Set(
+            sigMatch[1].split(',').map((p) => {
+              const part = p.trim();
+              const colonIdx = part.indexOf(':');
+              const nameRaw = colonIdx >= 0 ? part.substring(0, colonIdx).trim() : part;
+              return nameRaw.replace('?', '').trim();
+            }).filter(Boolean)
+          );
+        } else {
+          methodParamNames = new Set();
+        }
+      } else {
+        methodParamNames = new Set();
+      }
 
       for (const eventName of emittedEvents) {
         const event = publishedByName.get(eventName);
