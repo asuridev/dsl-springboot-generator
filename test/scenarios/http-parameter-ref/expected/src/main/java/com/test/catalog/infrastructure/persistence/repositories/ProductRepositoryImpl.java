@@ -31,6 +31,6 @@ public class ProductRepositoryImpl implements ProductRepository {
 
     @Override
     public Product findById(UUID id) {
-        return jpaRepository.findById(id);
+        return jpaRepository.findById(id).map(mapper::toDomain).orElse(null);
     }
 }

@@ -1,5 +1,6 @@
 package com.test.catalog.domain.repository;
 
+import com.test.catalog.domain.aggregate.Product;
 import java.util.UUID;
 
 /**

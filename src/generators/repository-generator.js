@@ -705,7 +705,7 @@ function buildJpaMethodSignature(method, jpaEntityName) {
 
 // ─── Import collection ────────────────────────────────────────────────────────
 
-function collectRepoInterfaceImports(methods, bc, packageName) {
+function collectRepoInterfaceImports(methods, aggregateName, bc, packageName) {
   const imports = new Set();
   let hasOptional = false;
   let hasPage = false;
@@ -716,6 +716,11 @@ function collectRepoInterfaceImports(methods, bc, packageName) {
     if (rt.startsWith('Optional<')) hasOptional = true;
     if (rt.startsWith('Page<')) { hasPage = true; hasPageable = true; }
     if (rt === 'int' || rt === 'void') { /* primitive */ }
+    if (rt === 'UUID') imports.add('java.util.UUID');
+    if (rt === 'BigDecimal') imports.add('java.math.BigDecimal');
+    if (rt === 'Instant') imports.add('java.time.Instant');
+    if (rt === 'LocalDate') imports.add('java.time.LocalDate');
+    if (rt === 'URI') imports.add('java.net.URI');
 
     for (const p of method.params) {
       if (p.javaType === 'Pageable') hasPageable = true;
@@ -750,6 +755,8 @@ function collectRepoInterfaceImports(methods, bc, packageName) {
       const inner = aggMatch[1];
       // Aggregate domain class
       imports.add(`${packageName}.${bc}.domain.aggregate.${inner}`);
+    } else if (rt === aggregateName) {
+      imports.add(`${packageName}.${bc}.domain.aggregate.${rt}`);
     }
   }
 
@@ -1096,7 +1103,7 @@ function buildChildToJpaBody(entity, bcYaml) {
 /**
  * Build the Java method body for a RepositoryImpl method.
  */
-function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents) {
+function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents, aggregateName) {
   const { name, params } = normalizedMethod;
   const paramNames = (params || []).map((p) => p.name).join(', ');
   const entityParam = params[0]?.name || 'entity';
@@ -1187,6 +1194,13 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
 
   if (methodReturnType.startsWith('List<')) {
     return `return jpaRepository.${name}(${paramNames}).stream().map(mapper::toDomain).toList();`;
+  }
+
+  if (methodReturnType === aggregateName) {
+    if (name === 'findById') {
+      return `return jpaRepository.findById(${params[0]?.name || 'id'}).map(mapper::toDomain).orElse(null);`;
+    }
+    return `return mapper.toDomain(jpaRepository.${name}(${paramNames}));`;
   }
 
   return `return jpaRepository.${name}(${paramNames});`;
@@ -1311,7 +1325,7 @@ function buildRepoInterfaceContext(aggregateName, normalizedMethods, bc, package
     })),
   }));
 
-  const imports = collectRepoInterfaceImports(methods, bc, packageName);
+  const imports = collectRepoInterfaceImports(methods, aggregateName, bc, packageName);
   return { packageName, bc, aggregateName, methods, imports };
 }
 
@@ -1335,6 +1349,9 @@ function buildJpaRepoInterfaceContext(aggregateName, normalizedMethods, aggregat
       .replace(`Optional<${aggregateName}>`, `Optional<${jpaEntityName}>`)
       .replace(`Page<${aggregateName}>`, `Page<${jpaEntityName}>`)
       .replace(`List<${aggregateName}>`, `List<${jpaEntityName}>`);
+    if (jpaReturnType === aggregateName) {
+      jpaReturnType = jpaEntityName;
+    }
 
     // Build params string with @Param annotations for @Query methods
     let paramsStr;
@@ -1411,7 +1428,7 @@ function buildRepoImplContext(aggregateName, normalizedMethods, aggregate, bc, p
       name: p.name,
       javaType: yamlTypeToJava(p.type),
     }));
-    const body = buildImplMethodBody(m, returnType, hasDomainEvents);
+    const body = buildImplMethodBody(m, returnType, hasDomainEvents, aggregateName);
     // R20: methods that mutate state must run inside a read-write transaction.
     // The class-level annotation defaults everything to readOnly=true; these
     // methods opt back in to a writable transaction.
