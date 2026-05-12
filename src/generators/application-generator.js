@@ -140,8 +140,15 @@ function enrichValidations(validations, errorMap) {
   return validations.map((v) => {
     const errorEntry = v.errorCode ? errorMap[v.errorCode] : null;
     const errorClass = errorEntry ? errorEntry.errorType : null;
+    // Normalize expression: YAML folded scalars (>) include trailing newlines and
+    // may span multiple lines — collapse to a single space-separated string so it
+    // can be safely embedded inside a single-line Java comment.
+    const expression = typeof v.expression === 'string'
+      ? v.expression.replace(/\s*[\r\n]+\s*/g, ' ').trim()
+      : v.expression;
     return {
       ...v,
+      expression,
       errorClass,
     };
   });
@@ -2196,12 +2203,18 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
   let extraImports = [];
 
   if (customReturnType) {
-    // For internal ops: import the actual DTO/Projection class (strip List<> wrapper if present)
-    const innerMatch = /^(?:List<)?([A-Za-z0-9_]+)>?$/.exec(customReturnType);
+    // For internal ops: import the actual DTO/Projection class (strip generic wrapper if present)
+    const innerMatch = /(?:PagedResponse|List|Optional)<(.+?)>/.exec(customReturnType);
     const dtoClassName = innerMatch ? innerMatch[1] : customReturnType;
     extraImports.push(`${packageName}.${moduleName}.application.dtos.${dtoClassName}`);
+    if (customReturnType.startsWith('PagedResponse')) {
+      extraImports.push(`${packageName}.shared.application.dtos.PagedResponse`);
+    }
     if (customReturnType.startsWith('List<')) {
       extraImports.push('java.util.List');
+    }
+    if (customReturnType.startsWith('Optional<')) {
+      extraImports.push('java.util.Optional');
     }
   } else {
     // Standard path: import the actual DTO class (derived from returnType, not always aggregate ResponseDto)
@@ -2641,10 +2654,14 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
           ? buildQueryReturnType(uc, agg, repoMethods)
           : responseReturnTypeFromSchema;
         if (responseReturnType !== 'void') {
-          const innerMatch = /^(?:List<)?([A-Za-z0-9_]+)>?$/.exec(responseReturnType);
+          const innerMatch = /(?:PagedResponse|List|Optional)<(.+?)>/.exec(responseReturnType);
           const innerClassName = innerMatch ? innerMatch[1] : responseReturnType;
           queryImports.add(`${packageName}.${moduleName}.application.dtos.${innerClassName}`);
-          if (isListResponse) queryImports.add('java.util.List');
+          if (responseReturnType.startsWith('PagedResponse')) {
+            queryImports.add(`${packageName}.shared.application.dtos.PagedResponse`);
+          }
+          if (responseReturnType.startsWith('List<') || isListResponse) queryImports.add('java.util.List');
+          if (responseReturnType.startsWith('Optional<')) queryImports.add('java.util.Optional');
         }
 
         // Add imports for any DTO types used in query fields (different package: queries vs dtos).

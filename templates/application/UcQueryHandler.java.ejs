@@ -44,7 +44,7 @@ public class <%= useCaseName %>QueryHandler implements QueryHandler<<%= useCaseN
         if (!(<%- v.expression %>)) {
             throw new <%= v.errorClass %>();
         }
-<% } else { %>        // TODO useCase(<%= useCaseId %>, validations[<%= v.id %>]): enforce expression `<%= v.expression %>` and throw <%= v.errorClass ? 'new ' + v.errorClass + '()' : 'the exception bound to errorCode "' + v.errorCode + '"' %> on violation.<% if (v.description && v.description.trim()) { %> // <%- v.description.trim() %><% } %>
+<% } else { %>        // TODO useCase(<%= useCaseId %>, validations[<%= v.id %>]): enforce expression "<%= v.expression %>" and throw <%= v.errorClass ? 'new ' + v.errorClass + '()' : 'the exception bound to errorCode "' + v.errorCode + '"' %> on violation.<% if (v.description && v.description.trim()) { %> // <%- v.description.trim() %><% } %>
 
 <% } %><% }); %><% } %><% if (implementation === 'scaffold') { %>
         // TODO: implement business logic — ver <%= moduleName %>-flows.md
