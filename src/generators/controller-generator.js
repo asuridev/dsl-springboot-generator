@@ -386,8 +386,11 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
   // - fireAndForget: handler returns void, controller responds 202 with empty body.
   const isAsyncJobTracking = !isQuery && uc.async && uc.async.mode === 'jobTracking';
   const isAsyncFireForget = !isQuery && uc.async && uc.async.mode === 'fireAndForget';
-  const normalizeInner = (inner) =>
-    (inner === agg.name || inner === `${agg.name}Response`) ? `${agg.name}ResponseDto` : inner;
+  const normalizeInner = (inner) => {
+    if (inner === agg.name) return `${agg.name}ResponseDto`;
+    if (inner.endsWith('Response')) return `${inner}Dto`;
+    return inner;
+  };
   const returnType = isQuery
     ? paged
       ? (() => {
@@ -722,8 +725,11 @@ function buildInternalOperation(uc, internalApiOp, commonPrefix, agg, repoMethod
   const responseSchemaName = responseSchemaRef ? responseSchemaRef.split('/').pop() : null;
   // Use uc.returns as source of truth (same normalisation as buildQueryReturnType) so that
   // projection / custom names like "ProductPriceSnapshot" are not incorrectly suffixed with Dto.
-  const normalizeInner = (inner) =>
-    (inner === agg.name || inner === `${agg.name}Response`) ? `${agg.name}ResponseDto` : inner;
+  const normalizeInner = (inner) => {
+    if (inner === agg.name) return `${agg.name}ResponseDto`;
+    if (inner.endsWith('Response')) return `${inner}Dto`;
+    return inner;
+  };
   const returnType = isCommand
     ? 'void'
     : uc.returns

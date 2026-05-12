@@ -893,10 +893,15 @@ function buildQueryReturnType(uc, agg, repoMethods) {
   // [G12] BinaryStream → Resource (Spring core io).
   if (raw === 'BinaryStream') return 'Resource';
 
-  // Normalize OpenAPI schema name → Java class name for aggregate ResponseDtos
-  // e.g. "CategoryResponse" → "CategoryResponseDto", "ProductResponse" → "ProductResponseDto"
-  const normalize = (name) =>
-    (name === agg.name || name === `${agg.name}Response`) ? `${agg.name}ResponseDto` : name;
+  // Normalize OpenAPI schema name → Java class name.
+  // Any *Response schema becomes *ResponseDto (covers aggregate responses like CategoryResponse
+  // and custom internal-API schemas like OrderTotalResponse).
+  // Bare aggregate name (e.g. "Order") also maps to its main ResponseDto.
+  const normalize = (name) => {
+    if (name === agg.name) return `${agg.name}ResponseDto`;
+    if (name.endsWith('Response')) return `${name}Dto`;
+    return name;
+  };
 
   // Page[SomeDto] → PagedResponse<SomeDto>
   const pageMatch = /^Page\[(.+)\]$/.exec(raw);

@@ -825,6 +825,22 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
   if (config.broker === 'rabbitmq' && (brokerEventCtxs.length > 0 || resolvedConsumedEvents.length > 0)) {
     // Only include consumed events that have a listener (command field present)
     const consumedWithListener = resolvedConsumedEvents.filter((ev) => ev.command);
+
+    // Persistent projections need queue+binding+DLQ beans — they have no UC command
+    // so they are absent from resolvedConsumedEvents. Add synthetic entries here.
+    for (const proj of (bcYaml.projections || [])) {
+      if (proj.persistent !== true || !proj.source || proj.source.kind !== 'event') continue;
+      const projKebab  = toKebabCase(proj.name);
+      const eventKebab = toKebabCase(proj.source.event);
+      const queueKey   = `${moduleName}-projection-${projKebab}-${eventKebab}`;
+      consumedWithListener.push({ name: proj.source.event, producer: proj.source.from, queueKey });
+      for (const src of (proj.additionalSources || [])) {
+        const srcEventKebab = toKebabCase(src.event);
+        const srcQueueKey   = `${moduleName}-projection-${projKebab}-${srcEventKebab}`;
+        consumedWithListener.push({ name: src.event, producer: src.from || proj.source.from, queueKey: srcQueueKey });
+      }
+    }
+
     await generateBcRabbitMQConfig(
       brokerEventCtxs,
       consumedWithListener,

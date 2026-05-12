@@ -233,6 +233,10 @@ function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParam
           unresolved.push(`${p.name} (source: aggregate, field: ${field} not found)`);
           return `null /* TODO domainEvent(${event.name}, ${p.name}): source=aggregate but field "${field}" not in aggregate ${aggregate.name} */`;
         }
+        // subField: extract a nested property from a VO field (e.g. deliveryAddress.addressId)
+        if (p.subField) {
+          return `${getterFor(field)}.get${p.subField.charAt(0).toUpperCase() + p.subField.slice(1)}()`;
+        }
         return getterFor(field);
       }
       case 'param': {

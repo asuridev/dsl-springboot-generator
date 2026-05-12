@@ -705,8 +705,9 @@ function buildJpaMethodSignature(method, jpaEntityName) {
 
 // ─── Import collection ────────────────────────────────────────────────────────
 
-function collectRepoInterfaceImports(methods, aggregateName, bc, packageName) {
+function collectRepoInterfaceImports(methods, aggregateName, bc, packageName, bcYaml) {
   const imports = new Set();
+  const voNames = new Set((bcYaml && bcYaml.valueObjects || []).map((v) => v.name));
   let hasOptional = false;
   let hasPage = false;
   let hasPageable = false;
@@ -730,6 +731,8 @@ function collectRepoInterfaceImports(methods, aggregateName, bc, packageName) {
       if (p.javaType === 'Instant') imports.add('java.time.Instant');
       if (p.javaType === 'LocalDate') imports.add('java.time.LocalDate');
       if (p.javaType === 'URI') imports.add('java.net.URI');
+      // Value object param types need a domain import
+      if (voNames.has(p.javaType)) imports.add(`${packageName}.${bc}.domain.valueobject.${p.javaType}`);
       // Enum or domain types: need full import
       if (/^[A-Z]/.test(p.javaType) && !['UUID', 'String', 'Integer', 'Long', 'Boolean', 'BigDecimal', 'Instant', 'LocalDate', 'URI', 'Pageable', 'Money'].includes(p.javaType)) {
         // Enum type
@@ -770,6 +773,7 @@ function collectRepoInterfaceImports(methods, aggregateName, bc, packageName) {
 function collectJpaRepoImports(customMethods, aggregate, jpaEntityName, bc, packageName, bcYaml) {
   const imports = new Set();
   imports.add(`${packageName}.${bc}.infrastructure.persistence.entities.${jpaEntityName}`);
+  const voNames = new Set((bcYaml && bcYaml.valueObjects || []).map((v) => v.name));
 
   let hasPage = false;
   let hasPageable = false;
@@ -793,6 +797,7 @@ function collectJpaRepoImports(customMethods, aggregate, jpaEntityName, bc, pack
       if (isEnumType(p.javaType, bcYaml)) {
         imports.add(`${packageName}.${bc}.domain.enums.${p.javaType}`);
       }
+      if (voNames.has(p.javaType)) imports.add(`${packageName}.${bc}.domain.valueobject.${p.javaType}`);
     }
   }
 
@@ -1325,7 +1330,7 @@ function buildRepoInterfaceContext(aggregateName, normalizedMethods, bc, package
     })),
   }));
 
-  const imports = collectRepoInterfaceImports(methods, aggregateName, bc, packageName);
+  const imports = collectRepoInterfaceImports(methods, aggregateName, bc, packageName, bcYaml);
   return { packageName, bc, aggregateName, methods, imports };
 }
 
