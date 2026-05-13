@@ -22,6 +22,8 @@ async function generateEnums(bcYaml, config, outputDir) {
   const enumsDir = path.join(outputDir, 'src', 'main', 'java', packagePath, bc, 'domain', 'enums');
 
   for (const enumDef of enums) {
+    if (!enumDef.values || enumDef.values.length === 0) continue;
+
     // Build flat transitions list [{from, to}] from values[].transitions[].to
     const transitions = [];
     const hasTransitionsInValues = enumDef.values.some(

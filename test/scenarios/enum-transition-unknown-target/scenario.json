@@ -1,0 +1,5 @@
+{
+  "description": "Enum transition 'to' must reference a declared value in the same enum; an unknown target produces a non-existent Java enum constant which fails compilation.",
+  "expectFailure": true,
+  "expectedErrorPattern": "references a non-existent enum constant"
+}

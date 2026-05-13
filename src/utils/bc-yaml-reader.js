@@ -87,11 +87,55 @@ function validateProperties(properties, context, enums = []) {
 }
 
 /**
+ * Validate the enums[] section of a BC YAML.
+ * Checks:
+ *   - Each enum has a non-empty values[] array (E3)
+ *   - Each value entry has a non-null value (or name) field (E4)
+ *   - Each transition object has a non-null 'to' field (E1)
+ *   - Each transition 'to' references a declared value in the same enum (E2)
+ */
+function validateEnums(enums) {
+  if (!Array.isArray(enums)) return;
+  for (const enumDef of enums) {
+    if (!enumDef || !enumDef.name) fail(`enums[] contains an entry without a "name" field.`);
+    if (!Array.isArray(enumDef.values) || enumDef.values.length === 0) {
+      fail(`Enum "${enumDef.name}" is missing a 'values' array or it is empty.`);
+    }
+    const declaredValues = new Set();
+    for (const v of enumDef.values) {
+      const label = (v && (v.value || v.name)) || null;
+      if (!label) {
+        fail(`Enum "${enumDef.name}" has a value entry without a 'value' (or 'name') field.`);
+      }
+      declaredValues.add(label);
+    }
+    for (const v of enumDef.values) {
+      const from = v.value || v.name;
+      for (const t of v.transitions || []) {
+        if (!t) continue;
+        if (t.to == null) {
+          fail(`Enum "${enumDef.name}" value "${from}": transition is missing the 'to' field.`);
+        }
+        if (!declaredValues.has(t.to)) {
+          fail(
+            `Enum "${enumDef.name}" value "${from}": transition 'to: ${t.to}' references a non-existent enum constant. ` +
+            `Declared values: [${[...declaredValues].join(', ')}].`
+          );
+        }
+      }
+    }
+  }
+}
+
+/**
  * Full validation per BC-YAML-GENERATOR-SPEC §15.
  */
 function validate(doc, opts = {}) {
   const bc = doc.bc;
   const systemActors = opts.systemActors instanceof Set ? opts.systemActors : null;
+
+  // ── enums[] structural validation ─────────────────────────────────────────
+  if (doc.enums) validateEnums(doc.enums);
 
   // ── 3. Uniqueness of IDs ───────────────────────────────────────────────────
   const useCases = doc.useCases || [];

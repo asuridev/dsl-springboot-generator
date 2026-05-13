@@ -1,0 +1,6 @@
+bc: catalog
+version: "1.0.0"
+
+enums:
+  - name: SomeEnum
+    description: An enum without a values array — must fail validation.

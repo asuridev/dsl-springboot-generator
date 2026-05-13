@@ -1,0 +1,5 @@
+{
+  "description": "An enum declared without a 'values' array causes a generator crash; the YAML reader must reject it early.",
+  "expectFailure": true,
+  "expectedErrorPattern": "missing a 'values' array"
+}

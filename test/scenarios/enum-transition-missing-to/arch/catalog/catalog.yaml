@@ -1,0 +1,13 @@
+bc: catalog
+version: "1.0.0"
+
+enums:
+  - name: ProductStatus
+    description: Lifecycle states of a Product.
+    values:
+      - value: DRAFT
+        transitions:
+          - triggeredBy: UC-PRD-001 ActivateProduct
+            # 'to:' field intentionally omitted — must fail validation
+      - value: ACTIVE
+        transitions: []

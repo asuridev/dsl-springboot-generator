@@ -1,0 +1,5 @@
+{
+  "description": "Enum transition objects must declare a 'to' field; omitting it produces 'undefined' as a Java enum constant which fails compilation.",
+  "expectFailure": true,
+  "expectedErrorPattern": "missing the 'to' field"
+}

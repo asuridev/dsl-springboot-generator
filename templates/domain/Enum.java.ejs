@@ -1,15 +1,15 @@
-package <%- packageName %>.<%= bc %>.domain.enums;
+package <%- packageName %>.<%- bc %>.domain.enums;
 <% if (hasTransitions) { %>
 import <%- packageName %>.shared.domain.customExceptions.InvalidStateTransitionException;
 import java.util.Map;
 import java.util.Set;
 <% } %>
 /**
- * <%= name %>
-<% if (description) { %> * <%= description.trim().replace(/\n\s*/g, '\n * ') %>
+ * <%- name %>
+<% if (description) { %> * <%- description.trim().replace(/\n\s*/g, '\n * ') %>
 <% } %> */
-public enum <%= name %> {
-<% values.forEach((value, index) => { %>    <%= value %><%= index < values.length - 1 ? ',' : (hasTransitions ? ';' : '') %>
+public enum <%- name %> {
+<% values.forEach((value, index) => { %>    <%- value %><%- index < values.length - 1 ? ',' : (hasTransitions ? ';' : '') %>
 <% }); %>
 <% if (hasTransitions) { %>
 <%
@@ -22,14 +22,14 @@ public enum <%= name %> {
     });
     const entries = Object.entries(transitionMap);
 %>
-    private static final Map<<%= name %>, Set<<%= name %>>> VALID_TRANSITIONS = Map.ofEntries(
-<% entries.forEach(([state, targets], idx) => { %>        Map.entry(<%= name %>.<%= state %>, Set.of(<%= targets.map(t => `${name}.${t}`).join(', ') %>))<%= idx < entries.length - 1 ? ',' : '' %>
+    private static final Map<<%- name %>, Set<<%- name %>>> VALID_TRANSITIONS = Map.ofEntries(
+<% entries.forEach(([state, targets], idx) => { %>        Map.entry(<%- name %>.<%- state %>, Set.of(<%- targets.map(t => `${name}.${t}`).join(', ') %>))<%- idx < entries.length - 1 ? ',' : '' %>
 <% }); %>    );
 
     /**
      * Returns {@code true} if transitioning from the current state to {@code target} is allowed.
      */
-    public boolean canTransitionTo(<%= name %> target) {
+    public boolean canTransitionTo(<%- name %> target) {
         return VALID_TRANSITIONS.getOrDefault(this, Set.of()).contains(target);
     }
 
@@ -38,7 +38,7 @@ public enum <%= name %> {
      *
      * @throws InvalidStateTransitionException if the transition is not permitted.
      */
-    public <%= name %> transitionTo(<%= name %> target) {
+    public <%- name %> transitionTo(<%- name %> target) {
         if (!canTransitionTo(target)) {
             throw new InvalidStateTransitionException(this.name(), target.name());
         }

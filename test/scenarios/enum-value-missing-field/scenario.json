@@ -1,0 +1,5 @@
+{
+  "description": "Each enum value entry must have a 'value' (or 'name') field; an entry with only a description produces 'undefined' as a Java enum constant which fails compilation.",
+  "expectFailure": true,
+  "expectedErrorPattern": "without a 'value'"
+}
