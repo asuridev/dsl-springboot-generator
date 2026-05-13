@@ -1742,12 +1742,16 @@ async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap
   if (returnType) {
     const baseDto = returnType
       .replace(/^PagedResponse<(.+)>$/, '$1')
-      .replace(/^List<(.+)>$/, '$1');
+      .replace(/^List<(.+)>$/, '$1')
+      .replace(/^Optional<(.+)>$/, '$1');
     if (returnType.startsWith('PagedResponse<')) {
       cmdImports.push(`${packageName}.shared.application.dtos.PagedResponse`);
     }
     if (returnType.startsWith('List<')) {
       cmdImports.push('java.util.List');
+    }
+    if (returnType.startsWith('Optional<')) {
+      cmdImports.push('java.util.Optional');
     }
     // [G9/G10] BulkResult and JobReference live in shared.application.dtos.
     if (baseDto === 'BulkResult' || baseDto === 'JobReference') {
@@ -1840,12 +1844,16 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
   if (returnType) {
     const baseDto = returnType
       .replace(/^PagedResponse<(.+)>$/, '$1')
-      .replace(/^List<(.+)>$/, '$1');
+      .replace(/^List<(.+)>$/, '$1')
+      .replace(/^Optional<(.+)>$/, '$1');
     if (returnType.startsWith('PagedResponse<')) {
       extraImports.push(`${packageName}.shared.application.dtos.PagedResponse`);
     }
     if (returnType.startsWith('List<')) {
       extraImports.push('java.util.List');
+    }
+    if (returnType.startsWith('Optional<')) {
+      extraImports.push('java.util.Optional');
     }
     // [G9/G10] BulkResult and JobReference live in shared.application.dtos.
     if (baseDto === 'BulkResult' || baseDto === 'JobReference') {
@@ -1981,8 +1989,8 @@ function buildQueryImports(returnType, packageName, moduleName, agg) {
     imports.push('org.springframework.core.io.Resource');
     return imports;
   }
-  // Extract the inner DTO class name (handles PagedResponse<X> and List<X>)
-  const innerMatch = /(?:PagedResponse|List)<(.+?)>/.exec(returnType);
+  // Extract the inner DTO class name (handles PagedResponse<X>, List<X>, and Optional<X>)
+  const innerMatch = /(?:PagedResponse|List|Optional)<(.+?)>/.exec(returnType);
   const dtoClassName = innerMatch ? innerMatch[1] : returnType;
 
   if (returnType.startsWith('PagedResponse')) {
@@ -1991,7 +1999,25 @@ function buildQueryImports(returnType, packageName, moduleName, agg) {
   if (returnType.startsWith('List<')) {
     imports.push('java.util.List');
   }
-  imports.push(`${packageName}.${moduleName}.application.dtos.${dtoClassName}`);
+  if (returnType.startsWith('Optional<')) {
+    imports.push('java.util.Optional');
+  }
+  // [BUG-1/BUG-2] Canonical scalar return types (UUID, BigDecimal, Instant, etc.) live in
+  // stdlib — pushing a BC dtos import for them produces a non-existent class reference.
+  const QUERY_CANONICAL_IMPORTS = {
+    UUID: 'java.util.UUID',
+    BigDecimal: 'java.math.BigDecimal',
+    Instant: 'java.time.Instant',
+    LocalDate: 'java.time.LocalDate',
+    Duration: 'java.time.Duration',
+    URI: 'java.net.URI',
+  };
+  const QUERY_JAVA_LANG = new Set(['Boolean', 'Integer', 'Long', 'String']);
+  if (QUERY_CANONICAL_IMPORTS[dtoClassName]) {
+    imports.push(QUERY_CANONICAL_IMPORTS[dtoClassName]);
+  } else if (!QUERY_JAVA_LANG.has(dtoClassName)) {
+    imports.push(`${packageName}.${moduleName}.application.dtos.${dtoClassName}`);
+  }
   return imports;
 }
 
@@ -2229,7 +2255,22 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
     } else {
     const innerDtoMatch = /(?:PagedResponse|List|Optional)<(.+?)>/.exec(returnType);
     const dtoClassName = innerDtoMatch ? innerDtoMatch[1] : returnType;
-    extraImports.push(`${packageName}.${moduleName}.application.dtos.${dtoClassName}`);
+    // [BUG-3] Canonical scalar return types (UUID, BigDecimal, Instant, etc.) live in
+    // stdlib — pushing a BC dtos import for them produces a non-existent class reference.
+    const QH_CANONICAL_IMPORTS = {
+      UUID: 'java.util.UUID',
+      BigDecimal: 'java.math.BigDecimal',
+      Instant: 'java.time.Instant',
+      LocalDate: 'java.time.LocalDate',
+      Duration: 'java.time.Duration',
+      URI: 'java.net.URI',
+    };
+    const QH_JAVA_LANG = new Set(['Boolean', 'Integer', 'Long', 'String']);
+    if (QH_CANONICAL_IMPORTS[dtoClassName]) {
+      extraImports.push(QH_CANONICAL_IMPORTS[dtoClassName]);
+    } else if (!QH_JAVA_LANG.has(dtoClassName)) {
+      extraImports.push(`${packageName}.${moduleName}.application.dtos.${dtoClassName}`);
+    }
     if (returnType.startsWith('PagedResponse')) {
       extraImports.push(`${packageName}.shared.application.dtos.PagedResponse`);
     }

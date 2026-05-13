@@ -2,5 +2,6 @@
 .agents/
 docs/
 examples/
+test/
 *.md
 .gitignore

@@ -1,0 +1,18 @@
+system:
+  name: test-terminal-state-system
+  description: Test system for aggregate with terminalState domainRule.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products with terminal states.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

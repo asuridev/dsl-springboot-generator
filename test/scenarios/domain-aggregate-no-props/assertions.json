@@ -1,0 +1,11 @@
+{
+  "src/main/java/com/test/catalog/domain/aggregate/Tag.java": {
+    "_comment": "No-props aggregate: private creation constructor must be generated for the static factory to call (GAP-AGG-004).",
+    "contains": [
+      "public class Tag",
+      "public static Tag create()",
+      "private Tag()",
+      "this.id = UUID.randomUUID()"
+    ]
+  }
+}

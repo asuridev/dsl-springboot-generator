@@ -1,0 +1,16 @@
+{
+  "src/main/java/com/test/catalog/domain/aggregate/Product.java": {
+    "_comment": "softDelete aggregate: has deletedAt field, softDelete() method, isDeleted() method.",
+    "contains": [
+      "public class Product",
+      "private Instant deletedAt",
+      "public void softDelete()",
+      "this.deletedAt = Instant.now()",
+      "public boolean isDeleted()",
+      "import java.time.Instant"
+    ],
+    "notContains": [
+      "public void delete("
+    ]
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "src/main/java/com/test/item/application/queries/GetItemIdQuery.java": {
+    "_comment": "returns: Uuid must produce Query<UUID> with java.util.UUID import — not dtos.UUID",
+    "contains": [
+      "Query<UUID>",
+      "import java.util.UUID"
+    ],
+    "notContains": [
+      "Query<Uuid>",
+      "com.test.item.application.dtos.UUID",
+      "application.dtos.Uuid"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/usecases/GetItemIdQueryHandler.java": {
+    "_comment": "Handler handle() must return UUID, import java.util.UUID — not dtos.UUID",
+    "contains": [
+      "public UUID handle",
+      "import java.util.UUID"
+    ],
+    "notContains": [
+      "com.test.item.application.dtos.UUID",
+      "application.dtos.Uuid"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/queries/GetItemPriceQuery.java": {
+    "_comment": "returns: Decimal must produce Query<BigDecimal> with java.math.BigDecimal import — not dtos.BigDecimal",
+    "contains": [
+      "Query<BigDecimal>",
+      "import java.math.BigDecimal"
+    ],
+    "notContains": [
+      "Query<Decimal>",
+      "com.test.item.application.dtos.BigDecimal",
+      "application.dtos.Decimal"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/usecases/GetItemPriceQueryHandler.java": {
+    "_comment": "Handler handle() must return BigDecimal, import java.math.BigDecimal — not dtos.BigDecimal",
+    "contains": [
+      "public BigDecimal handle",
+      "import java.math.BigDecimal"
+    ],
+    "notContains": [
+      "com.test.item.application.dtos.BigDecimal",
+      "application.dtos.Decimal"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/queries/GetItemCreatedAtQuery.java": {
+    "_comment": "returns: DateTime must produce Query<Instant> with java.time.Instant import — not dtos.Instant",
+    "contains": [
+      "Query<Instant>",
+      "import java.time.Instant"
+    ],
+    "notContains": [
+      "Query<DateTime>",
+      "com.test.item.application.dtos.Instant",
+      "application.dtos.DateTime"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/usecases/GetItemCreatedAtQueryHandler.java": {
+    "_comment": "Handler handle() must return Instant, import java.time.Instant — not dtos.Instant",
+    "contains": [
+      "public Instant handle",
+      "import java.time.Instant"
+    ],
+    "notContains": [
+      "com.test.item.application.dtos.Instant",
+      "application.dtos.DateTime"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/queries/IsItemAvailableQuery.java": {
+    "_comment": "returns: Boolean must produce Query<Boolean> with no spurious dtos import (Boolean is java.lang)",
+    "contains": [
+      "Query<Boolean>"
+    ],
+    "notContains": [
+      "com.test.item.application.dtos.Boolean",
+      "application.dtos.Boolean"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/usecases/IsItemAvailableQueryHandler.java": {
+    "_comment": "Handler handle() must return Boolean with no spurious dtos import",
+    "contains": [
+      "public Boolean handle"
+    ],
+    "notContains": [
+      "com.test.item.application.dtos.Boolean",
+      "application.dtos.Boolean"
+    ]
+  }
+}

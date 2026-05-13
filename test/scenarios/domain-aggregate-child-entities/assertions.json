@@ -1,0 +1,22 @@
+{
+  "src/main/java/com/test/ordering/domain/aggregate/Order.java": {
+    "_comment": "Order aggregate has child entity field, addOrderLine and removeOrderLine methods.",
+    "contains": [
+      "public class Order",
+      "private List<OrderLine> orderLines = new ArrayList<>()",
+      "import java.util.List",
+      "import java.util.ArrayList",
+      "import com.test.ordering.domain.entity.OrderLine",
+      "this.orderLines.add(new OrderLine(productId, quantity, tags)",
+      "this.orderLines.removeIf("
+    ]
+  },
+  "src/main/java/com/test/ordering/domain/entity/OrderLine.java": {
+    "_comment": "OrderLine child entity has List<String> tags field and correct imports (GAP-AGG-001).",
+    "contains": [
+      "public class OrderLine",
+      "private List<String> tags",
+      "import java.util.List"
+    ]
+  }
+}

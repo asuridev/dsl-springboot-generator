@@ -1,0 +1,67 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+    domainMethods:
+      - name: create
+        params:
+          - name: name
+            type: String
+        returns: Product
+        emits: ProductCreated
+
+domainEvents:
+  published:
+    - name: ProductCreated
+      scope: internal
+      channel: catalog.product.created
+      payload:
+        - name: productId
+          type: Uuid
+          source: aggregate
+          field: id
+        - name: productName
+          type: String
+          source: aggregate
+          field: name
+        - name: issuedAt
+          source: timestamp
+
+useCases:
+  - id: UC-PRD-001
+    name: CreateProduct
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: createProduct
+    method: create
+    emits: ProductCreated
+    input:
+      - name: name
+        type: String
+        source: body
+        required: true
+    returns: Uuid
+    implementation: scaffold
+
+errors: []
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: save
+        signature: "save(Product): Product"

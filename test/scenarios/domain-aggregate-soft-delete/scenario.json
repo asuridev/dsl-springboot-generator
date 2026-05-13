@@ -1,0 +1,4 @@
+{
+  "description": "softDelete: aggregate with softDelete:true and a delete UC. Verifies that softDelete() method is injected with this.deletedAt = Instant.now(), and deletedAt field exists.",
+  "compileGeneratedJava": true
+}

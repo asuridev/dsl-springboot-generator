@@ -1,0 +1,69 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    softDelete: true
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+    domainMethods:
+      - name: create
+        params:
+          - name: name
+            type: String
+        returns: Product
+
+useCases:
+  - id: UC-PRD-001
+    name: CreateProduct
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: createProduct
+    method: create
+    input:
+      - name: name
+        type: String
+        source: body
+        required: true
+    returns: Uuid
+    implementation: scaffold
+
+  - id: UC-PRD-002
+    name: DeleteProduct
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: deleteProduct
+    method: delete
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    notFoundError: PRODUCT_NOT_FOUND
+    implementation: scaffold
+
+errors:
+  - code: PRODUCT_NOT_FOUND
+    httpStatus: 404
+    description: Product not found.
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: save
+        signature: "save(Product): Product"

@@ -1,0 +1,85 @@
+package com.test.shared.infrastructure.configurations.useCaseConfig;
+
+import com.test.shared.domain.interfaces.CommandHandler;
+import com.test.shared.domain.interfaces.Dispatchable;
+import com.test.shared.domain.interfaces.QueryHandler;
+import com.test.shared.domain.interfaces.ReturningCommandHandler;
+import java.lang.reflect.ParameterizedType;
+import java.util.Map;
+import org.springframework.boot.CommandLineRunner;
+import org.springframework.context.ApplicationContext;
+import org.springframework.stereotype.Component;
+
+@Component
+public class UseCaseAutoRegister implements CommandLineRunner {
+
+    private final UseCaseContainer useCaseContainer;
+    private final ApplicationContext applicationContext;
+
+    public UseCaseAutoRegister(UseCaseContainer useCaseContainer, ApplicationContext applicationContext) {
+        this.useCaseContainer = useCaseContainer;
+        this.applicationContext = applicationContext;
+    }
+
+    @Override
+    public void run(String... args) throws Exception {
+        // Register all CommandHandlers
+        Map<String, CommandHandler> commandHandlers = applicationContext.getBeansOfType(CommandHandler.class);
+        commandHandlers
+            .values()
+            .forEach(handler -> {
+                Class<Dispatchable> commandType = getGenericType(handler.getClass());
+                useCaseContainer.register(commandType, handler);
+            });
+        // Register all QueryHandlers
+        Map<String, QueryHandler> queryHandlers = applicationContext.getBeansOfType(QueryHandler.class);
+        queryHandlers
+            .values()
+            .forEach(handler -> {
+                Class<Dispatchable> queryType = getGenericType(handler.getClass());
+                useCaseContainer.register(queryType, handler);
+            });
+        // Register all ReturningCommandHandlers (commands that return a value)
+        Map<String, ReturningCommandHandler> returningCommandHandlers = applicationContext.getBeansOfType(
+            ReturningCommandHandler.class
+        );
+        returningCommandHandlers
+            .values()
+            .forEach(handler -> {
+                Class<Dispatchable> commandType = getGenericType(handler.getClass());
+                useCaseContainer.register(commandType, handler);
+            });
+    }
+
+    @SuppressWarnings("unchecked")
+    private Class<Dispatchable> getGenericType(Class<?> handlerClass) {
+        Class<?> currentClass = handlerClass;
+        while (currentClass != null) {
+            for (java.lang.reflect.Type genericInterface : currentClass.getGenericInterfaces()) {
+                if (genericInterface instanceof ParameterizedType parameterizedType) {
+                    java.lang.reflect.Type rawType = parameterizedType.getRawType();
+                    if (rawType instanceof Class<?> interfaceClass) {
+                        if (
+                            CommandHandler.class.isAssignableFrom(interfaceClass) ||
+                            QueryHandler.class.isAssignableFrom(interfaceClass) ||
+                            ReturningCommandHandler.class.isAssignableFrom(interfaceClass)
+                        ) {
+                            return (Class<Dispatchable>) parameterizedType.getActualTypeArguments()[0];
+                        }
+                    }
+                }
+            }
+            java.lang.reflect.Type genericSuperclass = currentClass.getGenericSuperclass();
+            if (genericSuperclass instanceof ParameterizedType parameterizedType) {
+                java.lang.reflect.Type[] typeArgs = parameterizedType.getActualTypeArguments();
+                if (typeArgs.length > 0 && typeArgs[0] instanceof Class<?> potentialType) {
+                    if (Dispatchable.class.isAssignableFrom(potentialType)) {
+                        return (Class<Dispatchable>) potentialType;
+                    }
+                }
+            }
+            currentClass = currentClass.getSuperclass();
+        }
+        throw new IllegalArgumentException("Cannot determine generic type for handler: " + handlerClass.getName());
+    }
+}

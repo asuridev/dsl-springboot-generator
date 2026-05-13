@@ -1,0 +1,4 @@
+{
+  "description": "terminalState domainRule: aggregate with domainRules type:terminalState and errorCode. Verifies that state-transition methods wrap transitionTo() in try-catch converting InvalidStateTransitionException to the declared domain error.",
+  "compileGeneratedJava": true
+}

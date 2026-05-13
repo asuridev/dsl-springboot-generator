@@ -1,0 +1,97 @@
+bc: catalog
+version: "1.0.0"
+
+enums:
+  - name: ProductStatus
+    description: Lifecycle states of a Product.
+    values:
+      - value: DRAFT
+        transitions:
+          - to: ACTIVE
+            triggeredBy: UC-PRD-001 ActivateProduct
+      - value: ACTIVE
+        transitions:
+          - to: DISCONTINUED
+            triggeredBy: UC-PRD-002 DiscontinueProduct
+      - value: DISCONTINUED
+        transitions: []
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+      - name: status
+        type: ProductStatus
+        readOnly: true
+        defaultValue: DRAFT
+    domainRules:
+      - id: PRD-RULE-001
+        type: terminalState
+        description: Product in DISCONTINUED state cannot be transitioned.
+        errorCode: PRODUCT_ALREADY_DISCONTINUED
+    domainMethods:
+      - name: activate
+        params: []
+        returns: void
+      - name: discontinue
+        params: []
+        returns: void
+
+useCases:
+  - id: UC-PRD-001
+    name: ActivateProduct
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: activateProduct
+    method: activate
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    notFoundError: PRODUCT_NOT_FOUND
+    implementation: scaffold
+
+  - id: UC-PRD-002
+    name: DiscontinueProduct
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: discontinueProduct
+    method: discontinue
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    notFoundError: PRODUCT_NOT_FOUND
+    implementation: scaffold
+
+errors:
+  - code: PRODUCT_NOT_FOUND
+    httpStatus: 404
+    description: Product not found.
+  - code: PRODUCT_ALREADY_DISCONTINUED
+    httpStatus: 409
+    description: Product is already in a terminal discontinued state.
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: save
+        signature: "save(Product): Product"

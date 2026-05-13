@@ -19,6 +19,6 @@ package <%= packageName %>.<%= moduleName %>.application.commands;
   const comma = i < fields.length - 1 ? ',' : '';
   return '    ' + ann + f.type + ' ' + f.name + comma;
 }).join('\n') %>
-) implements <% if (returnType) { %>ReturningCommand<<%= returnType %>><% } else { %>Command<% } %> {
+) implements <% if (returnType) { %>ReturningCommand<<%- returnType %>><% } else { %>Command<% } %> {
 }
 

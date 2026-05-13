@@ -1,0 +1,14 @@
+{
+  "src/main/java/com/test/catalog/domain/aggregate/Product.java": {
+    "_comment": "terminalState: transition methods wrap transitionTo() in try-catch converting to domain error.",
+    "contains": [
+      "public class Product",
+      "try {",
+      "this.status = this.status.transitionTo(",
+      "} catch (InvalidStateTransitionException ex) {",
+      "throw new ProductAlreadyDiscontinuedError()",
+      "import com.test.catalog.domain.errors.ProductAlreadyDiscontinuedError",
+      "import com.test.shared.domain.customExceptions.InvalidStateTransitionException"
+    ]
+  }
+}

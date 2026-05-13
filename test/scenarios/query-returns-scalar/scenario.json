@@ -1,0 +1,4 @@
+{
+  "description": "Canonical scalar types (Uuid, Decimal, DateTime, Boolean) as returns on queries produce correct Java types with stdlib imports — not phantom BC DTO imports.",
+  "expectFailure": false
+}

@@ -1,0 +1,4 @@
+{
+  "description": "Optional[X] as returns on queries and commands produces Optional<XResponseDto> with java.util.Optional import — not invalid generics in DTO import path.",
+  "expectFailure": false
+}

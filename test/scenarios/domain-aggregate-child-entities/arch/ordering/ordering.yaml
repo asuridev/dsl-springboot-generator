@@ -1,0 +1,131 @@
+bc: ordering
+version: "1.0.0"
+
+aggregates:
+  - name: Order
+    root: Order
+    auditable: true
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: customerId
+        type: Uuid
+        required: true
+    entities:
+      - name: OrderLine
+        relationship: composition
+        cardinality: oneToMany
+        properties:
+          - name: id
+            type: Uuid
+            readOnly: true
+            defaultValue: generated
+          - name: productId
+            type: Uuid
+            required: true
+          - name: quantity
+            type: Integer
+            required: true
+          - name: tags
+            type: List[String]
+            required: false
+    domainMethods:
+      - name: create
+        params:
+          - name: customerId
+            type: Uuid
+        returns: Order
+      - name: addOrderLine
+        params:
+          - name: productId
+            type: Uuid
+          - name: quantity
+            type: Integer
+          - name: tags
+            type: List[String]
+        returns: void
+      - name: removeOrderLine
+        params:
+          - name: lineId
+            type: Uuid
+        returns: void
+
+useCases:
+  - id: UC-ORD-001
+    name: CreateOrder
+    type: command
+    aggregate: Order
+    trigger:
+      kind: http
+      operationId: createOrder
+    method: create
+    input:
+      - name: customerId
+        type: Uuid
+        source: body
+        required: true
+    returns: Uuid
+    implementation: scaffold
+
+  - id: UC-ORD-002
+    name: AddOrderLine
+    type: command
+    aggregate: Order
+    trigger:
+      kind: http
+      operationId: addOrderLine
+    method: addOrderLine
+    input:
+      - name: orderId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+      - name: productId
+        type: Uuid
+        source: body
+        required: true
+      - name: quantity
+        type: Integer
+        source: body
+        required: true
+      - name: tags
+        type: List[String]
+        source: body
+        required: false
+    notFoundError: ORDER_NOT_FOUND
+
+  - id: UC-ORD-003
+    name: RemoveOrderLine
+    type: command
+    aggregate: Order
+    trigger:
+      kind: http
+      operationId: removeOrderLine
+    method: removeOrderLine
+    input:
+      - name: orderId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+      - name: lineId
+        type: Uuid
+        source: path
+        required: true
+    notFoundError: ORDER_NOT_FOUND
+
+errors:
+  - code: ORDER_NOT_FOUND
+    httpStatus: 404
+    description: Order not found.
+
+repositories:
+  - aggregate: Order
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Order?"
+      - name: save
+        signature: "save(Order): Order"

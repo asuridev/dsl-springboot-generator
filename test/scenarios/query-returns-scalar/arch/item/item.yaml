@@ -1,0 +1,94 @@
+bc: item
+version: "1.0.0"
+
+aggregates:
+  - name: Item
+    root: Item
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(100)
+        required: true
+      - name: price
+        type: Decimal
+        precision: 10
+        scale: 2
+      - name: createdAt
+        type: DateTime
+
+useCases:
+  - id: get-item-id
+    name: GetItemId
+    type: query
+    actor: user
+    trigger:
+      kind: http
+      operationId: getItemId
+    aggregate: Item
+    input:
+      - name: name
+        type: String(100)
+        source: query
+        required: true
+    returns: Uuid
+    implementation: scaffold
+
+  - id: get-item-price
+    name: GetItemPrice
+    type: query
+    actor: user
+    trigger:
+      kind: http
+      operationId: getItemPrice
+    aggregate: Item
+    input:
+      - name: itemId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    returns: Decimal
+    implementation: scaffold
+
+  - id: get-item-created-at
+    name: GetItemCreatedAt
+    type: query
+    actor: user
+    trigger:
+      kind: http
+      operationId: getItemCreatedAt
+    aggregate: Item
+    input:
+      - name: itemId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    returns: DateTime
+    implementation: scaffold
+
+  - id: is-item-available
+    name: IsItemAvailable
+    type: query
+    actor: user
+    trigger:
+      kind: http
+      operationId: isItemAvailable
+    aggregate: Item
+    input:
+      - name: itemId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    returns: Boolean
+    implementation: scaffold
+
+errors:
+  - code: ITEM_NOT_FOUND
+    httpStatus: 404
+    description: Item not found.

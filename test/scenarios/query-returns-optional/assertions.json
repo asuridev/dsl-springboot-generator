@@ -1,0 +1,53 @@
+{
+  "src/main/java/com/test/item/application/queries/FindItemByNameQuery.java": {
+    "_comment": "returns: Optional[Item] must produce Query<Optional<ItemResponseDto>> with java.util.Optional import — not dtos.Optional<ItemResponseDto>",
+    "contains": [
+      "Query<Optional<ItemResponseDto>>",
+      "import java.util.Optional",
+      "import com.test.item.application.dtos.ItemResponseDto"
+    ],
+    "notContains": [
+      "com.test.item.application.dtos.Optional",
+      "application.dtos.Optional<"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/usecases/FindItemByNameQueryHandler.java": {
+    "_comment": "Handler handle() must return Optional<ItemResponseDto>, import java.util.Optional — not dtos.Optional<...>",
+    "contains": [
+      "public Optional<ItemResponseDto> handle",
+      "import java.util.Optional",
+      "import com.test.item.application.dtos.ItemResponseDto"
+    ],
+    "notContains": [
+      "com.test.item.application.dtos.Optional",
+      "application.dtos.Optional<"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/commands/FindOrCreateItemCommand.java": {
+    "_comment": "command returns: Optional[Item] must produce ReturningCommand<Optional<ItemResponseDto>> with java.util.Optional import — not dtos.Optional<ItemResponseDto>",
+    "contains": [
+      "ReturningCommand<Optional<ItemResponseDto>>",
+      "import java.util.Optional",
+      "import com.test.item.application.dtos.ItemResponseDto"
+    ],
+    "notContains": [
+      "com.test.item.application.dtos.Optional",
+      "application.dtos.Optional<"
+    ]
+  },
+
+  "src/main/java/com/test/item/application/usecases/FindOrCreateItemCommandHandler.java": {
+    "_comment": "Command handler must return Optional<ItemResponseDto>, import java.util.Optional — not dtos.Optional<...>",
+    "contains": [
+      "Optional<ItemResponseDto>",
+      "import java.util.Optional",
+      "import com.test.item.application.dtos.ItemResponseDto"
+    ],
+    "notContains": [
+      "com.test.item.application.dtos.Optional",
+      "application.dtos.Optional<"
+    ]
+  }
+}

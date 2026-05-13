@@ -1,0 +1,18 @@
+system:
+  name: test-no-props-system
+  description: Test system for aggregate with no business properties.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages tags with no domain properties.
+    aggregates:
+      - name: Tag
+        root: Tag
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

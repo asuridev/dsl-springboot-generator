@@ -1,0 +1,10 @@
+{
+  "src/main/java/com/test/catalog/domain/aggregate/Product.java": {
+    "_comment": "Event with source:timestamp payload field: aggregate must import Instant even when no DateTime property is on the aggregate (GAP-AGG-002).",
+    "contains": [
+      "public class Product",
+      "import java.time.Instant",
+      "Instant.now()"
+    ]
+  }
+}

@@ -1,0 +1,61 @@
+openapi: "3.0.3"
+info:
+  title: Item API
+  version: "1.0.0"
+  description: API for item management — Optional return types scenario.
+paths:
+  /items/search:
+    get:
+      operationId: findItemByName
+      summary: Find an item by name, returns null if not found.
+      parameters:
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The item if found, or null.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemResponseDto'
+        "204":
+          description: No item found.
+
+  /items/find-or-create:
+    post:
+      operationId: findOrCreateItem
+      summary: Find an existing item by name or create a new one.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                price:
+                  type: number
+      responses:
+        "200":
+          description: The found or created item.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemResponseDto'
+
+components:
+  schemas:
+    ItemResponseDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        price:
+          type: number

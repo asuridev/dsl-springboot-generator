@@ -1,0 +1,77 @@
+bc: item
+version: "1.0.0"
+
+aggregates:
+  - name: Item
+    root: Item
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(100)
+        required: true
+      - name: price
+        type: Decimal
+        precision: 10
+        scale: 2
+
+useCases:
+  - id: find-item-by-name
+    name: FindItemByName
+    type: query
+    actor: user
+    trigger:
+      kind: http
+      operationId: findItemByName
+    aggregate: Item
+    input:
+      - name: name
+        type: String(100)
+        source: query
+        required: true
+    returns: Optional[Item]
+    implementation: scaffold
+
+  - id: find-or-create-item
+    name: FindOrCreateItem
+    type: command
+    aggregate: Item
+    returns: Optional[Item]
+    trigger:
+      kind: http
+      operationId: findOrCreateItem
+    input:
+      - name: name
+        type: String(100)
+        source: body
+        required: true
+      - name: price
+        type: Decimal
+        source: body
+        required: true
+    implementation: scaffold
+
+errors:
+  - code: ITEM_NOT_FOUND
+    httpStatus: 404
+    description: Item not found.
+
+repositories:
+  - aggregate: Item
+    methods:
+      - name: save
+        signature: "save(Item): Item"
+      - name: findById
+        signature: "findById(Uuid): Item?"
+    queryMethods:
+      - name: findItemByName
+        params:
+          - name: name
+            type: String(100)
+            required: true
+            filterOn: [name]
+            operator: EQ
+        returns: Item?

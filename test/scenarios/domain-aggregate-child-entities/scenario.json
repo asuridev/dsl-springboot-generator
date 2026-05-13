@@ -1,0 +1,4 @@
+{
+  "description": "Child entities: aggregate with oneToMany child entity. OrderLine has a List[String] property. Verifies: import java.util.List in OrderLine (GAP-AGG-001), addOrderLine body uses method param names not entity property names (GAP-AGG-003), removeOrderLine uses removeIf.",
+  "compileGeneratedJava": true
+}

@@ -30,7 +30,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 <% } else { %>// derived_from: useCases[<%= useCaseId %>]
 <% } %>@ApplicationComponent
-public class <%= useCaseName %>CommandHandler implements <% if (returnType) { %>ReturningCommandHandler<<%= useCaseName %>Command, <%= returnType %>><% } else { %>CommandHandler<<%= useCaseName %>Command><% } %> {
+public class <%= useCaseName %>CommandHandler implements <% if (returnType) { %>ReturningCommandHandler<<%= useCaseName %>Command, <%- returnType %>><% } else { %>CommandHandler<<%= useCaseName %>Command><% } %> {
 
 <% if (injectRepository) { %>
     private final <%= repoName %> <%= repoFieldName %>;
@@ -83,7 +83,7 @@ public class <%= useCaseName %>CommandHandler implements <% if (returnType) { %>
     @Override
     @Transactional
     @LogExceptions
-    public <%= returnType ? returnType : 'void' %> handle(<%= useCaseName %>Command command) {
+    public <%- returnType ? returnType : 'void' %> handle(<%= useCaseName %>Command command) {
 <% if (validations && validations.length > 0) { %>
         // [G20] cross-field validations — derived_from useCases[<%= useCaseId %>].validations[]
 <% validations.forEach(function(v) { %>        // TODO useCase(<%= useCaseId %>, validations[<%= v.id %>]): enforce "<%= v.expression %>" and throw <%= v.errorClass ? 'new ' + v.errorClass + '()' : 'the exception bound to errorCode "' + v.errorCode + '"' %> on violation.<% if (v.description && v.description.trim()) { %> // <%- v.description.trim() %><% } %>

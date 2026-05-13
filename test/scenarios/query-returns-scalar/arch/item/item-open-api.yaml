@@ -1,0 +1,82 @@
+openapi: "3.0.3"
+info:
+  title: Item API
+  version: "1.0.0"
+  description: API for item management — query scalar returns scenario.
+paths:
+  /items/id:
+    get:
+      operationId: getItemId
+      summary: Get the UUID of an item by name.
+      parameters:
+        - name: name
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The UUID of the item.
+          content:
+            application/json:
+              schema:
+                type: string
+                format: uuid
+
+  /items/{itemId}/price:
+    get:
+      operationId: getItemPrice
+      summary: Get the current price of an item.
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The item price.
+          content:
+            application/json:
+              schema:
+                type: number
+
+  /items/{itemId}/created-at:
+    get:
+      operationId: getItemCreatedAt
+      summary: Get the creation timestamp of an item.
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The creation timestamp.
+          content:
+            application/json:
+              schema:
+                type: string
+                format: date-time
+
+  /items/{itemId}/available:
+    get:
+      operationId: isItemAvailable
+      summary: Check if an item is available.
+      parameters:
+        - name: itemId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Availability flag.
+          content:
+            application/json:
+              schema:
+                type: boolean

@@ -1,0 +1,4 @@
+{
+  "description": "Aggregate with no business properties (only id + audit): verifies that the private creation constructor is generated when staticFactory is set but creationParams and autoInits are empty (GAP-AGG-004).",
+  "compileGeneratedJava": true
+}

@@ -1,0 +1,18 @@
+system:
+  name: test-event-timestamp-system
+  description: Test system for domain event with source:timestamp payload field.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products with published events.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

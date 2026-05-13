@@ -48,7 +48,7 @@ public class <%= name %> {
 <% } %>
 <% if (hasSoftDelete) { %>        this.deletedAt = deletedAt;
 <% } %>    }
-<% if (creationParams.length > 0 || autoInits.length > 0) { %>
+<% if (staticFactory || creationParams.length > 0 || autoInits.length > 0) { %>
 
     // ─── Creation constructor (new <%= name %>) ───────────────────────────────
     private <%= name %>(<% creationParams.forEach((p, idx) => { %><%- p.javaType %> <%= p.name %><%= idx < creationParams.length - 1 ? ', ' : '' %><% }); %>) {

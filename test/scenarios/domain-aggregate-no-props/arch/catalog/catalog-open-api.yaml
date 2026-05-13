@@ -1,0 +1,16 @@
+openapi: "3.0.3"
+info:
+  title: Catalog API
+  version: "1.0.0"
+paths:
+  /tags:
+    post:
+      operationId: createTag
+      responses:
+        "201":
+          description: Tag created.
+          content:
+            application/json:
+              schema:
+                type: string
+                format: uuid

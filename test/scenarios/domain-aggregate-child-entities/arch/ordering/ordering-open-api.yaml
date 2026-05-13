@@ -1,0 +1,85 @@
+openapi: "3.0.3"
+info:
+  title: Ordering API
+  version: "1.0.0"
+paths:
+  /orders:
+    post:
+      operationId: createOrder
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOrderRequest'
+      responses:
+        "201":
+          description: Order created.
+          content:
+            application/json:
+              schema:
+                type: string
+                format: uuid
+  /orders/{orderId}/lines:
+    post:
+      operationId: addOrderLine
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddOrderLineRequest'
+      responses:
+        "204":
+          description: Order line added.
+  /orders/{orderId}/lines/{lineId}:
+    delete:
+      operationId: removeOrderLine
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: lineId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Order line removed.
+components:
+  schemas:
+    CreateOrderRequest:
+      type: object
+      required:
+        - customerId
+      properties:
+        customerId:
+          type: string
+          format: uuid
+    AddOrderLineRequest:
+      type: object
+      required:
+        - productId
+        - quantity
+      properties:
+        productId:
+          type: string
+          format: uuid
+        quantity:
+          type: integer
+        tags:
+          type: array
+          items:
+            type: string

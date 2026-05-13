@@ -1,0 +1,4 @@
+{
+  "description": "Event payload with source:timestamp: a published event has a payload field with source:timestamp (no type:DateTime). Verifies that import java.time.Instant is generated in the aggregate (GAP-AGG-002).",
+  "compileGeneratedJava": false
+}

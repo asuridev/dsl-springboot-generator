@@ -1,0 +1,39 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Tag
+    root: Tag
+    auditable: true
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+    domainMethods:
+      - name: create
+        params: []
+        returns: Tag
+
+useCases:
+  - id: UC-TAG-001
+    name: CreateTag
+    type: command
+    aggregate: Tag
+    trigger:
+      kind: http
+      operationId: createTag
+    method: create
+    input: []
+    returns: Uuid
+    implementation: scaffold
+
+errors: []
+
+repositories:
+  - aggregate: Tag
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Tag?"
+      - name: save
+        signature: "save(Tag): Tag"

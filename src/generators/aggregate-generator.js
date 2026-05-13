@@ -402,7 +402,8 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
         if (ep.readOnly && ep.defaultValue != null) return false;
         return true;
       });
-      const ctorArgs = entityCreationParams.map((ep) => ep.name).join(', ');
+      // Use method params (which are in scope) as ctor args, not entity prop names (GAP-AGG-003)
+      const ctorArgs = params.map((p) => p.name).join(', ');
       let body = isOneToOne
         ? `this.${fieldName} = new ${entity.name}(${ctorArgs});`
         : `this.${fieldName}.add(new ${entity.name}(${ctorArgs}));`;
@@ -551,10 +552,11 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
     }
     for (const event of publishedEvents) {
       imports.add(`import ${pkg}.${bc}.domain.events.${event.name}Event;`);
-      // If any payload field is a DateTime/Instant not on the aggregate, Instant.now() is generated
+      // If any payload field is a DateTime/Instant not on the aggregate, or uses source:timestamp,
+      // Instant.now() is generated and the import is required.
       const aggregatePropNames = new Set((aggregate.properties || []).map((pr) => pr.name));
       const needsInstantForEvent = (event.payload || []).some(
-        (p) => (p.type === 'DateTime' || p.type === 'Instant') && !aggregatePropNames.has(p.name)
+        (p) => p.source === 'timestamp' || ((p.type === 'DateTime' || p.type === 'Instant') && !aggregatePropNames.has(p.name))
       );
       if (needsInstantForEvent) imports.add('import java.time.Instant;');
     }
@@ -608,6 +610,33 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
     }
   }
 
+  // Business method return types — non-void, non-aggregate class itself (GAP-AGG-005)
+  for (const method of businessMethods || []) {
+    const rt = method.returnType;
+    if (!rt || rt === 'void' || rt === aggregate.name) continue;
+    const listReturnMatch = /^List<(.+)>$/.exec(rt);
+    if (listReturnMatch) {
+      imports.add('import java.util.List;');
+      const inner = listReturnMatch[1];
+      if (isValueObjectType(inner, bcYaml)) {
+        imports.add(`import ${pkg}.${bc}.domain.valueobject.${inner};`);
+      } else if (isEnumType(inner, bcYaml)) {
+        imports.add(`import ${pkg}.${bc}.domain.enums.${inner};`);
+      }
+      continue;
+    }
+    if (isValueObjectType(rt, bcYaml)) {
+      imports.add(`import ${pkg}.${bc}.domain.valueobject.${rt};`);
+    } else if (isEnumType(rt, bcYaml)) {
+      imports.add(`import ${pkg}.${bc}.domain.enums.${rt};`);
+    } else {
+      try {
+        const mapped = mapType(rt, {});
+        if (mapped.importHint) imports.add(`import ${mapped.importHint};`);
+      } catch (_) { /* skip */ }
+    }
+  }
+
   return [...imports].sort();
 }
 
@@ -621,6 +650,27 @@ function buildChildEntityImports(entity, bcYaml, config) {
 
   for (const prop of entity.properties || []) {
     if (prop.name === 'id') continue; // UUID already imported
+
+    // List[T] — add List import + resolve inner type import (GAP-AGG-001)
+    if (isListType(prop.type)) {
+      imports.add('import java.util.List;');
+      const innerType = getListElementType(prop.type);
+      if (innerType) {
+        const innerEnumWrapperMatch = /^Enum<(.+)>$/.exec(innerType);
+        const resolvedInner = innerEnumWrapperMatch ? innerEnumWrapperMatch[1] : innerType;
+        if (isValueObjectType(resolvedInner, bcYaml)) {
+          imports.add(`import ${pkg}.${bc}.domain.valueobject.${resolvedInner};`);
+        } else if (innerEnumWrapperMatch != null || isEnumType(resolvedInner, bcYaml)) {
+          imports.add(`import ${pkg}.${bc}.domain.enums.${resolvedInner};`);
+        } else {
+          try {
+            const mapped = mapType(innerType, {});
+            if (mapped.importHint) imports.add(`import ${mapped.importHint};`);
+          } catch (_) { /* skip */ }
+        }
+      }
+      continue;
+    }
 
     const enumWrapperMatch = /^Enum<(.+)>$/.exec(prop.type);
     const resolvedType = enumWrapperMatch ? enumWrapperMatch[1] : prop.type;
@@ -834,7 +884,16 @@ async function generateAggregates(bcYaml, config, outputDir) {
             factoryParamNames.has(p.name) ? p.name : `null /* TODO: compute ${p.name} */`
           ).join(', ');
           const dmCreateEmits = (dmCreate.emitsList && dmCreate.emitsList.length > 0) ? dmCreate.emitsList : null;
-          const raiseCall = buildRaiseCall(dmCreateEmits, aggregatePublishedEvents, aggregate, dmCreate.params || [], eventConfig);
+          const raiseCallRaw = buildRaiseCall(dmCreateEmits, aggregatePublishedEvents, aggregate, dmCreate.params || [], eventConfig);
+          // In the static factory the variable is named `instance`, not `this`.
+          // Strip the "// derived_from: ..." comment prefix (incompatible with inline call)
+          // and rewrite `this.` → `instance.` so the call compiles inside a static method.
+          let raiseCall = raiseCallRaw || null;
+          if (raiseCall) {
+            raiseCall = raiseCall
+              .replace(/^\/\/[^\n]*\n\s*/, '')   // remove comment line + leading whitespace
+              .replace(/\bthis\./g, 'instance.'); // this. → instance. (args inside the event ctor)
+          }
           // Split rule IDs into validate vs sideEffect so the scaffold comment
           // distinguishes invariant checks from required side effects (S13).
           const ruleByIdF = new Map((aggregate.domainRules || []).map((r) => [r.id, r]));

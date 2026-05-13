@@ -1,0 +1,19 @@
+system:
+  name: test-child-entities-system
+  description: Test system for aggregate with child entities.
+  domainType: core
+
+boundedContexts:
+  - name: ordering
+    type: core
+    purpose: Manages orders and their line items.
+    aggregates:
+      - name: Order
+        root: Order
+        entities:
+          - name: OrderLine
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc
