@@ -1,0 +1,30 @@
+{
+  "src/main/java/com/test/invoice/domain/errors/InvoiceAmountMismatchError.java": {
+    "_comment": "Multi-arg error: 3-arg constructor, imports for UUID and BigDecimal, no-arg constructor absent.",
+    "contains": [
+      "public class InvoiceAmountMismatchError extends BusinessException",
+      "public InvoiceAmountMismatchError(UUID invoiceId, BigDecimal expected, BigDecimal actual)",
+      "import java.util.UUID",
+      "import java.math.BigDecimal",
+      "\"INVOICE_AMOUNT_MISMATCH\"",
+      "// derived_from: errors[INVOICE_AMOUNT_MISMATCH]"
+    ],
+    "notContains": [
+      "public InvoiceAmountMismatchError()"
+    ]
+  },
+
+  "src/main/java/com/test/invoice/application/usecases/GetInvoiceQueryHandler.java": {
+    "_comment": "orElseThrow lambda with null placeholder for args at index > 0 — must compile.",
+    "contains": [
+      "new InvoiceAmountMismatchError(",
+      "null /* TODO: supply expected (BigDecimal) */",
+      "null /* TODO: supply actual (BigDecimal) */"
+    ],
+    "notContains": [
+      "InvoiceAmountMismatchError::new",
+      "/* TODO: expected */",
+      "/* TODO: actual */"
+    ]
+  }
+}

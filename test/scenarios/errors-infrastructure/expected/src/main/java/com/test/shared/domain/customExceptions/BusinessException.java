@@ -1,0 +1,28 @@
+package com.test.shared.domain.customExceptions;
+
+import java.util.List;
+
+public class BusinessException extends DomainException {
+
+    public BusinessException(String msg) {
+        super(msg);
+    }
+
+    public BusinessException(String msg, Throwable cause) {
+        super(msg, cause);
+    }
+
+    public BusinessException(String msg, String code, Object[] args) {
+        super(msg, code, args);
+    }
+
+    public BusinessException(String msg, String code, Integer httpStatus, Object[] args) {
+        super(msg, code, httpStatus, args);
+    }
+
+    public BusinessException(String msg, String code, Integer httpStatus, Object[] args, List<String> details) {
+        super(msg, code, httpStatus, args, details);
+    }
+
+    protected BusinessException() {}
+}

@@ -1,0 +1,25 @@
+{
+  "src/main/java/com/test/payment/domain/errors/PaymentNotFoundError.java": {
+    "_comment": "chainable: false — only the no-arg constructor, no (Throwable cause) constructor.",
+    "contains": [
+      "public class PaymentNotFoundError extends NotFoundException",
+      "public PaymentNotFoundError()",
+      "super(\"PAYMENT_NOT_FOUND\")",
+      "// derived_from: errors[PAYMENT_NOT_FOUND]"
+    ],
+    "notContains": [
+      "Throwable cause"
+    ]
+  },
+
+  "src/main/java/com/test/payment/domain/errors/PaymentProcessingFailedError.java": {
+    "_comment": "chainable: true — both the no-arg constructor and the (Throwable cause) constructor.",
+    "contains": [
+      "public class PaymentProcessingFailedError extends BusinessException",
+      "public PaymentProcessingFailedError()",
+      "public PaymentProcessingFailedError(Throwable cause)",
+      "super(\"PAYMENT_PROCESSING_FAILED\", cause)",
+      "// derived_from: errors[PAYMENT_PROCESSING_FAILED]"
+    ]
+  }
+}

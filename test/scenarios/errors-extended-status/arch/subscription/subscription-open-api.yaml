@@ -1,0 +1,27 @@
+openapi: "3.0.3"
+info:
+  title: Subscription API
+  version: "1.0.0"
+  description: API for subscription management — extended HTTP status errors scenario.
+paths:
+  /subscriptions:
+    post:
+      operationId: createSubscription
+      summary: Create a new subscription.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                plan:
+                  type: string
+      responses:
+        "200":
+          description: The UUID of the created subscription.
+          content:
+            application/json:
+              schema:
+                type: string
+                format: uuid

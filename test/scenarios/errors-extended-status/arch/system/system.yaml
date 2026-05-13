@@ -1,0 +1,18 @@
+system:
+  name: test-errors-extended-system
+  description: Test system for extended HTTP status error generation.
+  domainType: core
+
+boundedContexts:
+  - name: subscription
+    type: core
+    purpose: Manages subscriptions.
+    aggregates:
+      - name: Subscription
+        root: Subscription
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

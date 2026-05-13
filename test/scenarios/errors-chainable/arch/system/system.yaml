@@ -1,0 +1,18 @@
+system:
+  name: test-errors-chainable-system
+  description: Test system for chainable error generation.
+  domainType: core
+
+boundedContexts:
+  - name: payment
+    type: core
+    purpose: Manages payments.
+    aggregates:
+      - name: Payment
+        root: Payment
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

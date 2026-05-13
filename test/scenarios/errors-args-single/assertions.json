@@ -1,0 +1,40 @@
+{
+  "src/main/java/com/test/order/domain/errors/OrderNotFoundError.java": {
+    "_comment": "UUID-arg error: parameterized constructor with UUID arg, import java.util.UUID.",
+    "contains": [
+      "public class OrderNotFoundError extends NotFoundException",
+      "public OrderNotFoundError(UUID orderId)",
+      "super(\"Order \" + String.valueOf(orderId) + \" not found.\"",
+      "\"ORDER_NOT_FOUND\"",
+      "import java.util.UUID",
+      "// derived_from: errors[ORDER_NOT_FOUND]"
+    ],
+    "notContains": [
+      "public OrderNotFoundError()"
+    ]
+  },
+
+  "src/main/java/com/test/order/domain/errors/OrderRefNotFoundError.java": {
+    "_comment": "String-arg error: parameterized constructor with String arg, no extra import needed.",
+    "contains": [
+      "public class OrderRefNotFoundError extends NotFoundException",
+      "public OrderRefNotFoundError(String reference)",
+      "\"No order with reference '\" + String.valueOf(reference)",
+      "\"ORDER_REF_NOT_FOUND\"",
+      "// derived_from: errors[ORDER_REF_NOT_FOUND]"
+    ],
+    "notContains": [
+      "import java.util.UUID"
+    ]
+  },
+
+  "src/main/java/com/test/order/application/usecases/GetOrderQueryHandler.java": {
+    "_comment": "orElseThrow lambda (not method ref) when error has args.",
+    "contains": [
+      "orElseThrow(() -> new OrderNotFoundError("
+    ],
+    "notContains": [
+      "OrderNotFoundError::new"
+    ]
+  }
+}

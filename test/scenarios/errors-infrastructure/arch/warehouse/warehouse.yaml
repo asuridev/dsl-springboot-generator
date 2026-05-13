@@ -1,0 +1,58 @@
+bc: warehouse
+version: "1.0.0"
+
+aggregates:
+  - name: Stock
+    root: Stock
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: sku
+        type: String(50)
+        required: true
+      - name: quantity
+        type: Integer
+
+useCases:
+  - id: get-stock
+    name: GetStock
+    type: query
+    aggregate: Stock
+    returns: Stock
+    trigger:
+      kind: http
+      operationId: getStock
+    input:
+      - name: stockId
+        type: Uuid
+        source: path
+        loadAggregate: true
+        required: true
+    lookups:
+      - param: stockId
+        aggregate: Stock
+        errorCode: STOCK_NOT_FOUND
+    implementation: scaffold
+
+errors:
+  - code: STOCK_NOT_FOUND
+    httpStatus: 404
+    description: Stock record not found.
+
+  - code: WAREHOUSE_UNAVAILABLE
+    httpStatus: 503
+    kind: infrastructure
+    triggeredBy: org.springframework.dao.DataAccessException
+    description: Warehouse data store is temporarily unavailable.
+    chainable: true
+
+repositories:
+  - aggregate: Stock
+    methods:
+      - name: save
+        signature: "save(Stock): Stock"
+      - name: findById
+        signature: "findById(Uuid): Stock?"

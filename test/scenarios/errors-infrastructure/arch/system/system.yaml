@@ -1,0 +1,18 @@
+system:
+  name: test-errors-infra-system
+  description: Test system for infrastructure error generation.
+  domainType: core
+
+boundedContexts:
+  - name: warehouse
+    type: core
+    purpose: Manages warehouse stock.
+    aggregates:
+      - name: Stock
+        root: Stock
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

@@ -1,0 +1,24 @@
+openapi: "3.0.3"
+info:
+  title: Invoice API
+  version: "1.0.0"
+  description: API for invoice management — multi-arg parameterized errors scenario.
+paths:
+  /invoices/{invoiceId}:
+    get:
+      operationId: getInvoice
+      summary: Get invoice by ID.
+      parameters:
+        - name: invoiceId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: The invoice.
+          content:
+            application/json:
+              schema:
+                type: object

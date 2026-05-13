@@ -1,0 +1,48 @@
+{
+  "src/main/java/com/test/subscription/domain/errors/PaymentRequiredError.java": {
+    "_comment": "HTTP 402 → extends DomainException (not BusinessException).",
+    "contains": [
+      "public class PaymentRequiredError extends DomainException",
+      "import com.test.shared.domain.customExceptions.DomainException",
+      "\"PAYMENT_REQUIRED\"",
+      "// derived_from: errors[PAYMENT_REQUIRED]"
+    ],
+    "notContains": [
+      "extends BusinessException",
+      "extends NotFoundException"
+    ]
+  },
+
+  "src/main/java/com/test/subscription/domain/errors/SubscriptionTimeoutError.java": {
+    "_comment": "HTTP 408 → extends DomainException.",
+    "contains": [
+      "public class SubscriptionTimeoutError extends DomainException",
+      "\"SUBSCRIPTION_TIMEOUT\""
+    ],
+    "notContains": [
+      "extends BusinessException"
+    ]
+  },
+
+  "src/main/java/com/test/subscription/domain/errors/RateLimitExceededError.java": {
+    "_comment": "HTTP 429 → extends DomainException.",
+    "contains": [
+      "public class RateLimitExceededError extends DomainException",
+      "\"RATE_LIMIT_EXCEEDED\""
+    ],
+    "notContains": [
+      "extends BusinessException"
+    ]
+  },
+
+  "src/main/java/com/test/subscription/domain/errors/ProvisioningUnavailableError.java": {
+    "_comment": "HTTP 503 → extends DomainException.",
+    "contains": [
+      "public class ProvisioningUnavailableError extends DomainException",
+      "\"PROVISIONING_UNAVAILABLE\""
+    ],
+    "notContains": [
+      "extends BusinessException"
+    ]
+  }
+}

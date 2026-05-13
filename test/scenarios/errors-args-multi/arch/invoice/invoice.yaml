@@ -1,0 +1,61 @@
+bc: invoice
+version: "1.0.0"
+
+aggregates:
+  - name: Invoice
+    root: Invoice
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: number
+        type: String(30)
+        required: true
+      - name: amount
+        type: Decimal
+        precision: 12
+        scale: 2
+
+useCases:
+  - id: get-invoice
+    name: GetInvoice
+    type: query
+    aggregate: Invoice
+    returns: Invoice
+    trigger:
+      kind: http
+      operationId: getInvoice
+    input:
+      - name: invoiceId
+        type: Uuid
+        source: path
+        loadAggregate: true
+        required: true
+    lookups:
+      - param: invoiceId
+        aggregate: Invoice
+        errorCode: INVOICE_AMOUNT_MISMATCH
+    implementation: full
+
+errors:
+  - code: INVOICE_AMOUNT_MISMATCH
+    httpStatus: 422
+    description: Invoice amount does not match the expected value.
+    messageTemplate: "Invoice {invoiceId} has amount {expected} but {actual} was provided."
+    args:
+      - name: invoiceId
+        type: UUID
+      - name: expected
+        type: BigDecimal
+      - name: actual
+        type: BigDecimal
+
+repositories:
+  - aggregate: Invoice
+    methods:
+      - name: save
+        signature: "save(Invoice): Invoice"
+      - name: findById
+        signature: "findById(Uuid): Invoice?"

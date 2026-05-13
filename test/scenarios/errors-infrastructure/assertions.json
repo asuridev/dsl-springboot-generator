@@ -1,0 +1,23 @@
+{
+  "src/main/java/com/test/warehouse/domain/errors/WarehouseUnavailableError.java": {
+    "_comment": "infrastructure error: extends DomainException (httpStatus 503), no-arg constructor present, chainable constructor present.",
+    "contains": [
+      "public class WarehouseUnavailableError extends DomainException",
+      "public WarehouseUnavailableError()",
+      "public WarehouseUnavailableError(Throwable cause)",
+      "\"WAREHOUSE_UNAVAILABLE\"",
+      "// derived_from: errors[WAREHOUSE_UNAVAILABLE]"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/handlerException/HandlerExceptions.java": {
+    "_comment": "HandlerExceptions: @ExceptionHandler for DataAccessException, FQN import, domain error instantiation.",
+    "contains": [
+      "@ExceptionHandler(DataAccessException.class)",
+      "import org.springframework.dao.DataAccessException",
+      "import com.test.warehouse.domain.errors.WarehouseUnavailableError",
+      "new WarehouseUnavailableError()",
+      "WAREHOUSE_UNAVAILABLE"
+    ]
+  }
+}

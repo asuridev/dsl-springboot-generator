@@ -1,0 +1,60 @@
+bc: subscription
+version: "1.0.0"
+
+aggregates:
+  - name: Subscription
+    root: Subscription
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: plan
+        type: String(50)
+        required: true
+
+useCases:
+  - id: create-subscription
+    name: CreateSubscription
+    type: command
+    aggregate: Subscription
+    returns: Uuid
+    trigger:
+      kind: http
+      operationId: createSubscription
+    input:
+      - name: plan
+        type: String(50)
+        source: body
+        required: true
+    implementation: scaffold
+
+errors:
+  - code: PAYMENT_REQUIRED
+    httpStatus: 402
+    description: Payment is required to activate this subscription.
+    usedFor: manual
+
+  - code: SUBSCRIPTION_TIMEOUT
+    httpStatus: 408
+    description: Subscription provisioning timed out.
+    usedFor: manual
+
+  - code: RATE_LIMIT_EXCEEDED
+    httpStatus: 429
+    description: Too many subscription requests.
+    usedFor: manual
+
+  - code: PROVISIONING_UNAVAILABLE
+    httpStatus: 503
+    description: Subscription provisioning service is unavailable.
+    usedFor: manual
+
+repositories:
+  - aggregate: Subscription
+    methods:
+      - name: save
+        signature: "save(Subscription): Subscription"
+      - name: findById
+        signature: "findById(Uuid): Subscription?"

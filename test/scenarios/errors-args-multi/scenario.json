@@ -1,0 +1,4 @@
+{
+  "description": "Error generation: multi-arg messageTemplate (2 args). Verifies that the generated throw/orElseThrow expression compiles (second arg uses compilable null placeholder, not an empty comment).",
+  "compileGeneratedJava": true
+}

@@ -1,0 +1,18 @@
+system:
+  name: test-errors-args-system
+  description: Test system for parameterized error generation.
+  domainType: core
+
+boundedContexts:
+  - name: order
+    type: core
+    purpose: Manages orders.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

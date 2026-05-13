@@ -1,0 +1,86 @@
+bc: order
+version: "1.0.0"
+
+aggregates:
+  - name: Order
+    root: Order
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: reference
+        type: String(50)
+        required: true
+
+useCases:
+  - id: get-order
+    name: GetOrder
+    type: query
+    aggregate: Order
+    returns: Order
+    trigger:
+      kind: http
+      operationId: getOrder
+    input:
+      - name: orderId
+        type: Uuid
+        source: path
+        loadAggregate: true
+        required: true
+    lookups:
+      - param: orderId
+        aggregate: Order
+        errorCode: ORDER_NOT_FOUND
+    implementation: full
+
+  - id: get-order-by-ref
+    name: GetOrderByRef
+    type: query
+    aggregate: Order
+    returns: Order
+    trigger:
+      kind: http
+      operationId: getOrderByRef
+    input:
+      - name: reference
+        type: String(50)
+        source: path
+        required: true
+    notFoundError: ORDER_REF_NOT_FOUND
+    implementation: scaffold
+
+errors:
+  - code: ORDER_NOT_FOUND
+    httpStatus: 404
+    description: Order not found by its identifier.
+    messageTemplate: "Order {orderId} not found."
+    args:
+      - name: orderId
+        type: UUID
+
+  - code: ORDER_REF_NOT_FOUND
+    httpStatus: 404
+    description: Order not found by reference number.
+    messageTemplate: "No order with reference '{reference}' exists."
+    args:
+      - name: reference
+        type: String
+
+repositories:
+  - aggregate: Order
+    methods:
+      - name: save
+        signature: "save(Order): Order"
+      - name: findById
+        signature: "findById(Uuid): Order?"
+    queryMethods:
+      - name: findByReference
+        params:
+          - name: reference
+            type: String(50)
+            required: true
+            filterOn: [reference]
+            operator: EQ
+        returns: Order?

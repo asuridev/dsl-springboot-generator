@@ -1,0 +1,53 @@
+bc: payment
+version: "1.0.0"
+
+aggregates:
+  - name: Payment
+    root: Payment
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: amount
+        type: Decimal
+        precision: 12
+        scale: 2
+
+useCases:
+  - id: process-payment
+    name: ProcessPayment
+    type: command
+    aggregate: Payment
+    returns: Uuid
+    trigger:
+      kind: http
+      operationId: processPayment
+    input:
+      - name: amount
+        type: Decimal
+        source: body
+        required: true
+    notFoundError: PAYMENT_NOT_FOUND
+    implementation: scaffold
+
+errors:
+  - code: PAYMENT_NOT_FOUND
+    httpStatus: 404
+    description: Payment not found.
+    chainable: false
+
+  - code: PAYMENT_PROCESSING_FAILED
+    httpStatus: 422
+    description: Payment processing failed due to an upstream provider error.
+    chainable: true
+    usedFor: manual
+
+repositories:
+  - aggregate: Payment
+    methods:
+      - name: save
+        signature: "save(Payment): Payment"
+      - name: findById
+        signature: "findById(Uuid): Payment?"

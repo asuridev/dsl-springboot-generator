@@ -972,7 +972,7 @@ function buildOrElseThrowExpr(errorType, errorEntry, rawExpr, uuidExpr) {
   if (args.length === 0) return `orElseThrow(${errorType}::new)`;
   const STRING_TYPES = new Set(['String', 'Email', 'Url', 'Text']);
   function exprForArg(a, i) {
-    if (i !== 0) return `/* TODO: ${a.name} */`;
+    if (i !== 0) return `null /* TODO: supply ${a.name} (${a.type}) */`;
     return STRING_TYPES.has(a.type) ? rawExpr : uuidExpr;
   }
   const argExprs = args.map((a, i) => exprForArg(a, i)).join(', ');
@@ -985,7 +985,7 @@ function buildThrowNewExpr(errorType, errorEntry, rawExpr, uuidExpr) {
   if (args.length === 0) return `throw new ${errorType}()`;
   const STRING_TYPES = new Set(['String', 'Email', 'Url', 'Text']);
   function exprForArg(a, i) {
-    if (i !== 0) return `/* TODO: ${a.name} */`;
+    if (i !== 0) return `null /* TODO: supply ${a.name} (${a.type}) */`;
     return STRING_TYPES.has(a.type) ? rawExpr : uuidExpr;
   }
   const argExprs = args.map((a, i) => exprForArg(a, i)).join(', ');
@@ -1597,7 +1597,13 @@ async function generateDomainErrors(errors, errorMap, moduleName, packageName, b
       BigInteger: 'java.math.BigInteger',
       Instant: 'java.time.Instant',
       LocalDate: 'java.time.LocalDate',
+      LocalDateTime: 'java.time.LocalDateTime',
+      ZonedDateTime: 'java.time.ZonedDateTime',
+      OffsetDateTime: 'java.time.OffsetDateTime',
       Duration: 'java.time.Duration',
+      List: 'java.util.List',
+      Map: 'java.util.Map',
+      Set: 'java.util.Set',
     };
     const javaImports = [];
     const seen = new Set();
@@ -1634,6 +1640,7 @@ async function generateDomainErrors(errors, errorMap, moduleName, packageName, b
         baseException: entry.baseException,
         description: entry.description || err.description || null,
         chainable: entry.chainable === true,
+        isInfrastructure: err.kind === 'infrastructure',
         httpStatus: entry.httpStatus || null,
         messageTemplate: entry.messageTemplate || null,
         messageExpr,

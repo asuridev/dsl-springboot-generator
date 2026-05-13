@@ -10,6 +10,7 @@ const { hasAnyPersistentProjection } = require('./projection-updater-generator')
 const { hasAnyResilience, hasAnyOAuth2Cc, hasAnyInternalJwt, hasAnyMtls,
         buildResilienceInstances, resolveAuthForBcHttp, resolveAuthForExternal } = require('../utils/resilience-auth-resolver');
 const { buildErrorMap } = require('./application-generator');
+const { warn } = require('../utils/logger');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -186,6 +187,9 @@ function buildInfrastructureErrorMap(packageName, allBcYamls) {
     if (!bc || !bc.bc) continue;
     for (const err of bc.errors || []) {
       if (err.kind !== 'infrastructure' || !err.triggeredBy) continue;
+      if (!err.triggeredBy.includes('.')) {
+        warn(`[errors] triggeredBy "${err.triggeredBy}" in BC "${bc.bc}" (error "${err.code}") is not a fully-qualified class name. The import will be missing in HandlerExceptions.java — use the FQN (e.g. org.springframework.dao.DataAccessException).`);
+      }
       const errorMap = buildErrorMap([err]);
       const errEntry = errorMap[err.code];
       if (!errEntry) continue;

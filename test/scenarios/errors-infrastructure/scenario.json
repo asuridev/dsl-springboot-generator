@@ -1,0 +1,4 @@
+{
+  "description": "Error generation: kind: infrastructure + triggeredBy. Verifies that HandlerExceptions.java includes the @ExceptionHandler for the JVM exception and imports the FQN. Also verifies the domain error class compiles (no-arg constructor present for HandlerExceptions instantiation).",
+  "compileGeneratedJava": true
+}

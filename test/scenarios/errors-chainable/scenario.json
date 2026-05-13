@@ -1,0 +1,4 @@
+{
+  "description": "Error generation: chainable: true adds a (Throwable cause) constructor. Verifies both the regular no-arg constructor and the chaining constructor are generated.",
+  "compileGeneratedJava": true
+}

@@ -17,6 +17,13 @@ public class <%= errorType %> extends <%= baseException %> {
     public <%= errorType %>(<%= ctorParams %>) {
         super(<%- messageExpr %>, "<%= errorCode %>"<% if (typeof httpStatus !== 'undefined' && httpStatus) { %>, <%= httpStatus %><% } %>, new Object[]{ <%= argNames.join(', ') %> });
     }
+<% if (typeof isInfrastructure !== 'undefined' && isInfrastructure) { -%>
+
+    /** No-arg constructor for use by {@code HandlerExceptions} infrastructure mapping. */
+    public <%= errorType %>() {
+        super("<%= errorCode %>", "<%= errorCode %>", <%= (typeof httpStatus !== 'undefined' && httpStatus) ? httpStatus : 'null' %>, null);
+    }
+<% } -%>
 <% } else if (typeof messageTemplate !== 'undefined' && messageTemplate) { -%>
     public <%= errorType %>() {
         super(<%- messageExpr %>, "<%= errorCode %>"<% if (typeof httpStatus !== 'undefined' && httpStatus) { %>, <%= httpStatus %><% } %>, null);

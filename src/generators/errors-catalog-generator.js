@@ -81,6 +81,16 @@ async function generateErrorsCatalog(bcYaml, config, outputDir) {
     }
   }
 
+  // Infrastructure errors: referenced by HandlerExceptions via triggeredBy
+  for (const err of bcYaml.errors || []) {
+    if (err.kind === 'infrastructure' && err.triggeredBy) {
+      ref(err.code, {
+        kind: 'handlerExceptions.triggeredBy',
+        source: `HandlerExceptions catches \`${err.triggeredBy}\``,
+      });
+    }
+  }
+
   // Build rows
   const rows = errors.map((err) => {
     const entry = errorMap[err.code] || {};

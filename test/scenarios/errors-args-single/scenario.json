@@ -1,0 +1,4 @@
+{
+  "description": "Error generation: single-arg messageTemplate errors with String and UUID arg types. Verifies parameterized constructor, correct import generation, and orElseThrow lambda (not method ref).",
+  "compileGeneratedJava": true
+}

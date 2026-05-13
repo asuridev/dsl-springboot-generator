@@ -1,0 +1,18 @@
+system:
+  name: test-errors-multi-args-system
+  description: Test system for multi-arg parameterized error generation.
+  domainType: core
+
+boundedContexts:
+  - name: invoice
+    type: core
+    purpose: Manages invoices.
+    aggregates:
+      - name: Invoice
+        root: Invoice
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

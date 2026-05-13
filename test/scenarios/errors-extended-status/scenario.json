@@ -1,0 +1,4 @@
+{
+  "description": "Error generation: extended HTTP statuses (402, 408, 429, 503) all map to DomainException base class instead of specific exception subclasses.",
+  "compileGeneratedJava": true
+}
