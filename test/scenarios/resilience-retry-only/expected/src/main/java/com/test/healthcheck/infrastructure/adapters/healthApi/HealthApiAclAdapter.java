@@ -3,7 +3,6 @@ package com.test.healthcheck.infrastructure.adapters.healthApi;
 import com.test.healthcheck.application.ports.HealthApiClientPort;
 import com.test.healthcheck.domain.models.healthApi.HealthStatus;
 import io.github.resilience4j.retry.annotation.Retry;
-import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 /**

@@ -184,10 +184,14 @@ function buildElementCollectionField(prop, aggregate, bcYaml) {
     }
   } else {
     // Scalar or enum type
-    try {
-      elementJavaType = mapType(innerType).javaType;
-    } catch (_) {
-      elementJavaType = 'String';
+    if (isEnumType(innerType, bcYaml)) {
+      elementJavaType = innerType;
+    } else {
+      try {
+        elementJavaType = mapType(innerType).javaType;
+      } catch (_) {
+        elementJavaType = 'String';
+      }
     }
     if (innerType === 'Email') {
       colAttrs.push('length = 254');
@@ -204,12 +208,16 @@ function buildElementCollectionField(prop, aggregate, bcYaml) {
     ? `@Column(name = "${fieldSnake}", ${colAttrs.join(', ')})`
     : `@Column(name = "${fieldSnake}")`;
 
-  const columnAnnotation = [
+  const columnAnnotationParts = [
     '@ElementCollection',
     `@CollectionTable(name = "${aggSnake}_${fieldSnake}", joinColumns = @JoinColumn(name = "${aggSnake}_id"))`,
     colAttrStr,
-    '@Builder.Default',
-  ].join('\n    ');
+  ];
+  if (isEnumType(innerType, bcYaml)) {
+    columnAnnotationParts.push('@Enumerated(EnumType.STRING)');
+  }
+  columnAnnotationParts.push('@Builder.Default');
+  const columnAnnotation = columnAnnotationParts.join('\n    ');
 
   return {
     name: prop.name,
@@ -334,10 +342,14 @@ function buildJpaEntityImports(aggregate, bcYaml, config) {
           // Multi-prop VO → import the generated @Embeddable class
           imports.add(`${config.packageName}.${bc}.infrastructure.persistence.entities.${innerType}Embeddable`);
         } else if (!innerVoDef) {
-          try {
-            const { importHint } = mapType(innerType);
-            if (importHint) imports.add(importHint);
-          } catch (_) { /* skip */ }
+          if (isEnumType(innerType, bcYaml)) {
+            imports.add(`${config.packageName}.${bc}.domain.enums.${innerType}`);
+          } else {
+            try {
+              const { importHint } = mapType(innerType);
+              if (importHint) imports.add(importHint);
+            } catch (_) { /* skip */ }
+          }
         }
       }
       continue;
@@ -402,6 +414,12 @@ function buildJpaChildFields(entity, bcYaml) {
       continue;
     }
 
+    // List[T] — @ElementCollection (same as aggregate root)
+    if (isListType(prop.type)) {
+      fields.push(buildElementCollectionField(prop, entity, bcYaml));
+      continue;
+    }
+
     const voDef = getVoDef(prop.type, bcYaml);
     if (voDef && (voDef.properties || []).length === 1) {
       let javaType;
@@ -453,6 +471,29 @@ function buildJpaChildEntityImports(entity, bcYaml, config) {
       continue;
     }
 
+    // List[T] — @ElementCollection
+    if (isListType(prop.type)) {
+      imports.add('java.util.List');
+      imports.add('java.util.ArrayList');
+      const innerType = getListElementType(prop.type);
+      if (innerType) {
+        const innerVoDef = getVoDef(innerType, bcYaml);
+        if (innerVoDef && (innerVoDef.properties || []).length > 1) {
+          imports.add(`${config.packageName}.${bc}.infrastructure.persistence.entities.${innerType}Embeddable`);
+        } else if (!innerVoDef) {
+          if (isEnumType(innerType, bcYaml)) {
+            imports.add(`${config.packageName}.${bc}.domain.enums.${innerType}`);
+          } else {
+            try {
+              const { importHint } = mapType(innerType);
+              if (importHint) imports.add(importHint);
+            } catch (_) { /* skip */ }
+          }
+        }
+      }
+      continue;
+    }
+
     const ewm = /^Enum<(.+)>$/.exec(prop.type);
     const resolvedEnum = ewm ? ewm[1] : prop.type;
     if (ewm || isEnumType(resolvedEnum, bcYaml)) {
@@ -499,10 +540,17 @@ function toTableName(entityName) {
  * Build index entries from properties marked with indexed: true.
  * unique: true properties get UNIQUE constraint via @Column — no separate index needed.
  */
-function buildIndexes(aggregateName, properties) {
+function buildIndexes(aggregateName, properties, bcYaml) {
   const tableName = toTableName(aggregateName);
   return (properties || [])
-    .filter((p) => p.indexed === true && p.unique !== true && p.name !== 'id')
+    .filter((p) => {
+      if (p.indexed !== true || p.unique === true || p.name === 'id') return false;
+      // Skip Money and multi-prop VOs — they expand to multiple columns; @Index column name would be wrong
+      if (isMoneyType(p.type)) return false;
+      const voDef = getVoDef(p.type, bcYaml || {});
+      if (voDef && (voDef.properties || []).length > 1) return false;
+      return true;
+    })
     .map((p) => ({
       name: `idx_${tableName}_${toSnakeCase(p.name)}`,
       columnList: toSnakeCase(p.name),
@@ -530,7 +578,7 @@ function buildJpaEntityContext(aggregate, bcYaml, config) {
     });
   }
 
-  const indexes = buildIndexes(aggregate.name, aggregate.properties);
+  const indexes = buildIndexes(aggregate.name, aggregate.properties, bcYaml);
 
   // [Phase 3, Gap E6] Emit named DB-level UNIQUE constraints for uniqueness
   // domainRules that declare both `field` and `constraintName`. The named
@@ -595,6 +643,7 @@ function buildJpaChildEntityContext(entity, aggregate, bcYaml, config) {
   const bc = bcYaml.bc;
   const fields = buildJpaChildFields(entity, bcYaml);
   const imports = buildJpaChildEntityImports(entity, bcYaml, config);
+  const indexes = buildIndexes(entity.name, entity.properties, bcYaml);
 
   return {
     packageName: config.packageName,
@@ -605,6 +654,7 @@ function buildJpaChildEntityContext(entity, aggregate, bcYaml, config) {
     immutable: entity.immutable === true,
     fields,
     imports,
+    indexes,
   };
 }
 
@@ -634,19 +684,28 @@ function buildEmbeddableContext(voName, voDef, bcYaml, config) {
     } catch (_) {
       javaType = 'String';
     }
+    if (isEnumType(prop.type, bcYaml)) {
+      imports.add(`${config.packageName}.${bc}.domain.enums.${prop.type}`);
+    }
 
     const colAttrs = [`name = "${toSnakeCase(prop.name)}"`];
     if (prop.type === 'Email') {
       colAttrs.push('length = 254');
     } else if (/^String\(\d+\)$/.test(prop.type)) {
       colAttrs.push(`length = ${parseInt(prop.type.match(/\d+/)[0], 10)}`);
+    } else if (prop.type === 'Decimal') {
+      colAttrs.push(`precision = ${prop.precision || 19}, scale = ${prop.scale || 4}`);
     }
     if (prop.required === true) colAttrs.push('nullable = false');
 
+    let columnAnnotation = `@Column(${colAttrs.join(', ')})`;
+    if (isEnumType(prop.type, bcYaml)) {
+      columnAnnotation += '\n    @Enumerated(EnumType.STRING)';
+    }
     fields.push({
       name: prop.name,
       javaType,
-      columnAnnotation: `@Column(${colAttrs.join(', ')})`,
+      columnAnnotation,
     });
   }
 
@@ -697,6 +756,18 @@ async function generateJpaEntities(bcYaml, config, outputDir) {
       const voDef = getVoDef(innerType, bcYaml);
       if (voDef && (voDef.properties || []).length > 1) {
         embeddablesNeeded.set(innerType, voDef);
+      }
+    }
+    // 3b. Same for child entity properties
+    for (const entity of aggregate.entities || []) {
+      for (const prop of entity.properties || []) {
+        if (!isListType(prop.type)) continue;
+        const innerType = getListElementType(prop.type);
+        if (!innerType || embeddablesNeeded.has(innerType)) continue;
+        const voDef = getVoDef(innerType, bcYaml);
+        if (voDef && (voDef.properties || []).length > 1) {
+          embeddablesNeeded.set(innerType, voDef);
+        }
       }
     }
   }

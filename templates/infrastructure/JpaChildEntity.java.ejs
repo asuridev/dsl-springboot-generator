@@ -18,7 +18,13 @@ import lombok.*;
 @AllArgsConstructor
 @Builder
 @Entity
-@Table(name = "<%- tableName %>")
+@Table(name = "<%- tableName %>"<% if (typeof indexes !== 'undefined' && indexes.length > 0) { %>,
+    indexes = {<%
+  indexes.forEach((idx, i) => { %>
+        @Index(name = "<%- idx.name %>", columnList = "<%- idx.columnList %>")<%- i < indexes.length - 1 ? ',' : '' %><%
+  }); %>
+    }<%
+} %>)
 <% if (immutable) { %>@Immutable
 <% } %>public class <%- name %>Jpa {
 
@@ -27,6 +33,6 @@ import lombok.*;
     private UUID id;
 
 <% fields.forEach(field => { %>    <%- field.columnAnnotation %>
-    private <%- field.javaType %> <%- field.name %>;
+    private <%- field.javaType %> <%- field.name %><% if (field.isCollection) { %> = new ArrayList<>()<% } %>;
 
 <% }); %>}

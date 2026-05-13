@@ -1,6 +1,7 @@
 package com.test.ordering.infrastructure.persistence.entities;
 
 import jakarta.persistence.*;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import lombok.*;
@@ -27,6 +28,9 @@ public class OrderLineJpa {
     @Column(name = "quantity", nullable = false)
     private Integer quantity;
 
+    @ElementCollection
+    @CollectionTable(name = "order_line_tags", joinColumns = @JoinColumn(name = "order_line_id"))
     @Column(name = "tags")
-    private List<String> tags;
+    @Builder.Default
+    private List<String> tags = new ArrayList<>();
 }

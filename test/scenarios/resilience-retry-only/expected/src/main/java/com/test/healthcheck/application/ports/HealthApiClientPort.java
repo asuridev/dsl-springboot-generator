@@ -1,7 +1,6 @@
 package com.test.healthcheck.application.ports;
 
 import com.test.healthcheck.domain.models.healthApi.HealthStatus;
-import java.util.UUID;
 
 /**
  * Output port — anti-corruption boundary to the health-api bounded context.
