@@ -33,7 +33,7 @@ public class ItemV1Controller {
     @GetMapping("/id")
     @ResponseStatus(HttpStatus.OK)
     @Operation(summary = "Get the UUID of an item by name.")
-    public Uuid getItemId(@RequestParam(required = true) String name) {
+    public UUID getItemId(@RequestParam(required = true) String name) {
         log.info("getItemId");
         return useCaseMediator.dispatch(new GetItemIdQuery(name));
     }
@@ -44,7 +44,7 @@ public class ItemV1Controller {
     @GetMapping("/{itemId}/price")
     @ResponseStatus(HttpStatus.OK)
     @Operation(summary = "Get the current price of an item.")
-    public Decimal getItemPrice(@PathVariable String itemId) {
+    public BigDecimal getItemPrice(@PathVariable String itemId) {
         log.info("getItemPrice — itemId: {}", itemId);
         return useCaseMediator.dispatch(new GetItemPriceQuery(itemId));
     }
@@ -55,7 +55,7 @@ public class ItemV1Controller {
     @GetMapping("/{itemId}/created-at")
     @ResponseStatus(HttpStatus.OK)
     @Operation(summary = "Get the creation timestamp of an item.")
-    public DateTime getItemCreatedAt(@PathVariable String itemId) {
+    public Instant getItemCreatedAt(@PathVariable String itemId) {
         log.info("getItemCreatedAt — itemId: {}", itemId);
         return useCaseMediator.dispatch(new GetItemCreatedAtQuery(itemId));
     }

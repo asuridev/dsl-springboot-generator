@@ -49,5 +49,21 @@
       "com.test.item.application.dtos.Optional",
       "application.dtos.Optional<"
     ]
+  },
+
+  "src/main/java/com/test/item/infrastructure/rest/controllers/item/v1/ItemV1Controller.java": {
+    "_comment": "query Optional[Item] → ResponseEntity<ItemResponseDto> with map/orElseGet; command Optional[Item] → Optional<ItemResponseDto> with java.util.Optional import; neither may produce Optional[...] bracket syntax",
+    "contains": [
+      "public ResponseEntity<ItemResponseDto> findItemByName(",
+      "public Optional<ItemResponseDto> findOrCreateItem(",
+      "import java.util.Optional",
+      "import org.springframework.http.ResponseEntity",
+      ".map(ResponseEntity::ok)",
+      ".orElseGet(() -> ResponseEntity.notFound().build())"
+    ],
+    "notContains": [
+      "Optional[Item]",
+      "application.dtos.Optional"
+    ]
   }
 }

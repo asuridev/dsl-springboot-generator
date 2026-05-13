@@ -411,6 +411,10 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
             ? 'ResponseEntity<Resource>'
             : (() => {
               const raw = uc.returns || `${agg.name}ResponseDto`;
+              // [G4] canonical scalar return type (Uuid→UUID, Decimal→BigDecimal, etc.) — same
+              // resolution as the command branch so scalar queries produce valid Java types.
+              const canonical = resolveCanonicalReturnType(raw);
+              if (canonical) return canonical.javaType;
               // Normalize OpenAPI schema name → Java class name (e.g. "CategoryResponse" → "CategoryResponseDto")
               return normalizeInner(raw);
             })()
@@ -424,6 +428,9 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
           if (paged2) return `PagedResponse<${normalizeInner(paged2[1])}>`;
           const list2 = /^List\[(.+)\]$/.exec(uc.returns);
           if (list2) return `List<${normalizeInner(list2[1])}>`;
+          // Optional[X] → Optional<XDto>; handler returns Optional<XDto> directly.
+          const optional2 = /^Optional\[(.+)\]$/.exec(uc.returns);
+          if (optional2) return `Optional<${normalizeInner(optional2[1])}>`;
           // [G4] canonical scalar return type (Uuid→UUID, Decimal→BigDecimal, etc.)
           const canonical = resolveCanonicalReturnType(uc.returns);
           if (canonical) return canonical.javaType;
@@ -738,6 +745,9 @@ function buildInternalOperation(uc, internalApiOp, commonPrefix, agg, repoMethod
           if (paged) return `PagedResponse<${normalizeInner(paged[1])}>`;
           const list = /^List\[(.+)\]$/.exec(uc.returns);
           if (list) return `List<${normalizeInner(list[1])}>`;
+          // Optional[X] → Optional<XDto>; handler returns Optional<XDto> directly.
+          const optional = /^Optional\[(.+)\]$/.exec(uc.returns);
+          if (optional) return `Optional<${normalizeInner(optional[1])}>`;
           // [G4] canonical scalar return type (Uuid→UUID, Decimal→BigDecimal, etc.)
           const canonical = resolveCanonicalReturnType(uc.returns);
           if (canonical) return canonical.javaType;
@@ -1042,6 +1052,10 @@ function buildControllerImports(operations, packageName, moduleName, bcYaml = nu
         // [G10] jobTracking → ResponseEntity<JobReference>; the wrapper itself is
         // imported by the dedicated async block below; skip the BC dtos lookup.
         baseDtoType = null;
+      } else if (op.returnType.startsWith('Optional<')) {
+        // Command returns Optional<XDto>: import java.util.Optional + the inner DTO.
+        baseDtoType = op.returnType.replace('Optional<', '').replace('>', '');
+        imports.add('java.util.Optional');
       } else {
         baseDtoType = op.returnType;
       }

@@ -94,5 +94,26 @@
       "com.test.item.application.dtos.Boolean",
       "application.dtos.Boolean"
     ]
+  },
+
+  "src/main/java/com/test/item/infrastructure/rest/controllers/item/v1/ItemV1Controller.java": {
+    "_comment": "Controller methods must use Java types (UUID, BigDecimal, Instant) not YAML types (Uuid, Decimal, DateTime)",
+    "contains": [
+      "public UUID getItemId(",
+      "public BigDecimal getItemPrice(",
+      "public Instant getItemCreatedAt(",
+      "public Boolean isItemAvailable(",
+      "import java.util.UUID",
+      "import java.math.BigDecimal",
+      "import java.time.Instant"
+    ],
+    "notContains": [
+      "public Uuid getItemId(",
+      "public Decimal getItemPrice(",
+      "public DateTime getItemCreatedAt(",
+      "application.dtos.UUID",
+      "application.dtos.BigDecimal",
+      "application.dtos.Instant"
+    ]
   }
 }
