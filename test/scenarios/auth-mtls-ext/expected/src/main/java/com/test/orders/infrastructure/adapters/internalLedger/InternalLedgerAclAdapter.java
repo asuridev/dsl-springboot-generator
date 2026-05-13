@@ -1,7 +1,6 @@
 package com.test.orders.infrastructure.adapters.internalLedger;
 
 import com.test.orders.application.ports.InternalLedgerClientPort;
-import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 /**

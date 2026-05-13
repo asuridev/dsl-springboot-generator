@@ -1,0 +1,5 @@
+{
+  "description": "Regression: ExternalDomainModel with List<UUID> and List<String> domain fields must emit import java.util.List and import java.util.UUID (BUG-1 and BUG-2).",
+  "expectFailure": false,
+  "allowNoExpected": true
+}

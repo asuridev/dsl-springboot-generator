@@ -1,7 +1,5 @@
 package com.test.orders.application.ports;
 
-import java.util.UUID;
-
 /**
  * Output port — anti-corruption boundary to the internal-ledger bounded context.
  * Implementations live in infrastructure/adapters/internalLedger/.

@@ -16,7 +16,9 @@ const _cbEnabled    = !!(_resilience && _resilience.circuitBreaker);
 import java.util.List;
 import java.util.stream.Collectors;
 <%_ } _%>
+<%_ if (fkMethods && fkMethods.length > 0) { _%>
 import java.util.UUID;
+<%_ } _%>
 <%_ if (_cbEnabled) { _%>
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 <%_ } _%>
@@ -59,6 +61,7 @@ public class <%- feignAdapterClassName %> implements <%- portInterfaceName %> {
       const args   = [];
       op.pathVariables.forEach(pv => { params.push(`String ${pv}`); args.push(pv); });
       if (op.hasBody) { params.push(`${op.requestDtoName} body`); args.push('body'); }
+      (op.queryParams || []).forEach(qp => { params.push(`${qp.javaType} ${qp.name}`); args.push(qp.name); });
       const fbParams = [...params, 'Throwable cause'];
 _%>
 <%_   if (_cbEnabled) { _%>

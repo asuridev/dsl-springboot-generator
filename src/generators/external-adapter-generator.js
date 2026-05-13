@@ -116,6 +116,9 @@ function buildOperation(extName, opSpec, packageName, moduleName, targetBcPackag
   const pathVariables = extractPathVariables(httpPath);
 
   const hasBody = ['POST', 'PUT', 'PATCH'].includes(httpVerb) && opSpec.request && opSpec.request.fields;
+  const queryParams = !hasBody && opSpec.request && opSpec.request.fields
+    ? fieldsToJava(opSpec.request.fields, extSchemas)
+    : [];
   const hasResponse = !!(opSpec.response && opSpec.response.fields);
   const hasDomainReturn = hasResponse && !!(opSpec.domain && opSpec.domain.returnType);
 
@@ -138,6 +141,7 @@ function buildOperation(extName, opSpec, packageName, moduleName, targetBcPackag
     httpPath,
     pathVariables,
     hasBody,
+    queryParams,
     hasResponse,
     hasDomainReturn,
     returnList: false,

@@ -1,7 +1,6 @@
 package com.test.payments.infrastructure.adapters.billingService;
 
 import com.test.payments.application.ports.BillingServiceClientPort;
-import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 /**

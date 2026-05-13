@@ -2,7 +2,6 @@ package com.test.orders.infrastructure.adapters.catalog;
 
 import com.test.orders.application.ports.CatalogServicePort;
 import com.test.orders.infrastructure.adapters.catalog.dtos.ValidateProductRequestDto;
-import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 /**

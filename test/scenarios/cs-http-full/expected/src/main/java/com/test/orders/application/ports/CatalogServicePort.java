@@ -3,7 +3,6 @@ package com.test.orders.application.ports;
 import com.test.orders.domain.models.catalog.ProductDetails;
 import com.test.orders.domain.models.catalog.ValidateProductsResult;
 import com.test.orders.infrastructure.adapters.catalog.dtos.ValidateProductsRequestDto;
-import java.util.UUID;
 
 /**
  * Output port — anti-corruption boundary to the catalog bounded context.

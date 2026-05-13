@@ -1,0 +1,56 @@
+# ─── Test scenario: ext-list-domain ──────────────────────────────────────────
+# Covers:
+#   - ExternalDomainModel with domain.fields typed List<UUID> → import java.util.List + UUID (BUG-1, BUG-2)
+#   - ExternalDomainModel with domain.fields typed List<String> → import java.util.List (BUG-1)
+#   - GET operation with no resilience / no auth
+# ─────────────────────────────────────────────────────────────────────────────
+
+system:
+  name: test-system
+  description: Minimal test system for domain-model List<T> import validation.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Product catalog BC.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+externalSystems:
+  - name: order-hub
+    description: Order management external system.
+    type: order-service
+    operations:
+      - name: getOrderSummary
+        method: GET
+        path: /v1/orders/{orderId}
+        description: Retrieve a lightweight order summary by ID.
+        response:
+          fields:
+            - name: status
+              type: String
+            - name: lineCount
+              type: Integer
+        domain:
+          returnType: OrderSummary
+          fields:
+            - name: lineIds
+              type: List<UUID>
+            - name: tags
+              type: List<String>
+
+integrations:
+  - from: catalog
+    to: order-hub
+    pattern: acl
+    channel: http
+    contracts:
+      - getOrderSummary
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

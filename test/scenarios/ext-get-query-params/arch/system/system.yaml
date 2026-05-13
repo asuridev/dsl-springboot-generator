@@ -1,0 +1,52 @@
+# ─── Test scenario: ext-get-query-params ─────────────────────────────────────
+# Covers:
+#   - GET external operation with request.fields → @RequestParam in Feign client (GAP-4)
+#   - Query params appear in port interface method signature
+#   - Query params forwarded as args in ACL adapter
+#   - No @RequestBody generated for GET
+# ─────────────────────────────────────────────────────────────────────────────
+
+system:
+  name: test-system
+  description: Minimal test system for GET query param generation.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Product catalog BC.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+externalSystems:
+  - name: search-service
+    description: Product search engine.
+    type: search-engine
+    operations:
+      - name: searchProducts
+        method: GET
+        path: /v1/products/search
+        description: Search products by free-text query with pagination.
+        request:
+          fields:
+            - name: query
+              type: String
+            - name: page
+              type: Integer
+            - name: pageSize
+              type: Integer
+
+integrations:
+  - from: catalog
+    to: search-service
+    pattern: acl
+    channel: http
+    contracts:
+      - searchProducts
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

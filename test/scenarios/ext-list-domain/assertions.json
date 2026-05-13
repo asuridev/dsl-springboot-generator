@@ -1,0 +1,40 @@
+{
+  "src/main/java/com/test/catalog/domain/models/orderHub/OrderSummary.java": {
+    "_comment": "Domain record with List<UUID> and List<String> fields. Must import both java.util.List and java.util.UUID.",
+    "contains": [
+      "public record OrderSummary(",
+      "List<UUID> lineIds",
+      "List<String> tags",
+      "import java.util.List",
+      "import java.util.UUID"
+    ],
+    "notContains": [
+      "class OrderSummary",
+      "List<java.util.UUID>",
+      "Object lineIds",
+      "Object tags"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/adapters/orderHub/OrderHubRestClient.java": {
+    "_comment": "Feign client for the GET operation — no request body, has path variable.",
+    "contains": [
+      "OrderHubRestClient",
+      "@GetMapping(\"/v1/orders/{orderId}\")",
+      "@PathVariable(\"orderId\") String orderId",
+      "OrderSummaryResponseDto getOrderSummary"
+    ],
+    "notContains": [
+      "@RequestBody",
+      "@RequestParam"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/ports/OrderHubClientPort.java": {
+    "_comment": "Output port — method must include the path variable parameter.",
+    "contains": [
+      "OrderHubClientPort",
+      "OrderSummary getOrderSummary(String orderId)"
+    ]
+  }
+}

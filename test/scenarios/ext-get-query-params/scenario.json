@@ -1,0 +1,5 @@
+{
+  "description": "Regression: GET external operations with request.fields must generate @RequestParam parameters in the Feign client and port interface (GAP-4).",
+  "expectFailure": false,
+  "allowNoExpected": true
+}

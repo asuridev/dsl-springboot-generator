@@ -1,0 +1,22 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(100)
+
+integrations:
+  outbound:
+    - name: search-service
+      type: externalSystem
+      protocol: http
+      operations:
+        - name: searchProducts

@@ -1,7 +1,5 @@
 package com.test.payments.application.ports;
 
-import java.util.UUID;
-
 /**
  * Output port — anti-corruption boundary to the auth-service bounded context.
  * Implementations live in infrastructure/adapters/authService/.

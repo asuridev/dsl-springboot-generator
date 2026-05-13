@@ -1,0 +1,35 @@
+{
+  "src/main/java/com/test/catalog/infrastructure/adapters/searchService/SearchServiceRestClient.java": {
+    "_comment": "Feign client for a GET operation with query params. Must use @RequestParam, never @RequestBody.",
+    "contains": [
+      "SearchServiceRestClient",
+      "@GetMapping(\"/v1/products/search\")",
+      "@RequestParam(\"query\") String query",
+      "@RequestParam(\"page\") Integer page",
+      "@RequestParam(\"pageSize\") Integer pageSize"
+    ],
+    "notContains": [
+      "@RequestBody",
+      "@PathVariable"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/ports/SearchServiceClientPort.java": {
+    "_comment": "Output port — method signature must include all three query params.",
+    "contains": [
+      "SearchServiceClientPort",
+      "void searchProducts(String query, Integer page, Integer pageSize)"
+    ],
+    "notContains": [
+      "import java.util.UUID"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/adapters/searchService/SearchServiceAclAdapter.java": {
+    "_comment": "ACL adapter — must forward all query params as positional args to feignClient.searchProducts.",
+    "contains": [
+      "SearchServiceAclAdapter",
+      "feignClient.searchProducts(query, page, pageSize)"
+    ]
+  }
+}

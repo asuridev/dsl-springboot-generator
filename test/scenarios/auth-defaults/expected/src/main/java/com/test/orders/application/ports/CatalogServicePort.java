@@ -1,7 +1,6 @@
 package com.test.orders.application.ports;
 
 import com.test.orders.infrastructure.adapters.catalog.dtos.ValidateProductRequestDto;
-import java.util.UUID;
 
 /**
  * Output port — anti-corruption boundary to the catalog bounded context.

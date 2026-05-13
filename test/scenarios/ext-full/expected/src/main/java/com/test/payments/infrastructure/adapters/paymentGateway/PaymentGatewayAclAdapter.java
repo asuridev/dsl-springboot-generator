@@ -5,7 +5,6 @@ import com.test.payments.domain.models.paymentGateway.ChargeResult;
 import com.test.payments.infrastructure.adapters.paymentGateway.dtos.ChargeCardRequestDto;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
-import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 /**

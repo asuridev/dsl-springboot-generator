@@ -6,7 +6,6 @@ import com.test.orders.domain.models.catalog.ValidateProductsResult;
 import com.test.orders.infrastructure.adapters.catalog.dtos.ValidateProductsRequestDto;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
-import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 /**

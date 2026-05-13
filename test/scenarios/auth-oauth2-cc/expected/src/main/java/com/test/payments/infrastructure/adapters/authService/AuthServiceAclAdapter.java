@@ -1,7 +1,6 @@
 package com.test.payments.infrastructure.adapters.authService;
 
 import com.test.payments.application.ports.AuthServiceClientPort;
-import java.util.UUID;
 import org.springframework.stereotype.Component;
 
 /**
