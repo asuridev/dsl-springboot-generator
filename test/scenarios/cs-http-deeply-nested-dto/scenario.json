@@ -1,0 +1,6 @@
+{
+  "description": "Deeply nested DTO: response schema has a nested $ref whose own schema also has a $ref (e.g. ProductPriceValidationResult → ProductPriceValidationItem → Money). Verifies that MoneyDto.java is generated and imported in ProductPriceValidationItemDto.",
+  "expectFailure": false,
+  "compileGeneratedJava": true,
+  "gradleTask": "build"
+}

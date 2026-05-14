@@ -1,0 +1,6 @@
+{
+  "description": "Gap 2: response schema field with type:array + items.$ref — OrderLineItem array inside OrderResult. Verifies List<OrderLineItem> in domain model and List<OrderLineItemDto> in infra DTO.",
+  "expectFailure": false,
+  "compileGeneratedJava": true,
+  "gradleTask": "build"
+}

@@ -1,0 +1,6 @@
+{
+  "description": "Gap 3: 200 response schema is a top-level type:array + items.$ref — GET /products returns array not object. Verifies List<Product> return type on port and FeignClient instead of void.",
+  "expectFailure": false,
+  "compileGeneratedJava": true,
+  "gradleTask": "build"
+}

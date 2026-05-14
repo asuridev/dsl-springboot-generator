@@ -1,0 +1,5 @@
+integration:
+
+  catalog.base-url: ${CATALOG_URL:https://api.catalog.example.com}
+
+

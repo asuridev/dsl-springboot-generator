@@ -5,11 +5,22 @@ import org.springframework.stereotype.Component;
 const responseMethods = operations.filter(op => op.hasDomainReturn);
 const uniqueDomainTypes = [...new Set(responseMethods.map(op => op.domainType))];
 const uniqueInfraDtos   = [...new Set(responseMethods.map(op => op.infraDtoName))];
+const _nestedMappings   = nestedMappings || [];
+const nestedDomainTypes = [...new Set(_nestedMappings.map(nm => nm.domainType))];
+const nestedInfraDtos   = [...new Set(_nestedMappings.map(nm => nm.infraDtoName))];
+const _hasCollectors    = responseMethods.some(op =>
+  op.mappingFields && op.mappingFields.some(f => f.expression && f.expression.includes('Collectors.toList()')));
 %>
 <%_ uniqueDomainTypes.forEach(dt => { _%>
 import <%- packageName %>.<%- moduleName %>.domain.models.<%- targetBcPackage %>.<%- dt %>;
 <%_ }); _%>
+<%_ nestedDomainTypes.filter(dt => !uniqueDomainTypes.includes(dt)).forEach(dt => { _%>
+import <%- packageName %>.<%- moduleName %>.domain.models.<%- targetBcPackage %>.<%- dt %>;
+<%_ }); _%>
 <%_ uniqueInfraDtos.forEach(dto => { _%>
+import <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>.dtos.<%- dto %>;
+<%_ }); _%>
+<%_ nestedInfraDtos.filter(dto => !uniqueInfraDtos.includes(dto)).forEach(dto => { _%>
 import <%- packageName %>.<%- moduleName %>.infrastructure.adapters.<%- targetBcPackage %>.dtos.<%- dto %>;
 <%_ }); _%>
 <%_ voImports.forEach(imp => { _%>
@@ -17,6 +28,9 @@ import <%- imp %>;
 <%_ }); _%>
 <%_ if (needsBigDecimal) { _%>
 import java.math.BigDecimal;
+<%_ } _%>
+<%_ if (_hasCollectors) { _%>
+import java.util.List;
 <%_ } _%>
 
 /**
@@ -35,6 +49,17 @@ public class <%- aclMapperClassName %> {
         return new <%- op.domainType %>(
 <%_   op.mappingFields.forEach((f, i) => { _%>
             <%- f.expression %><%- i < op.mappingFields.length - 1 ? ',' : '' %>
+<%_   }); _%>
+        );
+    }
+<%_ }); _%>
+<%_ _nestedMappings.forEach(nm => { _%>
+
+    private <%- nm.domainType %> mapTo<%- nm.domainType %>(<%- nm.infraDtoName %> dto) {
+        if (dto == null) return null;
+        return new <%- nm.domainType %>(
+<%_   nm.mappingFields.forEach((f, i) => { _%>
+            <%- f.expression %><%- i < nm.mappingFields.length - 1 ? ',' : '' %>
 <%_   }); _%>
         );
     }

@@ -1,0 +1,34 @@
+system:
+  name: test-array-field-system
+  description: Test system for type:array + items.$ref fields inside a response schema.
+  domainType: core
+
+boundedContexts:
+  - name: billing
+    type: core
+    purpose: Handles invoicing, retrieves order details from orders BC.
+    aggregates:
+      - name: Invoice
+        root: Invoice
+        entities: []
+
+  - name: orders
+    type: supporting
+    purpose: Provides order details with a list of line items.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+integrations:
+  - from: billing
+    to: orders
+    pattern: customer-supplier
+    channel: http
+    contracts:
+      - getOrderDetails
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

@@ -1,0 +1,35 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(100)
+
+useCases:
+  - id: validate-product-prices
+    name: ValidateProductPrices
+    type: query
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: validateProductPrices
+    input:
+      - name: productIds
+        type: String(36)
+        source: body
+        required: true
+    returns: ProductPriceValidationResultDto
+    implementation: scaffold
+
+integrations:
+  inbound:
+    - operations:
+        - name: validateProductPrices

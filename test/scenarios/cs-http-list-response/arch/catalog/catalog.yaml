@@ -1,0 +1,30 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+
+useCases:
+  - id: list-available-products
+    name: ListAvailableProducts
+    type: query
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: listAvailableProducts
+    returns: AvailableProductDto
+    implementation: scaffold
+
+integrations:
+  inbound:
+    - operations:
+        - name: listAvailableProducts

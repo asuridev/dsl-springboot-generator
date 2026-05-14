@@ -1,0 +1,20 @@
+name: test-nested-system-cluster
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: test-nested-system-postgres
+    environment:
+      POSTGRES_DB: test_nested_system
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - test-nested-system-network
+volumes:
+  postgres-data: null
+networks:
+  test-nested-system-network:
+    driver: bridge

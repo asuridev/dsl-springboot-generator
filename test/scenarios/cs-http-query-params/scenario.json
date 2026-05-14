@@ -1,0 +1,6 @@
+{
+  "description": "Gap 4: GET endpoint has query parameters (in:query) — verifies they are extracted and added to FeignClient and port method signatures.",
+  "expectFailure": false,
+  "compileGeneratedJava": true,
+  "gradleTask": "build"
+}

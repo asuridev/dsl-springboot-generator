@@ -1,0 +1,30 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+
+useCases:
+  - id: search-products
+    name: SearchProducts
+    type: query
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: searchProducts
+    returns: ProductSearchResultDto
+    implementation: scaffold
+
+integrations:
+  inbound:
+    - operations:
+        - name: searchProducts

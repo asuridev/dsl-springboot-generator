@@ -1,0 +1,34 @@
+system:
+  name: test-list-response-system
+  description: Test system for top-level array response (type:array + items.$ref).
+  domainType: core
+
+boundedContexts:
+  - name: inventory
+    type: core
+    purpose: Fetches available products from catalog as a list.
+    aggregates:
+      - name: StockEntry
+        root: StockEntry
+        entities: []
+
+  - name: catalog
+    type: supporting
+    purpose: Provides a list of available products.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+integrations:
+  - from: inventory
+    to: catalog
+    pattern: customer-supplier
+    channel: http
+    contracts:
+      - listAvailableProducts
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

@@ -1,0 +1,21 @@
+bc: orders
+version: "1.0.0"
+
+aggregates:
+  - name: Order
+    root: Order
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: status
+        type: String(50)
+
+integrations:
+  outbound:
+    - name: catalog
+      protocol: http
+      operations:
+        - name: getOrderSummary

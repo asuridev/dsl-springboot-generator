@@ -1,0 +1,5 @@
+integration:
+
+  orders.base-url: ${ORDERS_URL:https://api.orders.example.com}
+
+

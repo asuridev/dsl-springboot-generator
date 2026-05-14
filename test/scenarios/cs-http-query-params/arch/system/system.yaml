@@ -1,0 +1,34 @@
+system:
+  name: test-query-params-system
+  description: Test system for query parameter extraction on outbound HTTP calls.
+  domainType: core
+
+boundedContexts:
+  - name: search
+    type: core
+    purpose: Uses product search via catalog, passing filters as query params.
+    aggregates:
+      - name: SearchRequest
+        root: SearchRequest
+        entities: []
+
+  - name: catalog
+    type: supporting
+    purpose: Provides product search endpoint with query parameter filters.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+integrations:
+  - from: search
+    to: catalog
+    pattern: customer-supplier
+    channel: http
+    contracts:
+      - searchProducts
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

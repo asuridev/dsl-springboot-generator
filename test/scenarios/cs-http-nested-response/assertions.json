@@ -1,0 +1,69 @@
+{
+  "src/main/java/com/test/orders/domain/models/catalog/OrderSummaryResult.java": {
+    "_comment": "Main domain record — must reference CustomerInfo (the nested type)",
+    "contains": [
+      "public record OrderSummaryResult(",
+      "CustomerInfo customer"
+    ],
+    "notContains": [
+      "CustomerInfoDto customer",
+      "Object customer"
+    ]
+  },
+  "src/main/java/com/test/orders/domain/models/catalog/CustomerInfo.java": {
+    "_comment": "Nested domain record — must be generated (was the bug: it was never generated)",
+    "contains": [
+      "public record CustomerInfo(",
+      "String customerId",
+      "String name",
+      "String email"
+    ],
+    "notContains": [
+      "class CustomerInfo",
+      "Object"
+    ]
+  },
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/dtos/OrderSummaryResultDto.java": {
+    "_comment": "Infra DTO — must reference CustomerInfoDto for the nested field",
+    "contains": [
+      "public record OrderSummaryResultDto(",
+      "CustomerInfoDto customer"
+    ],
+    "notContains": [
+      "Object customer"
+    ]
+  },
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/dtos/CustomerInfoDto.java": {
+    "_comment": "Nested infra DTO",
+    "contains": [
+      "public record CustomerInfoDto(",
+      "String customerId",
+      "String name",
+      "String email"
+    ]
+  },
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/CatalogAclMapper.java": {
+    "_comment": "ACL mapper — must have public method for the main type AND private helper for the nested type",
+    "contains": [
+      "public OrderSummaryResult toOrderSummaryResult(",
+      "mapToCustomerInfo(dto.customer())",
+      "private CustomerInfo mapToCustomerInfo(CustomerInfoDto dto)"
+    ],
+    "notContains": [
+      "new OrderSummaryResult(dto.orderId(), dto.totalAmount(), dto.customer())"
+    ]
+  },
+  "src/main/java/com/test/orders/application/ports/CatalogServicePort.java": {
+    "_comment": "Port interface — must declare the method with correct return type",
+    "contains": [
+      "OrderSummaryResult getOrderSummary("
+    ]
+  },
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/CatalogFeignClient.java": {
+    "_comment": "Feign client — must have @PathVariable for orderId",
+    "contains": [
+      "@GetMapping(\"/internal/orders/{orderId}/summary\")",
+      "@PathVariable(\"orderId\") String orderId"
+    ]
+  }
+}

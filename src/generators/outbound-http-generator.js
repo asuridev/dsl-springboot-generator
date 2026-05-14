@@ -25,6 +25,10 @@ function openApiTypeToJava(schema) {
   if (type === 'number' && format === 'double') return 'double';
   if (type === 'number') return 'java.math.BigDecimal';
   if (type === 'boolean') return 'boolean';
+  if (type === 'array') {
+    if (schema.items) return `List<${openApiTypeToJava(schema.items)}>`;
+    return 'List<Object>';
+  }
   return 'String'; // fallback
 }
 
@@ -63,6 +67,14 @@ function schemaToFields(schema, components, nestedDtoNames = new Set()) {
       const refName = resolveRefName(propSchema.$ref);
       nestedDtoNames.add(refName);
       return { name, javaType: refName + 'Dto' };
+    }
+    if (propSchema.type === 'array' && propSchema.items) {
+      if (propSchema.items.$ref) {
+        const refName = resolveRefName(propSchema.items.$ref);
+        nestedDtoNames.add(refName);
+        return { name, javaType: `List<${refName}Dto>` };
+      }
+      return { name, javaType: openApiTypeToJava(propSchema) };
     }
     return { name, javaType: openApiTypeToJava(propSchema) };
   });
@@ -104,7 +116,23 @@ function buildDomainModelFields(schema, components, bcYaml, packageName, moduleN
       } else {
         // Nested domain model record (will be generated as its own file)
         nestedSchemaNames.set(refName, toPascalCase(refName));
-        fields.push({ name, javaType: toPascalCase(refName), isVo: false });
+        fields.push({ name, javaType: toPascalCase(refName), isVo: false, isNested: true, infraDtoType: `${refName}Dto` });
+      }
+    } else if (propSchema.type === 'array' && propSchema.items) {
+      if (propSchema.items.$ref) {
+        const refName = resolveRefName(propSchema.items.$ref);
+        const matchingVo = findMatchingVo(refName, bcYaml.valueObjects);
+        if (matchingVo) {
+          const voImport = `${packageName}.${moduleName}.domain.valueobject.${refName}`;
+          voImports.add(voImport);
+          fields.push({ name, javaType: `List<${refName}>`, isVo: false });
+        } else {
+          nestedSchemaNames.set(refName, toPascalCase(refName));
+          fields.push({ name, javaType: `List<${toPascalCase(refName)}>`, isVo: false, isNested: true, isNestedList: true, infraDtoType: `${refName}Dto`, nestedType: toPascalCase(refName) });
+        }
+      } else {
+        // Array of scalars
+        fields.push({ name, javaType: openApiTypeToJava(propSchema), isVo: false });
       }
     } else {
       fields.push({ name, javaType: openApiTypeToJava(propSchema), isVo: false });
@@ -140,6 +168,20 @@ function buildMappingFields(domainFields, infraFields, voSchemas, bcYaml, packag
         expression: `new ${domainField.voName}(${voArgs})`,
       };
     }
+    if (!domainField.isVo && domainField.isNested) {
+      if (domainField.isNestedList) {
+        // List of nested domain models: stream + map through private helper method
+        return {
+          name: domainField.name,
+          expression: `dto.${domainField.name}() == null ? null : dto.${domainField.name}().stream().map(this::mapTo${domainField.nestedType}).collect(java.util.stream.Collectors.toList())`,
+        };
+      }
+      // Direct nested domain model: delegate to private helper method
+      return {
+        name: domainField.name,
+        expression: `mapTo${domainField.javaType}(dto.${domainField.name}())`,
+      };
+    }
     return { name: domainField.name, expression: `dto.${domainField.name}()` };
   });
 }
@@ -163,6 +205,8 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
   const allInfraDtos = []; // { dtoName, fields, nestedDtoImports, targetBcPackage }
   const allDomainModels = []; // { name, fields, voImports, aclMapperClassName, targetBcPackage }
   const processedSchemas = new Set();
+  const allNestedMappings = []; // { domainType, infraDtoName, mappingFields }
+  const processedNestedDomainModels = new Set();
 
   const targetBcPackage = toCamelCase(targetBc);
   const aclMapperClassName = `${toPascalCase(targetBc)}AclMapper`;
@@ -176,6 +220,12 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
       const pathVariables = extractPathVariables(httpPath);
       const description = (opSpec.summary || opSpec.description || operationId).replace(/\n/g, ' ').trim();
 
+      // Query parameters (in: query) — supports both inline and $ref parameters
+      const queryParams = (opSpec.parameters || [])
+        .map((p) => (p.$ref ? (components.parameters || {})[resolveRefName(p.$ref)] : p))
+        .filter((p) => p && p.in === 'query')
+        .map((p) => ({ name: p.name, javaType: openApiTypeToJava(p.schema || {}) }));
+
       // Request body schema → infra request DTO
       let requestDtoName = null;
       const reqBodySchema = opSpec.requestBody?.content?.['application/json']?.schema;
@@ -188,13 +238,37 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
             const reqSchema = (components.schemas || {})[reqRefName] || {};
             const reqNestedNames = new Set();
             const reqFields = schemaToFields(reqSchema, components, reqNestedNames);
+            const reqNestedImports = [...reqNestedNames].map(
+              (n) => `${packageName}.${moduleName}.infrastructure.adapters.${targetBcPackage}.dtos.${n}Dto`
+            );
             allInfraDtos.push({
               dtoName: requestDtoName,
               fields: reqFields,
-              nestedDtoImports: [],
+              nestedDtoImports: reqNestedImports,
               targetBcPackage,
               targetBc,
             });
+            // Generate nested DTOs from request body recursively (any nesting depth)
+            const reqNestedQueue = [...reqNestedNames];
+            while (reqNestedQueue.length > 0) {
+              const nestedName = reqNestedQueue.shift();
+              if (processedSchemas.has(nestedName)) continue;
+              processedSchemas.add(nestedName);
+              const nestedSchema = (components.schemas || {})[nestedName] || {};
+              const grandchildNames = new Set();
+              const nestedFields = schemaToFields(nestedSchema, components, grandchildNames);
+              const gcImports = [...grandchildNames].map(
+                (n) => `${packageName}.${moduleName}.infrastructure.adapters.${targetBcPackage}.dtos.${n}Dto`
+              );
+              allInfraDtos.push({
+                dtoName: `${nestedName}Dto`,
+                fields: nestedFields,
+                nestedDtoImports: gcImports,
+                targetBcPackage,
+                targetBc,
+              });
+              for (const gc of grandchildNames) reqNestedQueue.push(gc);
+            }
           }
         }
       }
@@ -211,7 +285,15 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
 
       if (responseSchema) {
         hasDomainReturn = true;
-        const refName = responseSchema.$ref ? resolveRefName(responseSchema.$ref) : null;
+        // Handle top-level array response (type:array + items.$ref)
+        let isTopLevelList = false;
+        let refName = null;
+        if (responseSchema.$ref) {
+          refName = resolveRefName(responseSchema.$ref);
+        } else if (responseSchema.type === 'array' && responseSchema.items?.$ref) {
+          refName = resolveRefName(responseSchema.items.$ref);
+          isTopLevelList = true;
+        }
 
         if (refName && !processedSchemas.has(refName)) {
           processedSchemas.add(refName);
@@ -223,25 +305,35 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
           const infraSchema = (components.schemas || {})[refName] || {};
           infraDtoFields = schemaToFields(infraSchema, components, nestedDtoNames);
 
-          // Process nested DTOs (Money, etc.)
-          for (const nestedName of nestedDtoNames) {
+          // Process nested DTOs recursively (handles any nesting depth, e.g. Money inside ProductPriceValidationItem)
+          const nestedQueue = [...nestedDtoNames];
+          while (nestedQueue.length > 0) {
+            const nestedName = nestedQueue.shift();
             const nestedDtoName = `${nestedName}Dto`;
-            nestedDtoImports.push(
-              `${packageName}.${moduleName}.infrastructure.adapters.${targetBcPackage}.dtos.${nestedDtoName}`
-            );
+
+            // Only add import to parent DTO if this is a direct child
+            if (nestedDtoNames.has(nestedName)) {
+              nestedDtoImports.push(
+                `${packageName}.${moduleName}.infrastructure.adapters.${targetBcPackage}.dtos.${nestedDtoName}`
+              );
+            }
 
             if (!processedSchemas.has(nestedName)) {
               processedSchemas.add(nestedName);
               const nestedSchema = (components.schemas || {})[nestedName] || {};
-              const nestedFields = schemaToFields(nestedSchema, components, new Set());
-
+              const grandchildNames = new Set();
+              const nestedFields = schemaToFields(nestedSchema, components, grandchildNames);
+              const gcImports = [...grandchildNames].map(
+                (n) => `${packageName}.${moduleName}.infrastructure.adapters.${targetBcPackage}.dtos.${n}Dto`
+              );
               allInfraDtos.push({
                 dtoName: nestedDtoName,
                 fields: nestedFields,
-                nestedDtoImports: [],
+                nestedDtoImports: gcImports,
                 targetBcPackage,
                 targetBc,
               });
+              for (const gc of grandchildNames) nestedQueue.push(gc);
             }
           }
 
@@ -284,6 +376,32 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
             targetBc,
           });
 
+          // Generate nested domain models (non-VO $ref fields and array element types)
+          for (const [nestedRefName, nestedDomainType] of nestedSchemaNames) {
+            if (processedNestedDomainModels.has(nestedRefName)) continue;
+            processedNestedDomainModels.add(nestedRefName);
+            const nestedSchema = (components.schemas || {})[nestedRefName] || {};
+            const { fields: nestedDomainFields, voImports: nestedVoImports } = buildDomainModelFields(
+              nestedSchema, components, bcYaml, packageName, moduleName
+            );
+            const nestedMappingFields = buildMappingFields(
+              nestedDomainFields, [], components.schemas || {}, bcYaml, packageName, moduleName
+            );
+            allDomainModels.push({
+              name: nestedDomainType,
+              fields: nestedDomainFields,
+              voImports: nestedVoImports,
+              aclMapperClassName,
+              targetBcPackage,
+              targetBc,
+            });
+            allNestedMappings.push({
+              domainType: nestedDomainType,
+              infraDtoName: `${nestedRefName}Dto`,
+              mappingFields: nestedMappingFields,
+            });
+          }
+
           operations.push({
             methodName: toCamelCase(operationId),
             feignMethodName: toCamelCase(operationId),
@@ -291,12 +409,13 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
             httpVerb: httpVerb.toUpperCase(),
             httpPath,
             pathVariables,
+            queryParams,
             hasBody: ['post', 'put', 'patch'].includes(httpVerb),
             hasResponse: true,
             hasDomainReturn,
             infraDtoName,
             domainType,
-            returnList: false,
+            returnList: isTopLevelList,
             requestDtoName,
             infraDtoFields,
             mappingFields,
@@ -331,12 +450,13 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
             httpVerb: httpVerb.toUpperCase(),
             httpPath,
             pathVariables,
+            queryParams,
             hasBody: ['post', 'put', 'patch'].includes(httpVerb),
             hasResponse: true,
             hasDomainReturn: true,
             infraDtoName,
             domainType,
-            returnList: false,
+            returnList: isTopLevelList,
             requestDtoName,
             infraDtoFields,
             mappingFields,
@@ -352,6 +472,7 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
           httpVerb: httpVerb.toUpperCase(),
           httpPath,
           pathVariables,
+          queryParams,
           hasBody: ['post', 'put', 'patch'].includes(httpVerb),
           hasResponse: false,
           hasDomainReturn: false,
@@ -367,7 +488,7 @@ function buildOperations(internalApiDoc, bcYaml, targetBc, packageName, moduleNa
     }
   }
 
-  return { operations, allInfraDtos, allDomainModels };
+  return { operations, allInfraDtos, allDomainModels, allNestedMappings };
 }
 
 // ─── FK method collector ──────────────────────────────────────────────────────
@@ -461,7 +582,7 @@ async function generateOutboundHttpAdapters(bcYaml, config, outputDir, system = 
     const baseUrlProperty = `integration.${targetBc}.base-url`;
 
     // Parse operations from the internal API
-    const { operations, allInfraDtos, allDomainModels } = buildOperations(
+    const { operations, allInfraDtos, allDomainModels, allNestedMappings } = buildOperations(
       internalApiDoc,
       bcYaml,
       targetBc,
@@ -472,8 +593,15 @@ async function generateOutboundHttpAdapters(bcYaml, config, outputDir, system = 
     // Collect FK methods
     const fkMethods = collectFkMethods(bcYaml, targetBc);
 
-    // ACL mapper VO imports
-    const { voImports, needsBigDecimal } = collectAclMapperVoImports(operations, packageName, moduleName);
+    // ACL mapper VO imports — aggregate from all domain models (top-level + nested)
+    const voImportsSet = new Set();
+    for (const dm of allDomainModels) {
+      for (const imp of (dm.voImports || [])) voImportsSet.add(imp);
+    }
+    const voImports = [...voImportsSet];
+    const needsBigDecimal =
+      operations.some((op) => op.mappingFields?.some((f) => f.expression?.includes('BigDecimal'))) ||
+      allNestedMappings.some((nm) => nm.mappingFields?.some((f) => f.expression?.includes('BigDecimal')));
 
     // Output directories
     const portsDir = path.join(bcDir, 'application', 'ports');
@@ -561,7 +689,7 @@ async function generateOutboundHttpAdapters(bcYaml, config, outputDir, system = 
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'OutboundAclMapper.java.ejs'),
       path.join(adapterDir, `${aclMapperClassName}.java`),
-      { ...templateVarsBase, voImports, needsBigDecimal }
+      { ...templateVarsBase, voImports, needsBigDecimal, nestedMappings: allNestedMappings }
     );
   }
 }

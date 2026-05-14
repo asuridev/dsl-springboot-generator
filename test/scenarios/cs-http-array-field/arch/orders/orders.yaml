@@ -1,0 +1,33 @@
+bc: orders
+version: "1.0.0"
+
+aggregates:
+  - name: Order
+    root: Order
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+
+useCases:
+  - id: get-order-details
+    name: GetOrderDetails
+    type: query
+    aggregate: Order
+    trigger:
+      kind: http
+      operationId: getOrderDetails
+    input:
+      - name: orderId
+        type: Uuid
+        source: path
+        required: true
+    returns: OrderDetailsResultDto
+    implementation: scaffold
+
+integrations:
+  inbound:
+    - operations:
+        - name: getOrderDetails

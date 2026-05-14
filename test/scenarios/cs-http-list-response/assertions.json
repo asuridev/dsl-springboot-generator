@@ -1,0 +1,52 @@
+{
+  "src/main/java/com/test/inventory/application/ports/CatalogServicePort.java": {
+    "_comment": "Port must return List<AvailableProduct> not void",
+    "contains": [
+      "List<AvailableProduct> listAvailableProducts()",
+      "import java.util.List"
+    ],
+    "notContains": [
+      "void listAvailableProducts()"
+    ]
+  },
+  "src/main/java/com/test/inventory/infrastructure/adapters/catalog/CatalogFeignClient.java": {
+    "_comment": "Feign client must return List<AvailableProductDto>",
+    "contains": [
+      "List<AvailableProductDto> listAvailableProducts()",
+      "import java.util.List"
+    ],
+    "notContains": [
+      "void listAvailableProducts()"
+    ]
+  },
+  "src/main/java/com/test/inventory/infrastructure/adapters/catalog/CatalogFeignAdapter.java": {
+    "_comment": "Adapter must stream-map the list response",
+    "contains": [
+      "List<AvailableProduct> listAvailableProducts()",
+      ".stream()",
+      ".map(aclMapper::toAvailableProduct)",
+      "Collectors.toList()"
+    ],
+    "notContains": [
+      "void listAvailableProducts()"
+    ]
+  },
+  "src/main/java/com/test/inventory/domain/models/catalog/AvailableProduct.java": {
+    "_comment": "Domain record for the list element",
+    "contains": [
+      "public record AvailableProduct("
+    ]
+  },
+  "src/main/java/com/test/inventory/infrastructure/adapters/catalog/dtos/AvailableProductDto.java": {
+    "_comment": "Infra DTO for the list element",
+    "contains": [
+      "public record AvailableProductDto("
+    ]
+  },
+  "src/main/java/com/test/inventory/infrastructure/adapters/catalog/CatalogAclMapper.java": {
+    "_comment": "ACL mapper — toAvailableProduct method",
+    "contains": [
+      "public AvailableProduct toAvailableProduct("
+    ]
+  }
+}

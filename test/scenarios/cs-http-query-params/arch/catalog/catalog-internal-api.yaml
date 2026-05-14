@@ -1,0 +1,40 @@
+openapi: "3.0.3"
+info:
+  title: Catalog Internal API
+  version: "1.0.0"
+paths:
+
+  /internal/products/search:
+    get:
+      operationId: searchProducts
+      summary: Search products with optional filters.
+      parameters:
+        - name: categoryId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: available
+          in: query
+          required: false
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: Matching product summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductSearchResult'
+
+components:
+  schemas:
+
+    ProductSearchResult:
+      type: object
+      properties:
+        totalCount:
+          type: integer
+        page:
+          type: integer

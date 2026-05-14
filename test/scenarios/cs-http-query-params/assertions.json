@@ -1,0 +1,31 @@
+{
+  "src/main/java/com/test/search/application/ports/CatalogServicePort.java": {
+    "_comment": "Port must include both query params in method signature",
+    "contains": [
+      "searchProducts(",
+      "String categoryId",
+      "boolean available"
+    ],
+    "notContains": [
+      "searchProducts()"
+    ]
+  },
+  "src/main/java/com/test/search/infrastructure/adapters/catalog/CatalogFeignClient.java": {
+    "_comment": "FeignClient must annotate query params with @RequestParam",
+    "contains": [
+      "@RequestParam(\"categoryId\") String categoryId",
+      "@RequestParam(\"available\") boolean available"
+    ],
+    "notContains": [
+      "searchProducts()"
+    ]
+  },
+  "src/main/java/com/test/search/infrastructure/adapters/catalog/CatalogFeignAdapter.java": {
+    "_comment": "Adapter must forward both query params to client",
+    "contains": [
+      "searchProducts(",
+      "categoryId",
+      "available"
+    ]
+  }
+}

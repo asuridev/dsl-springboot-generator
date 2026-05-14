@@ -1,0 +1,34 @@
+system:
+  name: test-deeply-nested-system
+  description: Test system for deeply nested $ref in response schema (MoneyDto inside ProductPriceValidationItemDto inside ProductPriceValidationResultDto).
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Handles order creation, calls catalog for price validation.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+  - name: catalog
+    type: supporting
+    purpose: Provides product price validation with nested item and money info.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+integrations:
+  - from: orders
+    to: catalog
+    pattern: customer-supplier
+    channel: http
+    contracts:
+      - validateProductPrices
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

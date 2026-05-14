@@ -1,0 +1,55 @@
+{
+  "src/main/java/com/test/billing/domain/models/orders/OrderDetailsResult.java": {
+    "_comment": "Main domain record — must have List<OrderLineItem> (not List<String> or String)",
+    "contains": [
+      "public record OrderDetailsResult(",
+      "List<OrderLineItem> lineItems",
+      "import java.util.List"
+    ],
+    "notContains": [
+      "String lineItems",
+      "List<Object>",
+      "Object lineItems"
+    ]
+  },
+  "src/main/java/com/test/billing/domain/models/orders/OrderLineItem.java": {
+    "_comment": "Nested domain record for list element — must be generated",
+    "contains": [
+      "public record OrderLineItem(",
+      "String productId",
+      "int quantity",
+      "java.math.BigDecimal unitPrice"
+    ],
+    "notContains": [
+      "class OrderLineItem"
+    ]
+  },
+  "src/main/java/com/test/billing/infrastructure/adapters/orders/dtos/OrderDetailsResultDto.java": {
+    "_comment": "Infra DTO — must have List<OrderLineItemDto>",
+    "contains": [
+      "public record OrderDetailsResultDto(",
+      "List<OrderLineItemDto> lineItems",
+      "import java.util.List"
+    ],
+    "notContains": [
+      "String lineItems",
+      "List<Object>"
+    ]
+  },
+  "src/main/java/com/test/billing/infrastructure/adapters/orders/dtos/OrderLineItemDto.java": {
+    "_comment": "Nested infra DTO for list element",
+    "contains": [
+      "public record OrderLineItemDto(",
+      "String productId",
+      "int quantity"
+    ]
+  },
+  "src/main/java/com/test/billing/infrastructure/adapters/orders/OrdersAclMapper.java": {
+    "_comment": "ACL mapper — must stream-map lineItems and have private helper for OrderLineItem",
+    "contains": [
+      "public OrderDetailsResult toOrderDetailsResult(",
+      "dto.lineItems().stream().map(this::mapToOrderLineItem)",
+      "private OrderLineItem mapToOrderLineItem(OrderLineItemDto dto)"
+    ]
+  }
+}

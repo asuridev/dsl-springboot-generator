@@ -1,0 +1,19 @@
+bc: inventory
+version: "1.0.0"
+
+aggregates:
+  - name: StockEntry
+    root: StockEntry
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+
+integrations:
+  outbound:
+    - name: catalog
+      protocol: http
+      operations:
+        - name: listAvailableProducts

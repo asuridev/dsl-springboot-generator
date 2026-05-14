@@ -1,0 +1,33 @@
+openapi: "3.0.3"
+info:
+  title: Catalog Internal API
+  version: "1.0.0"
+paths:
+
+  /internal/products/available:
+    get:
+      operationId: listAvailableProducts
+      summary: List all available products.
+      responses:
+        '200':
+          description: List of available products
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/AvailableProduct'
+
+components:
+  schemas:
+
+    AvailableProduct:
+      type: object
+      properties:
+        productId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        unitPrice:
+          type: number

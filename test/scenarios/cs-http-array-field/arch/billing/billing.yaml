@@ -1,0 +1,19 @@
+bc: billing
+version: "1.0.0"
+
+aggregates:
+  - name: Invoice
+    root: Invoice
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+
+integrations:
+  outbound:
+    - name: orders
+      protocol: http
+      operations:
+        - name: getOrderDetails

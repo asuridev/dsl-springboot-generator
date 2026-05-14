@@ -1,0 +1,49 @@
+openapi: "3.0.3"
+info:
+  title: Catalog Internal API
+  version: "1.0.0"
+paths:
+
+  /internal/orders/{orderId}/summary:
+    get:
+      operationId: getOrderSummary
+      summary: Get a summary of an order including customer info.
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Order summary
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrderSummaryResult'
+
+components:
+  schemas:
+
+    OrderSummaryResult:
+      type: object
+      properties:
+        orderId:
+          type: string
+          format: uuid
+        totalAmount:
+          type: number
+        customer:
+          $ref: '#/components/schemas/CustomerInfo'
+
+    CustomerInfo:
+      type: object
+      properties:
+        customerId:
+          type: string
+          format: uuid
+        name:
+          type: string
+        email:
+          type: string

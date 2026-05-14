@@ -1,0 +1,65 @@
+openapi: "3.0.3"
+info:
+  title: Catalog Internal API
+  version: "1.0.0"
+paths:
+
+  /internal/catalog/prices/validate:
+    post:
+      operationId: validateProductPrices
+      summary: Validate prices for a list of products and return per-item results.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ProductPriceValidationRequest'
+      responses:
+        '200':
+          description: Validation result with per-item details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPriceValidationResult'
+
+components:
+  schemas:
+
+    ProductPriceValidationRequest:
+      type: object
+      properties:
+        productIds:
+          type: array
+          items:
+            type: string
+            format: uuid
+
+    ProductPriceValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductPriceValidationItem'
+
+    ProductPriceValidationItem:
+      type: object
+      properties:
+        productId:
+          type: string
+          format: uuid
+        available:
+          type: boolean
+        unitPrice:
+          $ref: '#/components/schemas/Money'
+
+    Money:
+      type: object
+      properties:
+        amount:
+          type: string
+          description: High-precision decimal as string
+        currency:
+          type: string

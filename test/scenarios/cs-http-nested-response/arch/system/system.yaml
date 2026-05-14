@@ -1,0 +1,34 @@
+system:
+  name: test-nested-system
+  description: Test system for nested non-VO $ref in response schema.
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Handles order creation, referencing catalog for product summaries.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+  - name: catalog
+    type: supporting
+    purpose: Provides product summaries with nested customer info.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+integrations:
+  - from: orders
+    to: catalog
+    pattern: customer-supplier
+    channel: http
+    contracts:
+      - getOrderSummary
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

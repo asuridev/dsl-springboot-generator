@@ -1,0 +1,61 @@
+{
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/dtos/ProductPriceValidationResultDto.java": {
+    "_comment": "Top-level response DTO — must reference List<ProductPriceValidationItemDto>",
+    "contains": [
+      "public record ProductPriceValidationResultDto(",
+      "List<ProductPriceValidationItemDto> items",
+      "import com.test.orders.infrastructure.adapters.catalog.dtos.ProductPriceValidationItemDto",
+      "import java.util.List"
+    ],
+    "notContains": [
+      "Object items"
+    ]
+  },
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/dtos/ProductPriceValidationItemDto.java": {
+    "_comment": "First-level nested DTO — must reference MoneyDto and import it",
+    "contains": [
+      "public record ProductPriceValidationItemDto(",
+      "MoneyDto unitPrice",
+      "import com.test.orders.infrastructure.adapters.catalog.dtos.MoneyDto"
+    ],
+    "notContains": [
+      "Object unitPrice"
+    ]
+  },
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/dtos/MoneyDto.java": {
+    "_comment": "Second-level (grandchild) nested DTO — the one that was never generated before this fix",
+    "contains": [
+      "public record MoneyDto(",
+      "String amount",
+      "String currency"
+    ],
+    "notContains": [
+      "Object amount",
+      "class MoneyDto"
+    ]
+  },
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/dtos/ProductPriceValidationRequestDto.java": {
+    "_comment": "Request body DTO — should be generated for POST operation",
+    "contains": [
+      "public record ProductPriceValidationRequestDto("
+    ]
+  },
+  "src/main/java/com/test/orders/domain/models/catalog/ProductPriceValidationResult.java": {
+    "_comment": "Domain model for the top-level response",
+    "contains": [
+      "public record ProductPriceValidationResult("
+    ]
+  },
+  "src/main/java/com/test/orders/application/ports/CatalogServicePort.java": {
+    "_comment": "Port interface — must declare the POST method",
+    "contains": [
+      "validateProductPrices("
+    ]
+  },
+  "src/main/java/com/test/orders/infrastructure/adapters/catalog/CatalogFeignClient.java": {
+    "_comment": "Feign client — POST method",
+    "contains": [
+      "@PostMapping(\"/internal/catalog/prices/validate\")"
+    ]
+  }
+}

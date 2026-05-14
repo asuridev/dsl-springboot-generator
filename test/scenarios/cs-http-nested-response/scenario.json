@@ -1,0 +1,6 @@
+{
+  "description": "Gap 1: response schema with nested non-VO $ref — CustomerInfo nested inside OrderSummaryResult. Verifies nested domain model is generated and ACL mapper has a private helper method.",
+  "expectFailure": false,
+  "compileGeneratedJava": true,
+  "gradleTask": "build"
+}
