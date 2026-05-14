@@ -1,0 +1,87 @@
+bc: catalog
+version: "1.0.0"
+
+valueObjects:
+  - name: Schedule
+    description: Covers Boolean, Date, and DateTime canonical types.
+    properties:
+      - name: active
+        type: Boolean
+        required: true
+        description: Whether this schedule is currently active.
+      - name: startDate
+        type: Date
+        required: true
+        description: Calendar date on which the schedule begins.
+      - name: publishedAt
+        type: DateTime
+        description: Optional timestamp when the item was published.
+
+  - name: Dimensions
+    description: Covers Long and Duration canonical types.
+    properties:
+      - name: weightGrams
+        type: Long
+        required: true
+        description: Weight in grams (Long to accommodate large items).
+      - name: processingTime
+        type: Duration
+        description: Optional processing duration for this item.
+
+  - name: AssetRef
+    description: Covers Url and Text canonical types.
+    properties:
+      - name: downloadUrl
+        type: Url
+        required: true
+        description: Full URL to download the asset.
+      - name: notes
+        type: Text
+        description: Optional free-form notes about the asset.
+
+  - name: ContactInfo
+    description: Covers Email canonical type and EMAIL_PATTERN guard.
+    properties:
+      - name: email
+        type: Email
+        required: true
+        description: Contact email address.
+      - name: backupEmail
+        type: Email
+        description: Optional backup email address.
+
+aggregates:
+  - name: Item
+    root: Item
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+
+useCases:
+  - id: UC-001
+    name: CreateItem
+    type: command
+    aggregate: Item
+    trigger:
+      kind: http
+      operationId: createItem
+    input:
+      - name: id
+        type: Uuid
+        source: body
+        required: true
+    implementation: scaffold
+
+errors:
+  - code: ITEM_NOT_FOUND
+    httpStatus: 404
+    description: Item not found.
+
+repositories:
+  - aggregate: Item
+    methods:
+      - name: save
+        signature: "save(Item): Item"

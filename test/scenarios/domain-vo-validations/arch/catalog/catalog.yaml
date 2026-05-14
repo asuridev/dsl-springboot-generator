@@ -1,0 +1,97 @@
+bc: catalog
+version: "1.0.0"
+
+valueObjects:
+  - name: ItemCount
+    description: Covers Integer min/max and positive/negative validations.
+    properties:
+      - name: stock
+        type: Integer
+        required: true
+        validations:
+          - positiveOrZero: true
+        description: Stock quantity, must be >= 0.
+      - name: reserved
+        type: Integer
+        required: true
+        validations:
+          - min: 0
+          - max: 10000
+        description: Reserved units, must be between 0 and 10000.
+
+  - name: TraceId
+    description: Covers Long with large min value (> Integer.MAX_VALUE) — exercises L suffix fix.
+    properties:
+      - name: value
+        type: Long
+        required: true
+        validations:
+          - min: 3000000000
+        description: Trace identifier, minimum value exceeds Integer.MAX_VALUE.
+
+  - name: PriceRange
+    description: Covers multiple Decimal fields with min/max validations and multiple eqDecimal() calls.
+    properties:
+      - name: minPrice
+        type: Decimal
+        precision: 10
+        scale: 2
+        required: true
+        validations:
+          - positiveOrZero: true
+        description: Minimum price in the range, must be >= 0.
+      - name: maxPrice
+        type: Decimal
+        precision: 10
+        scale: 2
+        required: true
+        validations:
+          - positive: true
+        description: Maximum price in the range, must be > 0.
+
+  - name: ProductCode
+    description: Covers String notEmpty and minLength validations.
+    properties:
+      - name: value
+        type: String(50)
+        required: true
+        validations:
+          - notEmpty: true
+          - minLength: 3
+        description: Product code, at least 3 non-empty characters.
+
+aggregates:
+  - name: Item
+    root: Item
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+
+useCases:
+  - id: UC-001
+    name: CreateItem
+    type: command
+    aggregate: Item
+    trigger:
+      kind: http
+      operationId: createItem
+    input:
+      - name: id
+        type: Uuid
+        source: body
+        required: true
+    implementation: scaffold
+
+errors:
+  - code: ITEM_NOT_FOUND
+    httpStatus: 404
+    description: Item not found.
+
+repositories:
+  - aggregate: Item
+    methods:
+      - name: save
+        signature: "save(Item): Item"

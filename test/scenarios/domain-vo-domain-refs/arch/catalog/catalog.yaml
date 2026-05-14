@@ -1,0 +1,98 @@
+bc: catalog
+version: "1.0.0"
+
+enums:
+  - name: ItemStatus
+    description: Lifecycle state of a catalog item.
+    values:
+      - value: DRAFT
+        description: Item is being authored.
+      - value: ACTIVE
+        description: Item is published and visible.
+      - value: ARCHIVED
+        description: Item is no longer available.
+
+valueObjects:
+  - name: GeoPoint
+    description: Geographic coordinate pair.
+    properties:
+      - name: latitude
+        type: Decimal
+        precision: 9
+        scale: 6
+        required: true
+      - name: longitude
+        type: Decimal
+        precision: 9
+        scale: 6
+        required: true
+
+  - name: StorageLocation
+    description: Covers nested VO reference (GeoPoint) and bare enum type (ItemStatus).
+    properties:
+      - name: warehouseId
+        type: Uuid
+        required: true
+        description: Identifier of the warehouse.
+      - name: coordinates
+        type: GeoPoint
+        required: true
+        description: Geographic location of the storage slot.
+      - name: status
+        type: ItemStatus
+        required: true
+        description: Current status using bare enum name.
+
+  - name: TagSet
+    description: Covers List[Enum<X>] and List[VO] properties.
+    properties:
+      - name: statuses
+        type: List[Enum<ItemStatus>]
+        description: Allowed statuses for items in this tag set.
+      - name: locations
+        type: List[GeoPoint]
+        description: Geographic locations associated with the tag set.
+
+  - name: IdBundle
+    description: Covers List[Uuid] property.
+    properties:
+      - name: itemIds
+        type: List[Uuid]
+        required: true
+        description: Collection of item identifiers.
+
+aggregates:
+  - name: Item
+    root: Item
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+
+useCases:
+  - id: UC-001
+    name: CreateItem
+    type: command
+    aggregate: Item
+    trigger:
+      kind: http
+      operationId: createItem
+    input:
+      - name: id
+        type: Uuid
+        source: body
+        required: true
+    implementation: scaffold
+
+errors:
+  - code: ITEM_NOT_FOUND
+    httpStatus: 404
+    description: Item not found.
+
+repositories:
+  - aggregate: Item
+    methods:
+      - name: save
+        signature: "save(Item): Item"

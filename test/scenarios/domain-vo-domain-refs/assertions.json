@@ -1,0 +1,77 @@
+{
+  "src/main/java/com/test/catalog/domain/valueobject/GeoPoint.java": {
+    "_comment": "GeoPoint VO: two Decimal fields. eqDecimal used for both in equals(). No enum imports.",
+    "contains": [
+      "public final class GeoPoint",
+      "private final BigDecimal latitude",
+      "private final BigDecimal longitude",
+      "import java.math.BigDecimal",
+      "import java.math.RoundingMode",
+      "setScale(6, RoundingMode.UNNECESSARY)",
+      "eqDecimal(latitude, that.latitude)",
+      "eqDecimal(longitude, that.longitude)",
+      "eqDecimal("
+    ],
+    "notContains": [
+      "import com.test.catalog.domain.enums",
+      "Objects.equals(latitude",
+      "public record GeoPoint"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/valueobject/StorageLocation.java": {
+    "_comment": "StorageLocation VO: Uuid, nested GeoPoint VO (no import — same package), and bare enum ItemStatus (import from domain.enums).",
+    "contains": [
+      "public final class StorageLocation",
+      "private final UUID warehouseId",
+      "private final GeoPoint coordinates",
+      "private final ItemStatus status",
+      "import java.util.UUID",
+      "import com.test.catalog.domain.enums.ItemStatus",
+      "VO StorageLocation.warehouseId: required",
+      "VO StorageLocation.coordinates: required",
+      "VO StorageLocation.status: required",
+      "Objects.equals(warehouseId, that.warehouseId)",
+      "Objects.equals(coordinates, that.coordinates)",
+      "Objects.equals(status, that.status)"
+    ],
+    "notContains": [
+      "import com.test.catalog.domain.valueobject.GeoPoint",
+      "import com.test.catalog.domain.valueobject.StorageLocation",
+      "public record StorageLocation"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/valueobject/TagSet.java": {
+    "_comment": "TagSet VO: List[Enum<ItemStatus>] and List[GeoPoint] properties. List import, enum import. List.copyOf() assignment.",
+    "contains": [
+      "public final class TagSet",
+      "private final List<ItemStatus> statuses",
+      "private final List<GeoPoint> locations",
+      "import java.util.List",
+      "import com.test.catalog.domain.enums.ItemStatus",
+      "List.copyOf(",
+      "Objects.equals(statuses, that.statuses)",
+      "Objects.equals(locations, that.locations)"
+    ],
+    "notContains": [
+      "import com.test.catalog.domain.valueobject.GeoPoint",
+      "List.of(statuses"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/valueobject/IdBundle.java": {
+    "_comment": "IdBundle VO: List[Uuid] property. Both java.util.List and java.util.UUID imports. Single-List field — no of() factory (not a microtype).",
+    "contains": [
+      "public final class IdBundle",
+      "private final List<UUID> itemIds",
+      "import java.util.List",
+      "import java.util.UUID",
+      "List.copyOf(",
+      "Objects.equals(itemIds, that.itemIds)"
+    ],
+    "notContains": [
+      "List.of(itemIds"
+    ]
+  }
+}

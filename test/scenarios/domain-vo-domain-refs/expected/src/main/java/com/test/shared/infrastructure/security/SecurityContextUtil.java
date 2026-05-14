@@ -1,0 +1,60 @@
+package com.test.shared.infrastructure.security;
+
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.jwt.Jwt;
+
+/**
+ * Static helpers for reading authentication state in handlers.
+ *
+ * Usage is intentionally restricted to assertions about the caller's identity
+ * (claims) and authorities (roles). Anything richer should go through a
+ * dedicated port/adapter pair.
+ *
+ * derived_from: spring-security/oauth2-resource-server (JWT)
+ */
+public final class SecurityContextUtil {
+
+    private static final String ROLE_PREFIX = "ROLE_";
+
+    private SecurityContextUtil() {
+        // utility class
+    }
+
+    /**
+     * Returns the value of the named claim on the current JWT principal, or
+     * {@code null} when no authenticated request is in scope or the claim is
+     * absent. The value is always returned as a String (callers that need other
+     * shapes should parse explicitly).
+     */
+    public static String currentUserClaim(String claim) {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated()) return null;
+        Object principal = auth.getPrincipal();
+        if (principal instanceof Jwt jwt) {
+            Object value = jwt.getClaim(claim);
+            return value == null ? null : String.valueOf(value);
+        }
+        return null;
+    }
+
+    /**
+     * Returns {@code true} when the current authentication carries any of the
+     * provided role names. Role names are matched after Spring's standard
+     * {@code ROLE_} prefix is applied (callers pass bare role names).
+     */
+    public static boolean hasAnyRole(String... roles) {
+        if (roles == null || roles.length == 0) return false;
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated()) return false;
+        for (GrantedAuthority granted : auth.getAuthorities()) {
+            String authority = granted.getAuthority();
+            for (String role : roles) {
+                String expected = role.startsWith(ROLE_PREFIX) ? role : ROLE_PREFIX + role;
+                if (expected.equals(authority)) return true;
+            }
+        }
+        return false;
+    }
+}

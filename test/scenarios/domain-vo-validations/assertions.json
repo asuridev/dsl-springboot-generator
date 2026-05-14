@@ -1,0 +1,83 @@
+{
+  "src/main/java/com/test/catalog/domain/valueobject/ItemCount.java": {
+    "_comment": "ItemCount VO: Integer positiveOrZero guard (>= 0) and explicit min/max guards. No Long issues.",
+    "contains": [
+      "public final class ItemCount",
+      "private final Integer stock",
+      "private final Integer reserved",
+      "VO ItemCount.stock: required",
+      "VO ItemCount.reserved: required",
+      "stock < 0",
+      "must be >= 0",
+      "reserved < 0",
+      "reserved > 10000",
+      "must be >= 0",
+      "must be <= 10000"
+    ],
+    "notContains": [
+      "stock <= 0",
+      "0L",
+      "10000L"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/valueobject/TraceId.java": {
+    "_comment": "TraceId VO: Long with min: 3000000000 (> Integer.MAX_VALUE). BUG A fix: literal must have L suffix.",
+    "contains": [
+      "public final class TraceId",
+      "private final Long value",
+      "VO TraceId.value: required",
+      "3000000000L",
+      "must be >= 3000000000",
+      "public static TraceId of("
+    ],
+    "notContains": [
+      "value < 3000000000)",
+      "value < 3000000000 )"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/valueobject/PriceRange.java": {
+    "_comment": "PriceRange VO: two Decimal fields with validation guards. Multiple eqDecimal() calls in equals(). positiveOrZero on minPrice, positive on maxPrice.",
+    "contains": [
+      "public final class PriceRange",
+      "private final BigDecimal minPrice",
+      "private final BigDecimal maxPrice",
+      "import java.math.BigDecimal",
+      "import java.math.RoundingMode",
+      "setScale(2, RoundingMode.UNNECESSARY)",
+      "VO PriceRange.minPrice: required",
+      "VO PriceRange.maxPrice: required",
+      "minPrice.compareTo(new BigDecimal(\"0\"))",
+      "must be >= 0",
+      "maxPrice.compareTo(new BigDecimal(\"0\"))",
+      "must be > 0",
+      "eqDecimal(minPrice, that.minPrice)",
+      "eqDecimal(maxPrice, that.maxPrice)"
+    ],
+    "notContains": [
+      "Objects.equals(minPrice",
+      "Objects.equals(maxPrice"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/valueobject/ProductCode.java": {
+    "_comment": "ProductCode VO: String(50) with notEmpty and minLength validations. maxLength from String(50) also present.",
+    "contains": [
+      "public final class ProductCode",
+      "private final String value",
+      "VO ProductCode.value: required",
+      "value.length() > 50",
+      "exceeds max length 50",
+      "value.isEmpty()",
+      "must not be empty",
+      "value.length() < 3",
+      "below min length 3",
+      "public static ProductCode of("
+    ],
+    "notContains": [
+      "Objects.requireNonNull",
+      "Pattern.matches("
+    ]
+  }
+}

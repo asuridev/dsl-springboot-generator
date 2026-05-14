@@ -43,7 +43,7 @@ public final class <%= name %> {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         <%= name %> that = (<%= name %>) o;
-        return <%- fields.map(f => f.equalsExpr).join(' &&\n               ') %>;
+<% if (fields.length === 0) { %>        return true;<% } else { %>        return <%- fields.map(f => f.equalsExpr).join(' &&\n               ') %>;<% } %>
     }
 
     @Override

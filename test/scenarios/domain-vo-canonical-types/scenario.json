@@ -1,0 +1,3 @@
+{
+  "description": "Value Object generation: covers all canonical types not tested by domain-value-objects — Boolean, Date, DateTime, Duration, Url, Long, Text, Email. Verifies correct Java types, imports, and Email regex guard."
+}

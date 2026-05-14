@@ -86,7 +86,7 @@ function extractValidations(prop) {
  * Returns an array of statement strings (already indented with 8 spaces).
  */
 function buildGuards(prop, ctx) {
-  const { name, isString, isDecimal, isNumeric, isEmailType, vals, voName } = ctx;
+  const { name, isString, isDecimal, isNumeric, isLong, isEmailType, vals, voName } = ctx;
   const stmts = [];
   const errPrefix = `VO ${voName}.${name}`;
 
@@ -143,14 +143,16 @@ function buildGuards(prop, ctx) {
     if (vals.numericMin != null) {
       const op = vals.minStrict ? '<=' : '<';
       const cmp = vals.minStrict ? `> 0` : `>= ${vals.numericMin}`;
-      stmts.push(`        if (${name} != null && ${name} ${op} ${vals.numericMin}) {`);
+      const minLit = isLong ? `${vals.numericMin}L` : `${vals.numericMin}`;
+      stmts.push(`        if (${name} != null && ${name} ${op} ${minLit}) {`);
       stmts.push(`            throw new IllegalArgumentException("${errPrefix}: must be ${cmp}");`);
       stmts.push(`        }`);
     }
     if (vals.numericMax != null) {
       const op = vals.maxStrict ? '>=' : '>';
       const cmp = vals.maxStrict ? `< 0` : `<= ${vals.numericMax}`;
-      stmts.push(`        if (${name} != null && ${name} ${op} ${vals.numericMax}) {`);
+      const maxLit = isLong ? `${vals.numericMax}L` : `${vals.numericMax}`;
+      stmts.push(`        if (${name} != null && ${name} ${op} ${maxLit}) {`);
       stmts.push(`            throw new IllegalArgumentException("${errPrefix}: must be ${cmp}");`);
       stmts.push(`        }`);
     }
@@ -188,6 +190,13 @@ async function generateValueObjects(bcYaml, config, outputDir) {
   const voDir = path.join(outputDir, 'src', 'main', 'java', packagePath, bc, 'domain', 'valueobject');
 
   for (const vo of valueObjects) {
+    if (!vo.properties || vo.properties.length === 0) {
+      throw new Error(
+        `[value-object-generator] VO "${vo.name}" has no properties defined. ` +
+        `Value Objects must declare at least one property.`
+      );
+    }
+
     const imports = new Set();
     imports.add('import java.util.Objects;');
 
@@ -262,6 +271,7 @@ async function generateValueObjects(bcYaml, config, outputDir) {
         isString,
         isDecimal,
         isNumeric: isNumericPrim,
+        isLong: prop.type === 'Long',
         isEmailType,
         vals,
         voName: vo.name,

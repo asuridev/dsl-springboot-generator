@@ -1,0 +1,80 @@
+{
+  "src/main/java/com/test/catalog/domain/valueobject/Schedule.java": {
+    "_comment": "Schedule VO: Boolean, Date (LocalDate), DateTime (Instant) types. Correct imports, required null guards, optional field without guard.",
+    "contains": [
+      "public final class Schedule",
+      "private final Boolean active",
+      "private final LocalDate startDate",
+      "private final Instant publishedAt",
+      "import java.time.LocalDate",
+      "import java.time.Instant",
+      "VO Schedule.active: required",
+      "VO Schedule.startDate: required",
+      "Objects.equals(active, that.active)",
+      "Objects.equals(startDate, that.startDate)",
+      "Objects.equals(publishedAt, that.publishedAt)"
+    ],
+    "notContains": [
+      "VO Schedule.publishedAt: required",
+      "import java.math.BigDecimal",
+      "import java.util.regex.Pattern",
+      "public record Schedule"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/valueobject/Dimensions.java": {
+    "_comment": "Dimensions VO: Long and Duration types. Long import not needed (wrapper), Duration import needed.",
+    "contains": [
+      "public final class Dimensions",
+      "private final Long weightGrams",
+      "private final Duration processingTime",
+      "import java.time.Duration",
+      "VO Dimensions.weightGrams: required",
+      "Objects.equals(weightGrams, that.weightGrams)",
+      "Objects.equals(processingTime, that.processingTime)"
+    ],
+    "notContains": [
+      "import java.lang.Long",
+      "import java.math.BigDecimal",
+      "VO Dimensions.processingTime: required"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/valueobject/AssetRef.java": {
+    "_comment": "AssetRef VO: Url (URI) and Text (String) types. URI import needed, no Pattern.",
+    "contains": [
+      "public final class AssetRef",
+      "private final URI downloadUrl",
+      "private final String notes",
+      "import java.net.URI",
+      "VO AssetRef.downloadUrl: required",
+      "Objects.equals(downloadUrl, that.downloadUrl)",
+      "Objects.equals(notes, that.notes)"
+    ],
+    "notContains": [
+      "VO AssetRef.notes: required",
+      "import java.util.regex.Pattern",
+      "EMAIL_PATTERN"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/domain/valueobject/ContactInfo.java": {
+    "_comment": "ContactInfo VO: Email type. Pattern import, EMAIL_PATTERN constant, EMAIL_PATTERN.matcher() guard for both fields, no of() factory (2 fields).",
+    "contains": [
+      "public final class ContactInfo",
+      "private final String email",
+      "private final String backupEmail",
+      "import java.util.regex.Pattern",
+      "EMAIL_PATTERN",
+      "Pattern.compile(",
+      "EMAIL_PATTERN.matcher(",
+      "VO ContactInfo.email: required",
+      "invalid email format"
+    ],
+    "notContains": [
+      "VO ContactInfo.backupEmail: required",
+      "public static ContactInfo of(",
+      "Pattern.matches("
+    ]
+  }
+}

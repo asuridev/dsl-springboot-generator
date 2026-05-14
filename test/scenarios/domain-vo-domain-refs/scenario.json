@@ -1,0 +1,3 @@
+{
+  "description": "Value Object generation: covers domain reference types as VO properties — Enum<X>, bare enum name, nested VO reference, List[Enum], List[VO], List[Uuid]. Verifies import generation from domain.enums and same-package VO references."
+}

@@ -1,0 +1,18 @@
+system:
+  name: test-vo-canonical-system
+  description: Test system for canonical-type VO generation scenarios.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Exercises all non-Decimal/String canonical types in Value Objects.
+    aggregates:
+      - name: Item
+        root: Item
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc
