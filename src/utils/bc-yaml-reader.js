@@ -512,6 +512,9 @@ function validate(doc, opts = {}) {
       if (uc.type !== 'command') {
         fail(`Use case "${uc.id}" declares idempotency but type is "${uc.type}". Idempotency is only supported on commands.`);
       }
+      if (!uc.trigger || uc.trigger.kind !== 'http') {
+        fail(`Use case "${uc.id}" declares idempotency but trigger.kind is "${uc.trigger && uc.trigger.kind || 'undefined'}". Idempotency is only supported on HTTP-triggered commands.`);
+      }
     }
     // [G21] cacheable structure validation
     if (uc.cacheable != null) {

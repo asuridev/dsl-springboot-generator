@@ -1,0 +1,17 @@
+system:
+  name: test-event-trigger-system
+  description: Minimal system for testing idempotency rejection on event-triggered commands.
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Handles order state transitions triggered by domain events.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+infrastructure:
+  messaging:
+    broker: kafka

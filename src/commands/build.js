@@ -343,6 +343,14 @@ async function buildCommand(options = {}) {
       );
       process.exit(1);
     }
+    if (cacheNeeded && resolvedConfig.cacheProvider && !cacheProviderMeta) {
+      const catalogParams = await loadParameters();
+      const validIds = (catalogParams.cacheProviders || []).map((c) => c.id).join(', ');
+      logger.error(
+        `"cacheProvider" value "${resolvedConfig.cacheProvider}" is not recognised. Valid values: ${validIds}.`
+      );
+      process.exit(1);
+    }
     const dockerSpinner = ora('Generating Docker Compose and Dockerfile…').start();
     try {
       await generateDockerFiles(resolvedConfig, outputDir, { requestIdempotencyEnabled: cacheNeeded, cacheProviderMeta });

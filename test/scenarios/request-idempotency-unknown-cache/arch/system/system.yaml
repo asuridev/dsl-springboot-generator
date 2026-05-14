@@ -1,0 +1,13 @@
+system:
+  name: test-idempotency-system
+  description: Minimal system for testing unknown cacheProvider rejection.
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Handles order placement with idempotent commands.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []

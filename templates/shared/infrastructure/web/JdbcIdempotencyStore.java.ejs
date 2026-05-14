@@ -2,21 +2,17 @@ package <%= packageName %>.shared.infrastructure.web;
 
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Optional;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * Database-backed {@link IdempotencyStore} implementation. Persistence is
- * delegated to {@link IdempotencyRequestJpaRepository}; uniqueness on the
- * request key is enforced by the underlying primary-key constraint, which
- * makes {@link #saveIfAbsent} naturally atomic.
- *
- * Enabled when at least one use case declares {@code idempotency.storage:
- * database}. The bean is unconditional in the generated project — selection
- * between this and a redis-backed implementation is left to Spring profiles
- * or explicit qualifiers.
+ * Database-backed {@link IdempotencyStore} implementation using the three-state
+ * protocol (ABSENT → PENDING → COMPLETE). Persistence is delegated to
+ * {@link IdempotencyRequestJpaRepository}; the PENDING state is stored as a
+ * row with {@code responseStatus = 0}, and COMPLETE overwrites it with the
+ * actual response. Uniqueness on the request key is enforced by the
+ * primary-key constraint, making {@link #claim} naturally atomic.
  *
  * derived_from: useCases[*].idempotency.storage = database
  */
@@ -31,30 +27,57 @@ public class JdbcIdempotencyStore implements IdempotencyStore {
 
     @Override
     @Transactional(readOnly = true)
-    public Optional<StoredResponse> find(String key) {
+    public FindResult find(String key) {
         return repository.findById(key)
-            .filter(row -> row.getExpiresAt().isAfter(Instant.now()))
-            .map(row -> new StoredResponse(row.getResponseStatus(), row.getResponseBody(), row.getResponseContentType()));
+            .map(row -> {
+                if (row.getExpiresAt() != null && row.getExpiresAt().isBefore(Instant.now())) {
+                    return new FindResult(State.ABSENT, null);
+                }
+                if (row.getResponseStatus() == 0) {
+                    return new FindResult(State.PENDING, null);
+                }
+                return new FindResult(State.COMPLETE,
+                    new StoredResponse(row.getResponseStatus(), row.getResponseBody(), row.getResponseContentType()));
+            })
+            .orElse(new FindResult(State.ABSENT, null));
     }
 
     @Override
     @Transactional
-    public boolean saveIfAbsent(String key, String requestHash, StoredResponse response, Duration ttl) {
-        if (repository.existsById(key)) return false;
-        IdempotencyRequestJpa entity = IdempotencyRequestJpa.builder()
+    public boolean claim(String key, Duration ttl) {
+        IdempotencyRequestJpa pending = IdempotencyRequestJpa.builder()
             .key(key)
-            .requestHash(requestHash)
-            .responseStatus(response.status())
-            .responseBody(response.body())
-            .responseContentType(response.contentType())
+            .requestHash(null)
+            .responseStatus(0)   // sentinel: 0 = PENDING
+            .responseBody(null)
+            .responseContentType(null)
             .expiresAt(Instant.now().plus(ttl))
             .build();
         try {
-            repository.save(entity);
+            repository.save(pending);
             return true;
         } catch (DataIntegrityViolationException duplicate) {
-            // Lost the race — another caller won.
+            // Another caller claimed the slot first.
             return false;
         }
+    }
+
+    @Override
+    @Transactional
+    public void complete(String key, String requestHash, StoredResponse response, Duration ttl) {
+        repository.findById(key).ifPresent(row -> {
+            row.setRequestHash(requestHash);
+            row.setResponseStatus(response.status());
+            row.setResponseBody(response.body());
+            row.setResponseContentType(response.contentType());
+            row.setExpiresAt(Instant.now().plus(ttl));
+            repository.save(row);
+        });
+    }
+
+    @Override
+    @Transactional
+    public void release(String key) {
+        repository.deleteById(key);
     }
 }

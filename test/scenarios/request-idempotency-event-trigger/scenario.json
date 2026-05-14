@@ -1,0 +1,5 @@
+{
+  "description": "Build must abort when a command with trigger.kind: event declares an idempotency block. The @Idempotent annotation is only applicable to HTTP-triggered operations; accepting it on event-triggered commands would produce silently non-functional idempotency.",
+  "expectFailure": true,
+  "expectedErrorPattern": "Idempotency is only supported on HTTP-triggered commands"
+}

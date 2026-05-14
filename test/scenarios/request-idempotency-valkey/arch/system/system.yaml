@@ -1,0 +1,21 @@
+# ─── Test scenario: request-idempotency-valkey ────────────────────────────────
+# Covers:
+#   - cacheProvider: valkey → Valkey Docker image in docker-compose
+#   - RedisIdempotencyStore.java still generated (spring-data-redis is Valkey-compatible)
+#   - build.gradle includes spring-boot-starter-data-redis (same dep as Redis)
+#   - parameters/{env}/redis.yaml generated for all profiles (shared config key)
+# ──────────────────────────────────────────────────────────────────────────────
+
+system:
+  name: test-idempotency-valkey
+  description: Minimal system to test HTTP request idempotency with Valkey cache.
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Handles order placement with idempotent commands.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []

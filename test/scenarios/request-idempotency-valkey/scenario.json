@@ -1,0 +1,5 @@
+{
+  "description": "Request idempotency with Valkey backend (storage: cache, cacheProvider: valkey). Verifies that the same Redis-compatible shared artifacts are generated but the docker-compose references the Valkey image instead of Redis.",
+  "expectFailure": false,
+  "allowNoExpected": true
+}

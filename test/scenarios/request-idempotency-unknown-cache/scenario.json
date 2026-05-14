@@ -1,0 +1,5 @@
+{
+  "description": "Build must abort with a clear error when cacheProvider is set to an unrecognised value and a use case declares idempotency — otherwise RedisIdempotencyStore.java is generated without the spring-boot-starter-data-redis dependency, causing a Java compilation error.",
+  "expectFailure": true,
+  "expectedErrorPattern": "is not recognised"
+}

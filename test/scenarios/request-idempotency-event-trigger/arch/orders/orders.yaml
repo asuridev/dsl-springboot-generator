@@ -1,0 +1,36 @@
+bc: orders
+version: "1.0.0"
+
+aggregates:
+  - name: Order
+    root: Order
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: status
+        type: String(50)
+    domainMethods:
+      - name: markAsPaid
+        description: Mark the order as paid after receiving payment confirmation.
+
+useCases:
+  - id: UC-ORD-001
+    name: MarkOrderAsPaid
+    type: command
+    trigger:
+      kind: event
+      consumes: PaymentConfirmed
+    aggregate: Order
+    method: markAsPaid
+    input:
+      - name: paymentId
+        type: Uuid
+        source: body
+    idempotency:
+      header: Idempotency-Key
+      ttl: PT24H
+      storage: cache
+    implementation: scaffold

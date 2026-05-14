@@ -1,0 +1,36 @@
+bc: orders
+version: "1.0.0"
+
+aggregates:
+  - name: Order
+    root: Order
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: status
+        type: String(50)
+    domainMethods:
+      - name: place
+        description: Place the order
+
+useCases:
+  - id: UC-ORD-001
+    name: PlaceOrder
+    type: command
+    trigger:
+      kind: http
+      operationId: placeOrder
+    aggregate: Order
+    method: place
+    input:
+      - name: customerId
+        type: Uuid
+        source: body
+    idempotency:
+      header: Idempotency-Key
+      ttl: PT24H
+      storage: cache
+    implementation: scaffold
