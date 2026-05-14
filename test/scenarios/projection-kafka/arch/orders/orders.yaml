@@ -1,0 +1,43 @@
+bc: orders
+version: "1.0.0"
+
+aggregates:
+  - name: Order
+    root: Order
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: productId
+        type: Uuid
+
+projections:
+  - name: LocalProductView
+    description: Local read model of products maintained by catalog events via Kafka.
+    persistent: true
+    source:
+      kind: event
+      event: ProductActivated
+      from: catalog
+    keyBy: productId
+    upsertStrategy: lastWriteWins
+    properties:
+      - name: productId
+        type: Uuid
+        required: true
+      - name: productName
+        type: String
+        required: true
+      - name: price
+        type: Decimal
+        precision: 10
+        scale: 2
+        required: true
+    additionalSources:
+      - kind: event
+        event: ProductPriceChanged
+        from: catalog
+        updatesFields:
+          - price

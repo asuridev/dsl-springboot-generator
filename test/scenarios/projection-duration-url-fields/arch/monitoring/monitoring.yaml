@@ -1,0 +1,53 @@
+bc: monitoring
+version: "1.0.0"
+
+aggregates:
+  - name: ServiceCheck
+    root: ServiceCheck
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: serviceName
+        type: String(100)
+
+domainEvents:
+  published:
+    - name: ServiceCheckCompleted
+      scope: integration
+      channel: monitoring.service-check.completed
+      payload:
+        - name: serviceId
+          type: Uuid
+          source: aggregate
+          field: id
+        - name: averageLatency
+          type: Duration
+          source: aggregate
+          field: id
+        - name: dashboardUrl
+          type: Url
+          source: aggregate
+          field: id
+        - name: score
+          type: Decimal
+          source: aggregate
+          field: id
+    - name: ServiceLatencyUpdated
+      scope: integration
+      channel: monitoring.service-check.latency-updated
+      payload:
+        - name: serviceId
+          type: Uuid
+          source: aggregate
+          field: id
+        - name: averageLatency
+          type: Duration
+          source: aggregate
+          field: id
+        - name: score
+          type: Decimal
+          source: aggregate
+          field: id

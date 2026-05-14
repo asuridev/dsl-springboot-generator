@@ -1,0 +1,21 @@
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: test-vg-partial-system-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+    listener:
+      ack-mode: manual_immediate
+
+topics:
+  stock-initialized: catalog.stock-initialized
+  stock-reserved: catalog.stock-reserved
+  inventory-projection-product-stock-stock-initialized: catalog.stock-initialized
+  inventory-projection-product-stock-stock-reserved: catalog.stock-reserved
+
+

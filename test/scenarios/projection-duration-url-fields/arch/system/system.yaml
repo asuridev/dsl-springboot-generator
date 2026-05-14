@@ -1,0 +1,21 @@
+system:
+  name: test-duration-url-system
+  description: System for testing Duration and Url fields in persistent projections.
+  domainType: core
+
+boundedContexts:
+  - name: monitoring
+    type: core
+    purpose: Publishes service health events.
+    aggregates:
+      - name: ServiceCheck
+        root: ServiceCheck
+        entities: []
+
+  - name: dashboard
+    type: core
+    purpose: Maintains a local read model of service metrics from monitoring events.
+    aggregates:
+      - name: Widget
+        root: Widget
+        entities: []

@@ -1,0 +1,21 @@
+system:
+  name: test-projection-kafka-system
+  description: System for testing persistent projections with Kafka broker.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products and publishes lifecycle and pricing events.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+  - name: orders
+    type: core
+    purpose: Manages orders. Maintains a local read model of products updated from catalog events via Kafka.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []

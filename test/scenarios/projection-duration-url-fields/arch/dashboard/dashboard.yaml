@@ -1,0 +1,47 @@
+bc: dashboard
+version: "1.0.0"
+
+aggregates:
+  - name: Widget
+    root: Widget
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: title
+        type: String(100)
+
+projections:
+  - name: ServiceMetrics
+    description: Local read model of service health metrics.
+    persistent: true
+    source:
+      kind: event
+      event: ServiceCheckCompleted
+      from: monitoring
+    keyBy: serviceId
+    upsertStrategy: lastWriteWins
+    properties:
+      - name: serviceId
+        type: Uuid
+        required: true
+      - name: averageLatency
+        type: Duration
+        required: true
+      - name: dashboardUrl
+        type: Url
+        required: false
+      - name: score
+        type: Decimal
+        precision: 5
+        scale: 2
+        required: true
+    additionalSources:
+      - kind: event
+        event: ServiceLatencyUpdated
+        from: monitoring
+        updatesFields:
+          - averageLatency
+          - score

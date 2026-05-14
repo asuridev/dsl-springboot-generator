@@ -1,0 +1,49 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+
+domainEvents:
+  published:
+    - name: StockInitialized
+      scope: integration
+      channel: catalog.product.stock-initialized
+      payload:
+        - name: productId
+          type: Uuid
+          source: aggregate
+          field: id
+        - name: quantity
+          type: Integer
+          source: aggregate
+          field: id
+        - name: reservedQuantity
+          type: Integer
+          source: aggregate
+          field: id
+        - name: unitCost
+          type: Decimal
+          source: aggregate
+          field: id
+    - name: StockReserved
+      scope: integration
+      channel: catalog.product.stock-reserved
+      payload:
+        - name: productId
+          type: Uuid
+          source: aggregate
+          field: id
+        - name: reservedQuantity
+          type: Integer
+          source: aggregate
+          field: id

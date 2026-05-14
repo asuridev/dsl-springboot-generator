@@ -1,0 +1,6 @@
+openapi: "3.0.3"
+info:
+  title: Inventory API
+  version: "1.0.0"
+  description: Minimal OpenAPI for projection-version-guarded-partial scenario.
+paths: {}

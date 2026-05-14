@@ -1,0 +1,7 @@
+package com.test.shared.infrastructure.eventEnvelope;
+
+public record EventEnvelope<T>(EventMetadata metadata, T data) {
+    public static <T> EventEnvelope<T> of(String eventType, T data, String correlationId) {
+        return new EventEnvelope<>(EventMetadata.create(eventType, correlationId), data);
+    }
+}

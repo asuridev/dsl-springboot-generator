@@ -1,0 +1,21 @@
+system:
+  name: test-date-key-system
+  description: System for testing Date-typed keyBy fields in persistent projections.
+  domainType: core
+
+boundedContexts:
+  - name: calendar
+    type: core
+    purpose: Publishes daily capacity events.
+    aggregates:
+      - name: Slot
+        root: Slot
+        entities: []
+
+  - name: booking
+    type: core
+    purpose: Maintains a local read model of daily capacity keyed by date.
+    aggregates:
+      - name: Reservation
+        root: Reservation
+        entities: []

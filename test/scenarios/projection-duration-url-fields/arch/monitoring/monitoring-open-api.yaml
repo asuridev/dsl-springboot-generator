@@ -1,0 +1,6 @@
+openapi: "3.0.3"
+info:
+  title: Monitoring API
+  version: "1.0.0"
+  description: Minimal OpenAPI for projection-duration-url-fields scenario.
+paths: {}

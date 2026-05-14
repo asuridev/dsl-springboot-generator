@@ -1,0 +1,3 @@
+{
+  "description": "Bug A+B regression: persistent projection with Duration and Url type fields. Validates that java.time.Duration and java.net.URI are imported in the Kafka listener templates."
+}

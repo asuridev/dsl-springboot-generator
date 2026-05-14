@@ -1,0 +1,61 @@
+{
+  "src/main/java/com/test/dashboard/infrastructure/persistence/projections/ServiceMetricsJpa.java": {
+    "_comment": "JPA entity with Duration and URI field types.",
+    "contains": [
+      "package com.test.dashboard.infrastructure.persistence.projections",
+      "@Entity",
+      "@Table(name = \"proj_service_metrics\")",
+      "class ServiceMetricsJpa",
+      "UUID serviceId",
+      "Duration averageLatency",
+      "URI dashboardUrl",
+      "BigDecimal score",
+      "Instant lastUpdatedAt",
+      "import java.time.Duration",
+      "import java.net.URI"
+    ]
+  },
+
+  "src/main/java/com/test/dashboard/infrastructure/projectionUpdaters/ServiceMetricsProjectionUpdater.java": {
+    "_comment": "Kafka primary updater must import Duration and URI.",
+    "contains": [
+      "package com.test.dashboard.infrastructure.projectionUpdaters",
+      "class ServiceMetricsProjectionUpdater",
+      "topics = \"${topics.dashboard-projection-service-metrics-service-check-completed}\"",
+      "import java.time.Duration",
+      "import java.net.URI",
+      "import java.math.BigDecimal",
+      "setAverageLatency",
+      "setDashboardUrl",
+      "setScore"
+    ]
+  },
+
+  "src/main/java/com/test/dashboard/infrastructure/projectionUpdaters/ServiceMetricsOnServiceLatencyUpdatedProjectionUpdater.java": {
+    "_comment": "Kafka partial updater for latency/score fields must also import Duration.",
+    "contains": [
+      "class ServiceMetricsOnServiceLatencyUpdatedProjectionUpdater",
+      "topics = \"${topics.dashboard-projection-service-metrics-service-latency-updated}\"",
+      "import java.time.Duration",
+      "import java.math.BigDecimal",
+      "setAverageLatency",
+      "setScore",
+      "existing.isEmpty()"
+    ],
+    "notContains": [
+      "setDashboardUrl",
+      "orElseGet"
+    ]
+  },
+
+  "src/main/resources/db/migration/V2__projections.sql": {
+    "_comment": "Duration maps to interval, Url maps to text in PostgreSQL.",
+    "contains": [
+      "proj_service_metrics",
+      "service_id uuid NOT NULL PRIMARY KEY",
+      "average_latency interval",
+      "dashboard_url text",
+      "score numeric(5, 2)"
+    ]
+  }
+}

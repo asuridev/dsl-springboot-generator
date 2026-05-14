@@ -1,0 +1,21 @@
+system:
+  name: test-vg-partial-system
+  description: System for testing versionGuarded partial updater with Decimal version field outside updatesFields.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Publishes product stock events.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+  - name: inventory
+    type: core
+    purpose: Maintains a local read model of stock levels with version-guarded upserts.
+    aggregates:
+      - name: StockItem
+        root: StockItem
+        entities: []

@@ -1,0 +1,47 @@
+bc: inventory
+version: "1.0.0"
+
+aggregates:
+  - name: StockItem
+    root: StockItem
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: productId
+        type: Uuid
+
+projections:
+  - name: ProductStock
+    description: Local read model of product stock levels with version-guarded upserts.
+    persistent: true
+    source:
+      kind: event
+      event: StockInitialized
+      from: catalog
+    keyBy: productId
+    upsertStrategy: versionGuarded
+    eventVersionField: unitCost
+    properties:
+      - name: productId
+        type: Uuid
+        required: true
+      - name: quantity
+        type: Integer
+        required: true
+      - name: reservedQuantity
+        type: Integer
+        required: true
+      - name: unitCost
+        type: Decimal
+        precision: 10
+        scale: 4
+        required: true
+    additionalSources:
+      - kind: event
+        event: StockReserved
+        from: catalog
+        updatesFields:
+          - reservedQuantity

@@ -1,0 +1,46 @@
+{
+  "src/main/java/com/test/booking/infrastructure/persistence/projections/DailyCapacityJpa.java": {
+    "_comment": "JPA entity with Date as primary key type.",
+    "contains": [
+      "package com.test.booking.infrastructure.persistence.projections",
+      "@Entity",
+      "@Table(name = \"proj_daily_capacity\")",
+      "class DailyCapacityJpa",
+      "@Id",
+      "LocalDate date",
+      "Integer totalSlots",
+      "Integer bookedSlots",
+      "Instant lastUpdatedAt",
+      "import java.time.LocalDate"
+    ]
+  },
+
+  "src/main/java/com/test/booking/infrastructure/persistence/projections/DailyCapacityJpaRepository.java": {
+    "_comment": "Repository keyed by LocalDate.",
+    "contains": [
+      "JpaRepository<DailyCapacityJpa, LocalDate>",
+      "import java.time.LocalDate"
+    ]
+  },
+
+  "src/main/java/com/test/booking/infrastructure/projectionUpdaters/DailyCapacityProjectionUpdater.java": {
+    "_comment": "RabbitMQ listener: keyJavaType is LocalDate — must import java.time.LocalDate.",
+    "contains": [
+      "class DailyCapacityProjectionUpdater",
+      "@RabbitListener(queues = \"${queues.booking-projection-daily-capacity-slot-capacity-published}\"",
+      "import java.time.LocalDate",
+      "LocalDate key = objectMapper.convertValue",
+      "setTotalSlots",
+      "setBookedSlots"
+    ]
+  },
+
+  "src/main/resources/db/migration/V2__projections.sql": {
+    "contains": [
+      "proj_daily_capacity",
+      "date date NOT NULL PRIMARY KEY",
+      "total_slots integer",
+      "booked_slots integer"
+    ]
+  }
+}

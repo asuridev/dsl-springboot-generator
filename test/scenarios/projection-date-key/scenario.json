@@ -1,0 +1,3 @@
+{
+  "description": "Bug C regression: persistent projection where keyBy points to a Date (LocalDate) field. Validates that java.time.LocalDate is imported in listener templates even when no non-key field uses LocalDate."
+}

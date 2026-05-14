@@ -238,8 +238,10 @@ async function generateProjectionUpdaters(allBcYamls, system, config, outputDir)
           versionJavaType,
           versionFieldCap,
           needsBigDecimal: nonKeyFields.some((f) => f.javaType === 'BigDecimal') || keyJavaType === 'BigDecimal',
-          needsLocalDate: nonKeyFields.some((f) => ['LocalDate', 'LocalDateTime'].includes(f.javaType)),
+          needsLocalDate: keyJavaType === 'LocalDate' || nonKeyFields.some((f) => f.javaType === 'LocalDate'),
           needsUUID: keyJavaType === 'UUID' || nonKeyFields.some((f) => f.javaType === 'UUID'),
+          needsDuration: keyJavaType === 'Duration' || nonKeyFields.some((f) => f.javaType === 'Duration'),
+          needsURI: keyJavaType === 'URI' || nonKeyFields.some((f) => f.javaType === 'URI'),
         }
       );
 
@@ -320,9 +322,11 @@ async function generateProjectionUpdaters(allBcYamls, system, config, outputDir)
             versionField,
             versionJavaType,
             versionFieldCap,
-            needsBigDecimal: updatesFieldsData.some((f) => f.javaType === 'BigDecimal') || keyJavaType === 'BigDecimal',
-            needsLocalDate: updatesFieldsData.some((f) => ['LocalDate', 'LocalDateTime'].includes(f.javaType)),
-            needsUUID: keyJavaType === 'UUID' || updatesFieldsData.some((f) => f.javaType === 'UUID'),
+            needsBigDecimal: keyJavaType === 'BigDecimal' || updatesFieldsData.some((f) => f.javaType === 'BigDecimal') || (versionField && versionJavaType === 'BigDecimal'),
+            needsLocalDate: keyJavaType === 'LocalDate' || updatesFieldsData.some((f) => f.javaType === 'LocalDate') || (versionField && versionJavaType === 'LocalDate'),
+            needsUUID: keyJavaType === 'UUID' || updatesFieldsData.some((f) => f.javaType === 'UUID') || (versionField && versionJavaType === 'UUID'),
+            needsDuration: keyJavaType === 'Duration' || updatesFieldsData.some((f) => f.javaType === 'Duration') || (versionField && versionJavaType === 'Duration'),
+            needsURI: keyJavaType === 'URI' || updatesFieldsData.some((f) => f.javaType === 'URI') || (versionField && versionJavaType === 'URI'),
           }
         );
 

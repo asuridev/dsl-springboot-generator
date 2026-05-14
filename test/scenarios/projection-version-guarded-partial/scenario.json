@@ -1,0 +1,3 @@
+{
+  "description": "Bug D regression: versionGuarded upsertStrategy where the version field (Decimal/BigDecimal) is NOT included in the additionalSources updatesFields. Validates that java.math.BigDecimal is imported in the partial updater even when price is not in updatesFields."
+}

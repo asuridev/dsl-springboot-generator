@@ -1,0 +1,10 @@
+spring:
+  config:
+    import:
+      - "classpath:parameters/develop/db.yaml"
+      - "classpath:parameters/develop/cors.yaml"
+      - "classpath:parameters/develop/kafka.yaml"
+
+
+
+

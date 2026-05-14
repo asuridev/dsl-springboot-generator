@@ -1,0 +1,35 @@
+bc: booking
+version: "1.0.0"
+
+aggregates:
+  - name: Reservation
+    root: Reservation
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: date
+        type: Date
+
+projections:
+  - name: DailyCapacity
+    description: Local read model of daily slot capacity keyed by calendar date.
+    persistent: true
+    source:
+      kind: event
+      event: SlotCapacityPublished
+      from: calendar
+    keyBy: date
+    upsertStrategy: lastWriteWins
+    properties:
+      - name: date
+        type: Date
+        required: true
+      - name: totalSlots
+        type: Integer
+        required: true
+      - name: bookedSlots
+        type: Integer
+        required: true

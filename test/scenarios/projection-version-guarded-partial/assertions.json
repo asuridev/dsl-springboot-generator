@@ -1,0 +1,56 @@
+{
+  "src/main/java/com/test/inventory/infrastructure/persistence/projections/ProductStockJpa.java": {
+    "_comment": "JPA entity with Decimal (BigDecimal) as the version field.",
+    "contains": [
+      "package com.test.inventory.infrastructure.persistence.projections",
+      "@Entity",
+      "@Table(name = \"proj_product_stock\")",
+      "class ProductStockJpa",
+      "UUID productId",
+      "Integer quantity",
+      "Integer reservedQuantity",
+      "BigDecimal unitCost",
+      "Instant lastUpdatedAt"
+    ]
+  },
+
+  "src/main/java/com/test/inventory/infrastructure/projectionUpdaters/ProductStockProjectionUpdater.java": {
+    "_comment": "Kafka primary updater: versionGuarded with BigDecimal version field.",
+    "contains": [
+      "class ProductStockProjectionUpdater",
+      "topics = \"${topics.inventory-projection-product-stock-stock-initialized}\"",
+      "import java.math.BigDecimal",
+      "BigDecimal incomingVersion",
+      "unitCost",
+      "compareTo"
+    ]
+  },
+
+  "src/main/java/com/test/inventory/infrastructure/projectionUpdaters/ProductStockOnStockReservedProjectionUpdater.java": {
+    "_comment": "Kafka partial updater: unitCost is NOT in updatesFields but IS the version field — BigDecimal must still be imported.",
+    "contains": [
+      "class ProductStockOnStockReservedProjectionUpdater",
+      "topics = \"${topics.inventory-projection-product-stock-stock-reserved}\"",
+      "import java.math.BigDecimal",
+      "BigDecimal incomingVersion",
+      "unitCost",
+      "compareTo",
+      "setReservedQuantity",
+      "existing.isEmpty()"
+    ],
+    "notContains": [
+      "setUnitCost",
+      "orElseGet"
+    ]
+  },
+
+  "src/main/resources/db/migration/V2__projections.sql": {
+    "contains": [
+      "proj_product_stock",
+      "product_id uuid NOT NULL PRIMARY KEY",
+      "quantity integer NOT NULL",
+      "reserved_quantity integer NOT NULL",
+      "unit_cost numeric(10, 4) NOT NULL"
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+bc: calendar
+version: "1.0.0"
+
+aggregates:
+  - name: Slot
+    root: Slot
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: slotDate
+        type: Date
+
+domainEvents:
+  published:
+    - name: SlotCapacityPublished
+      scope: integration
+      channel: calendar.slot.capacity-published
+      payload:
+        - name: date
+          type: Date
+          source: aggregate
+          field: slotDate
+        - name: totalSlots
+          type: Integer
+          source: aggregate
+          field: id
+        - name: bookedSlots
+          type: Integer
+          source: aggregate
+          field: id

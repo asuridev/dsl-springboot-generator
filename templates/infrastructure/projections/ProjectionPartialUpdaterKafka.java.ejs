@@ -20,6 +20,8 @@ import java.util.Optional;
 <% if (needsBigDecimal) { %>import java.math.BigDecimal;
 <% } %><% if (needsLocalDate) { %>import java.time.LocalDate;
 <% } %><% if (needsUUID) { %>import java.util.UUID;
+<% } %><% if (needsDuration) { %>import java.time.Duration;
+<% } %><% if (needsURI) { %>import java.net.URI;
 <% } %>
 /**
  * Partial projection updater for <%- projectionName %> — handles <%- sourceEvent %>.
