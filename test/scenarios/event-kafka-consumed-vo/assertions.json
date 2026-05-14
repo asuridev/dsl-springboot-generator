@@ -1,0 +1,35 @@
+{
+  "src/main/java/com/test/billing/infrastructure/kafkaListener/OrderPlacedKafkaListener.java": {
+    "_comment": "GAP-1 fix: KafkaListener must import VO (Money) and Enum (OrderStatus) used in payload. Without the fix these types are used but never imported → compile error.",
+    "contains": [
+      "OrderPlacedKafkaListener",
+      "@KafkaListener",
+      "CreateInvoiceFromOrderCommand",
+      "import com.test.billing.domain.valueobject.Money",
+      "import com.test.billing.domain.enums.OrderStatus",
+      "Money totalAmount",
+      "OrderStatus status"
+    ],
+    "notContains": [
+      "domain.valueobject.Money totalAmount = objectMapper"
+    ]
+  },
+  "src/main/java/com/test/sales/domain/events/OrderPlacedEvent.java": {
+    "_comment": "Publisher domain event must have Money and OrderStatus fields.",
+    "contains": [
+      "OrderPlacedEvent",
+      "Money totalAmount",
+      "OrderStatus status"
+    ]
+  },
+  "src/main/java/com/test/sales/application/events/OrderPlacedIntegrationEvent.java": {
+    "_comment": "Integration event must carry Money and OrderStatus with correct imports.",
+    "contains": [
+      "OrderPlacedIntegrationEvent",
+      "import com.test.sales.domain.valueobject.Money",
+      "import com.test.sales.domain.enums.OrderStatus",
+      "Money totalAmount",
+      "OrderStatus status"
+    ]
+  }
+}

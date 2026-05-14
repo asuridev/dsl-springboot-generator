@@ -31,7 +31,36 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 <% } %><% if (needsInstant) { %>import java.time.Instant;
 <% } %><% if (needsUUID) { %>import java.util.UUID;
-<% } %>
+<% } %><%
+// GAP-1: collect imports for custom domain types (VOs, Enums, EventDtos).
+// GAP-2: collect inner-type imports for List<StandardType> fields (e.g. List<UUID>,
+//         List<Instant>) — these are not caught by the needsXxx checks above because
+//         those checks test f.javaType === 'UUID', not f.javaType === 'List<UUID>'.
+const _handledKafkaImports = new Set([
+  'java.util.List', 'java.util.Map', 'java.util.UUID',
+  'java.math.BigDecimal', 'java.time.LocalDate', 'java.time.LocalDateTime',
+  'java.time.LocalTime', 'java.time.Instant', 'java.time.Duration',
+  'java.net.URI',
+]);
+const _kafkaDomainImports = new Set();
+const _kafkaListInnerImports = new Set();
+(fields || []).forEach(f => {
+  // Custom domain type (VO, Enum, EventDto): importHint not in standard set
+  if (f.importHint && !_handledKafkaImports.has(f.importHint)) _kafkaDomainImports.add(f.importHint);
+  // List<T> inner type: innerImportHint exists when inner is a custom or standard type
+  if (f.innerImportHint) {
+    if (_handledKafkaImports.has(f.innerImportHint)) {
+      // Standard inner type (e.g. java.util.UUID for List<UUID>) — not caught by needsXxx
+      _kafkaListInnerImports.add(f.innerImportHint);
+    } else {
+      _kafkaDomainImports.add(f.innerImportHint);
+    }
+  }
+});
+%>
+<% [..._kafkaListInnerImports].sort().forEach(imp => { %>import <%= imp %>;
+<% }); %><% [..._kafkaDomainImports].sort().forEach(imp => { %>import <%= imp %>;
+<% }); %>
 /**
  * Kafka listener for topic ${topics.<%= topicKey %>}.
  * Consumes events produced by: <%= producer %>.

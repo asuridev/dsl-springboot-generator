@@ -1,0 +1,55 @@
+bc: notifications
+version: "1.0.0"
+
+aggregates:
+  - name: Notification
+    root: Notification
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: shipmentId
+        type: Uuid
+    domainMethods:
+      - name: notify
+        params:
+          - name: shipmentId
+            type: Uuid
+          - name: productIds
+            type: List[Uuid]
+          - name: checkpointTimes
+            type: List[DateTime]
+
+useCases:
+  - id: notify-shipment-dispatched
+    name: NotifyShipmentDispatched
+    type: command
+    aggregate: Notification
+    trigger:
+      kind: event
+      event: ShipmentDispatched
+    input:
+      - name: shipmentId
+        type: Uuid
+        source: body
+      - name: productIds
+        type: List[Uuid]
+        source: body
+      - name: checkpointTimes
+        type: List[DateTime]
+        source: body
+    method: notify
+
+domainEvents:
+  consumed:
+    - name: ShipmentDispatched
+      channel: warehouse.shipment.dispatched
+      payload:
+        - name: shipmentId
+          type: Uuid
+        - name: productIds
+          type: List[Uuid]
+        - name: checkpointTimes
+          type: List[DateTime]

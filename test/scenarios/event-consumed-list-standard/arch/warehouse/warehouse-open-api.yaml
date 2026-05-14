@@ -1,0 +1,6 @@
+openapi: "3.0.3"
+info:
+  title: Warehouse API
+  version: "1.0.0"
+  description: Minimal OpenAPI for event-consumed-list-standard scenario — no public endpoints.
+paths: {}

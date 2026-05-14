@@ -1,0 +1,30 @@
+system:
+  name: test-event-system
+  description: Test system for Kafka consumer with VO/Enum fields in consumed event payload.
+  domainType: core
+
+boundedContexts:
+  - name: sales
+    type: core
+    purpose: Publishes order events.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+  - name: billing
+    type: supporting
+    purpose: Reacts to order events and creates invoices.
+    aggregates:
+      - name: Invoice
+        root: Invoice
+        entities: []
+
+integrations:
+  - from: sales
+    to: billing
+    pattern: event
+    channel: message-broker
+    contracts:
+      - name: OrderPlaced
+        channel: sales.order.placed

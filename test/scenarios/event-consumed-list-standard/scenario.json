@@ -1,0 +1,4 @@
+{
+  "description": "RabbitMQ consumer with List[Uuid] and List[DateTime] fields in consumed event payload. Validates that RabbitListener imports java.util.UUID and java.time.Instant for List inner types (GAP-3 fix).",
+  "expectFailure": false
+}

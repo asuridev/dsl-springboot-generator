@@ -1,0 +1,39 @@
+{
+  "src/main/java/com/test/notifications/infrastructure/kafkaListener/ShipmentDispatchedKafkaListener.java": {
+    "_comment": "GAP-2 fix: KafkaListener must import java.util.UUID and java.time.Instant for List<UUID> and List<Instant> inner types. Without the fix the inner standard types are never imported → compile error.",
+    "contains": [
+      "ShipmentDispatchedKafkaListener",
+      "@KafkaListener",
+      "NotifyShipmentDispatchedCommand",
+      "import java.util.UUID",
+      "import java.time.Instant",
+      "import java.util.List",
+      "List<UUID> productIds",
+      "List<Instant> checkpointTimes",
+      "constructCollectionType(List.class, UUID.class)",
+      "constructCollectionType(List.class, Instant.class)"
+    ]
+  },
+  "src/main/java/com/test/warehouse/domain/events/ShipmentDispatchedEvent.java": {
+    "_comment": "Publisher domain event must have List<UUID> and List<Instant> fields with correct imports.",
+    "contains": [
+      "ShipmentDispatchedEvent",
+      "import java.util.UUID",
+      "import java.time.Instant",
+      "import java.util.List",
+      "List<UUID> productIds",
+      "List<Instant> checkpointTimes"
+    ]
+  },
+  "src/main/java/com/test/warehouse/application/events/ShipmentDispatchedIntegrationEvent.java": {
+    "_comment": "Integration event must carry List<UUID> and List<Instant> with correct imports.",
+    "contains": [
+      "ShipmentDispatchedIntegrationEvent",
+      "import java.util.UUID",
+      "import java.time.Instant",
+      "import java.util.List",
+      "List<UUID> productIds",
+      "List<Instant> checkpointTimes"
+    ]
+  }
+}

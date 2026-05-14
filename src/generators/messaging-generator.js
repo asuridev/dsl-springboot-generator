@@ -61,6 +61,38 @@ function resolvePayloadFromAsyncApi(eventName, asyncApiDoc) {
   }));
 }
 
+// ─── Filter expression validation (GAP-4) ────────────────────────────────────
+
+/**
+ * Validates that a filterExpr string has balanced parentheses.
+ * Returns true when the expression looks safe to embed in `if (!(expr))`.
+ * This is best-effort: a Java parser would be needed for full validation.
+ */
+function isFilterExprBalanced(expr) {
+  let depth = 0;
+  for (const ch of expr) {
+    if (ch === '(') depth++;
+    else if (ch === ')') { depth--; if (depth < 0) return false; }
+  }
+  return depth === 0;
+}
+
+/**
+ * Returns the filterExpr value or null after validating it.
+ * Logs a warning when the expression appears to have mismatched parentheses
+ * so the developer can catch the problem before hitting a Java compile error.
+ */
+function resolveFilterExpr(rawFilter, ucId, moduleName) {
+  if (!rawFilter) return null;
+  if (!isFilterExprBalanced(rawFilter)) {
+    logger.warn(
+      `[${moduleName}] UC "${ucId}": trigger.filter has unbalanced parentheses — ` +
+      `the generated if(!(expr)) block may not compile. Expression: ${rawFilter}`
+    );
+  }
+  return rawFilter;
+}
+
 // ─── Type helpers ─────────────────────────────────────────────────────────────
 
 /**
@@ -684,7 +716,7 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
         payload:       ev.payload,
         commandPayload,
         // [G15] optional Java boolean expression evaluated on deserialized fields.
-        filterExpr:    uc.trigger.filter || null,
+        filterExpr:    resolveFilterExpr(uc.trigger.filter, uc.id, moduleName),
       };
     }
 
@@ -739,7 +771,7 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
         queueKey,
         payload:       commandPayload,
         commandPayload,
-        filterExpr:    uc.trigger.filter || null,
+        filterExpr:    resolveFilterExpr(uc.trigger.filter, uc.id, moduleName),
       };
     }
 
@@ -755,7 +787,7 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
       payload:       [],
       commandPayload: [],
       // [G15] optional Java boolean expression evaluated on deserialized fields.
-      filterExpr:    uc.trigger.filter || null,
+      filterExpr:    resolveFilterExpr(uc.trigger.filter, uc.id, moduleName),
     };
   });
 

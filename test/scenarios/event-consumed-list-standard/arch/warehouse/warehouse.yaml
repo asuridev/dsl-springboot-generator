@@ -1,0 +1,44 @@
+bc: warehouse
+version: "1.0.0"
+
+aggregates:
+  - name: Shipment
+    root: Shipment
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+    domainMethods:
+      - name: dispatch
+        params:
+          - name: productIds
+            type: List[Uuid]
+          - name: checkpointTimes
+            type: List[DateTime]
+        emits: ShipmentDispatched
+
+useCases:
+  - id: dispatch-shipment
+    name: DispatchShipment
+    type: command
+    aggregate: Shipment
+    method: dispatch
+
+domainEvents:
+  published:
+    - name: ShipmentDispatched
+      scope: integration
+      channel: warehouse.shipment.dispatched
+      payload:
+        - name: shipmentId
+          type: Uuid
+          source: aggregate
+          field: id
+        - name: productIds
+          type: List[Uuid]
+          source: param
+        - name: checkpointTimes
+          type: List[DateTime]
+          source: param

@@ -1,0 +1,30 @@
+system:
+  name: test-event-system
+  description: Test system for Kafka consumer with List[Uuid] and List[DateTime] fields.
+  domainType: core
+
+boundedContexts:
+  - name: warehouse
+    type: core
+    purpose: Publishes shipment events.
+    aggregates:
+      - name: Shipment
+        root: Shipment
+        entities: []
+
+  - name: notifications
+    type: supporting
+    purpose: Reacts to shipment events and sends notifications.
+    aggregates:
+      - name: Notification
+        root: Notification
+        entities: []
+
+integrations:
+  - from: warehouse
+    to: notifications
+    pattern: event
+    channel: message-broker
+    contracts:
+      - name: ShipmentDispatched
+        channel: warehouse.shipment.dispatched

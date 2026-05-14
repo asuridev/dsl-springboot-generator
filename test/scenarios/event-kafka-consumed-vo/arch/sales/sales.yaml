@@ -1,0 +1,52 @@
+bc: sales
+version: "1.0.0"
+
+enums:
+  - name: OrderStatus
+    values:
+      - name: DRAFT
+      - name: CONFIRMED
+      - name: SHIPPED
+
+valueObjects:
+  - name: Money
+    properties:
+      - name: amount
+        type: Decimal
+        precision: 19
+        scale: 4
+      - name: currency
+        type: String
+
+aggregates:
+  - name: Order
+    root: Order
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: totalAmount
+        type: Money
+      - name: status
+        type: OrderStatus
+
+domainEvents:
+  published:
+    - name: OrderPlaced
+      scope: integration
+      channel: sales.order.placed
+      payload:
+        - name: orderId
+          type: Uuid
+          source: aggregate
+          field: id
+        - name: totalAmount
+          type: Money
+          source: aggregate
+          field: totalAmount
+        - name: status
+          type: OrderStatus
+          source: aggregate
+          field: status

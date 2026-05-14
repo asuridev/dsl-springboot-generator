@@ -42,12 +42,23 @@ const _handledImports = new Set([
   'java.time.LocalTime', 'java.time.Instant', 'java.io.IOException',
 ]);
 const _domainImports = new Set();
+// GAP-3: collect inner-type imports for List<StandardType> fields (e.g. List<UUID>,
+// List<Instant>). _handledImports blocks them from _domainImports, and the needsXxx
+// checks above miss them because f.javaType is 'List<UUID>' not 'UUID'.
+const _listInnerImports = new Set();
 (fields || []).forEach(f => {
   if (f.importHint && !_handledImports.has(f.importHint)) _domainImports.add(f.importHint);
-  if (f.innerImportHint && !_handledImports.has(f.innerImportHint)) _domainImports.add(f.innerImportHint);
+  if (f.innerImportHint) {
+    if (_handledImports.has(f.innerImportHint)) {
+      _listInnerImports.add(f.innerImportHint);
+    } else {
+      _domainImports.add(f.innerImportHint);
+    }
+  }
 });
 %>
-<% [..._domainImports].sort().forEach(imp => { %>import <%= imp %>;
+<% [..._listInnerImports].sort().forEach(imp => { %>import <%= imp %>;
+<% }); %><% [..._domainImports].sort().forEach(imp => { %>import <%= imp %>;
 <% }); %>
 /**
  * RabbitMQ listener for queue ${queues.<%= queueKey %>}.

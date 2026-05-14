@@ -1,0 +1,37 @@
+spring:
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    virtual-host: /
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        acknowledge-mode: manual
+        concurrency: 3
+        prefetch: 5
+        retry:
+          enabled: true
+          max-attempts: 3
+          initial-interval: 1500
+          multiplier: 2.0
+          max-interval: 30000
+          stateless: true
+
+exchanges:
+  warehouse: warehouse.events
+
+
+
+queues:
+  notifications-shipment-dispatched: notifications.shipment-dispatched
+
+
+
+routing-keys:
+  notifications-shipment-dispatched: warehouse.shipment.dispatched
+  shipment-dispatched: warehouse.shipment.dispatched
+
+

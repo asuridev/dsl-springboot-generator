@@ -1,0 +1,4 @@
+{
+  "description": "Kafka consumer with domain VO and Enum fields in consumed event payload. Validates that KafkaListener imports custom types (GAP-1 fix).",
+  "expectFailure": false
+}
