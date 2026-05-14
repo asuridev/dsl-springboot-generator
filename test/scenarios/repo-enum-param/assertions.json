@@ -1,0 +1,20 @@
+{
+  "src/main/java/com/test/catalog/domain/repository/ProductRepository.java": {
+    "_comment": "D4: domain interface must import the non-conventional enum Category (does not end in Status/Type/State)",
+    "contains": [
+      "import com.test.catalog.domain.enums.Category",
+      "List<Product> findByCategory(Category category)"
+    ],
+    "notContains": [
+      "// import com.test.catalog.domain.enums.Category"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/persistence/repositories/ProductRepositoryImpl.java": {
+    "_comment": "D4: impl must also import Category and pass it through to jpaRepository",
+    "contains": [
+      "import com.test.catalog.domain.enums.Category",
+      "findByCategory(Category category)"
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+openapi: "3.0.3"
+info:
+  title: Inventory API
+  version: "1.0.0"
+paths:
+  /items:
+    post:
+      operationId: createItem
+      summary: Create a new inventory item.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateItemRequest'
+      responses:
+        "201":
+          description: Item created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemResponseDto'
+
+components:
+  schemas:
+    CreateItemRequest:
+      type: object
+      required: [sku, quantity]
+      properties:
+        sku:
+          type: string
+        quantity:
+          type: integer
+    ItemResponseDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        sku:
+          type: string
+        quantity:
+          type: integer

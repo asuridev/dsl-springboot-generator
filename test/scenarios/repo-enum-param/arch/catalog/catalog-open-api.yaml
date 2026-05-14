@@ -1,0 +1,38 @@
+openapi: "3.0.3"
+info:
+  title: Catalog API
+  version: "1.0.0"
+paths:
+  /products:
+    get:
+      operationId: findProductsByCategory
+      summary: Find products by category.
+      parameters:
+        - name: category
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [ELECTRONICS, CLOTHING, FOOD]
+      responses:
+        "200":
+          description: List of products.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProductResponseDto'
+
+components:
+  schemas:
+    ProductResponseDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        category:
+          type: string

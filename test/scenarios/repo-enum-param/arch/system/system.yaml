@@ -1,0 +1,18 @@
+system:
+  name: test-repo-enum-param
+  description: Test system for a repository queryMethod that takes a non-conventional enum param (D4).
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

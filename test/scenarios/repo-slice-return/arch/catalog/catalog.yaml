@@ -1,0 +1,62 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+      - name: price
+        type: Decimal
+        precision: 10
+        scale: 2
+
+useCases:
+  - id: UC-CAT-001
+    name: BrowseProducts
+    type: query
+    actor: user
+    trigger:
+      kind: http
+      operationId: browseProducts
+    aggregate: Product
+    input:
+      - name: name
+        type: String(200)
+        source: query
+        required: false
+    returns: List[Product]
+    implementation: scaffold
+
+errors:
+  - code: PRODUCT_NOT_FOUND
+    httpStatus: 404
+    description: Product not found.
+    usedFor: manual
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: save
+        signature: "save(Product): Product"
+    queryMethods:
+      - name: browseProducts
+        params:
+          - name: name
+            type: String(200)
+            required: false
+            filterOn: [name]
+            operator: LIKE_CONTAINS
+        returns: Slice[Product]
+        defaultSort:
+          field: name
+          direction: ASC

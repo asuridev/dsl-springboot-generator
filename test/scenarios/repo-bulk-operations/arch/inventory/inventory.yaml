@@ -1,0 +1,54 @@
+bc: inventory
+version: "1.0.0"
+
+aggregates:
+  - name: Item
+    root: Item
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: sku
+        type: String(100)
+        required: true
+      - name: quantity
+        type: Integer
+        required: true
+
+useCases:
+  - id: UC-INV-001
+    name: CreateItem
+    type: command
+    actor: user
+    trigger:
+      kind: http
+      operationId: createItem
+    aggregate: Item
+    input:
+      - name: sku
+        type: String(100)
+        source: body
+        required: true
+      - name: quantity
+        type: Integer
+        source: body
+        required: true
+    returns: Item
+    implementation: scaffold
+
+errors:
+  - code: ITEM_NOT_FOUND
+    httpStatus: 404
+    description: Item not found.
+    usedFor: manual
+
+repositories:
+  - aggregate: Item
+    bulkOperations: true
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Item?"
+      - name: save
+        signature: "save(Item): Item"

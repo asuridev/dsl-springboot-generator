@@ -1,0 +1,36 @@
+{
+  "src/main/java/com/test/catalog/domain/repository/ProductRepository.java": {
+    "_comment": "D1: domain interface must import Slice and Product; method must declare Slice<Product> not Slice<ProductJpa>",
+    "contains": [
+      "import org.springframework.data.domain.Slice",
+      "import com.test.catalog.domain.aggregate.Product",
+      "Slice<Product> browseProducts("
+    ],
+    "notContains": [
+      "Slice<ProductJpa>"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/persistence/repositories/ProductJpaRepository.java": {
+    "_comment": "D1: JPA interface must import Slice and use ProductJpa as the generic type",
+    "contains": [
+      "import org.springframework.data.domain.Slice",
+      "Slice<ProductJpa> browseProducts("
+    ],
+    "notContains": [
+      "Slice<Product> browseProducts("
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/persistence/repositories/ProductRepositoryImpl.java": {
+    "_comment": "D1: impl must import Slice and map Slice<ProductJpa> to Slice<Product> via .map()",
+    "contains": [
+      "import org.springframework.data.domain.Slice",
+      "Slice<Product> browseProducts(",
+      ".map(mapper::toDomain)"
+    ],
+    "notContains": [
+      "stream().map(mapper::toDomain).toList()"
+    ]
+  }
+}

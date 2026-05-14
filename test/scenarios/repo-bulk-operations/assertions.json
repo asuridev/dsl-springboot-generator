@@ -1,0 +1,23 @@
+{
+  "src/main/java/com/test/inventory/domain/repository/ItemRepository.java": {
+    "_comment": "D3: bulkOperations injects findAllById(List<UUID>) — domain interface must import java.util.UUID, java.util.List, and contain all 3 bulk methods",
+    "contains": [
+      "import java.util.UUID",
+      "import java.util.List",
+      "saveAll(",
+      "findAllById(",
+      "count()"
+    ]
+  },
+
+  "src/main/java/com/test/inventory/infrastructure/persistence/repositories/ItemRepositoryImpl.java": {
+    "_comment": "D3: impl must also import UUID and bridge bulk calls to JPA",
+    "contains": [
+      "import java.util.UUID",
+      "import java.util.List",
+      "saveAll(",
+      "findAllById(",
+      "count()"
+    ]
+  }
+}

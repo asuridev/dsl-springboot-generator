@@ -1,0 +1,37 @@
+openapi: "3.0.3"
+info:
+  title: Catalog API
+  version: "1.0.0"
+paths:
+  /products/browse:
+    get:
+      operationId: browseProducts
+      summary: Browse products with cursor-style pagination (no total count).
+      parameters:
+        - name: name
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: A page of matching products.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProductResponseDto'
+
+components:
+  schemas:
+    ProductResponseDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        price:
+          type: number

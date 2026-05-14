@@ -1,0 +1,33 @@
+{
+  "src/main/java/com/test/catalog/domain/repository/ProductRepository.java": {
+    "_comment": "D2: domain interface must import java.util.stream.Stream and declare Stream<Product>",
+    "contains": [
+      "import java.util.stream.Stream",
+      "import com.test.catalog.domain.aggregate.Product",
+      "Stream<Product> exportProducts("
+    ],
+    "notContains": [
+      "Stream<ProductJpa>"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/persistence/repositories/ProductJpaRepository.java": {
+    "_comment": "D2: JPA interface must import Stream and use ProductJpa as the generic type",
+    "contains": [
+      "import java.util.stream.Stream",
+      "Stream<ProductJpa> exportProducts("
+    ],
+    "notContains": [
+      "Stream<Product> exportProducts("
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/persistence/repositories/ProductRepositoryImpl.java": {
+    "_comment": "D2: impl must import Stream and delegate to jpaRepository then map",
+    "contains": [
+      "import java.util.stream.Stream",
+      "Stream<Product> exportProducts(",
+      ".map(mapper::toDomain)"
+    ]
+  }
+}

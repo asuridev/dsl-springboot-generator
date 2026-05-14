@@ -569,8 +569,8 @@ function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
     return `DELETE FROM ${jpaEntityName} ${a} WHERE ${a}.${field} = :${paramName}`;
   }
 
-  if (returns && returns.startsWith('Page[')) {
-    // list or search
+  if (returns && (returns.startsWith('Page[') || returns.startsWith('Slice[') || returns.startsWith('Stream['))) {
+    // list or search — Slice and Stream follow identical JPQL rules to Page
     if (/^search/.test(name)) {
       return buildSearchQuery(name, jpaEntityName, aggregate);
     }
@@ -711,11 +711,25 @@ function collectRepoInterfaceImports(methods, aggregateName, bc, packageName, bc
   let hasOptional = false;
   let hasPage = false;
   let hasPageable = false;
+  let hasSlice = false;
+  let hasStream = false;
+
+  // Scalar types that may appear as inner type of Optional/List/Page/Slice/Stream
+  // and do NOT live in domain.aggregate — they need their own import.
+  const SCALAR_IMPORTS = {
+    UUID: 'java.util.UUID',
+    BigDecimal: 'java.math.BigDecimal',
+    Instant: 'java.time.Instant',
+    LocalDate: 'java.time.LocalDate',
+    URI: 'java.net.URI',
+  };
 
   for (const method of methods) {
     const rt = method.returnType;
     if (rt.startsWith('Optional<')) hasOptional = true;
     if (rt.startsWith('Page<')) { hasPage = true; hasPageable = true; }
+    if (rt.startsWith('Slice<')) { hasSlice = true; hasPageable = true; }
+    if (rt.startsWith('Stream<')) hasStream = true;
     if (rt === 'int' || rt === 'void') { /* primitive */ }
     if (rt === 'UUID') imports.add('java.util.UUID');
     if (rt === 'BigDecimal') imports.add('java.math.BigDecimal');
@@ -733,31 +747,39 @@ function collectRepoInterfaceImports(methods, aggregateName, bc, packageName, bc
       if (p.javaType === 'URI') imports.add('java.net.URI');
       // Value object param types need a domain import
       if (voNames.has(p.javaType)) imports.add(`${packageName}.${bc}.domain.valueobject.${p.javaType}`);
-      // Enum or domain types: need full import
-      if (/^[A-Z]/.test(p.javaType) && !['UUID', 'String', 'Integer', 'Long', 'Boolean', 'BigDecimal', 'Instant', 'LocalDate', 'URI', 'Pageable', 'Money'].includes(p.javaType)) {
-        // Enum type
-        if (p.javaType.endsWith('Status') || p.javaType.endsWith('Type') || p.javaType.endsWith('State')) {
-          imports.add(`${packageName}.${bc}.domain.enums.${p.javaType}`);
-        }
+      // D4: Use full enum list lookup (not just conventional name suffixes) so that
+      // enums named e.g. 'Category' or 'Priority' are imported correctly.
+      if (isEnumType(p.javaType, bcYaml)) {
+        imports.add(`${packageName}.${bc}.domain.enums.${p.javaType}`);
       }
       // List inner types
       const listMatch = p.javaType.match(/^List<(.+)>$/);
       if (listMatch) {
         const inner = listMatch[1];
-        if (inner.endsWith('Status') || inner.endsWith('Type') || inner.endsWith('State')) {
+        imports.add('java.util.List');
+        // D3: scalar types inside List<> need their own import
+        if (SCALAR_IMPORTS[inner]) {
+          imports.add(SCALAR_IMPORTS[inner]);
+        } else if (isEnumType(inner, bcYaml)) {
           imports.add(`${packageName}.${bc}.domain.enums.${inner}`);
         }
-        imports.add('java.util.List');
       }
     }
 
     // Return type imports
     if (rt.startsWith('List<')) imports.add('java.util.List');
-    const aggMatch = rt.match(/^(?:Optional|Page|List)<(.+)>$/);
+    // D1/D2: extend wrapper regex to include Slice and Stream so the inner
+    // aggregate type is imported and not mistakenly looked up in domain.aggregate
+    // when the inner type is a scalar (UUID, BigDecimal, …).
+    const aggMatch = rt.match(/^(?:Optional|Page|List|Slice|Stream)<(.+)>$/);
     if (aggMatch) {
       const inner = aggMatch[1];
-      // Aggregate domain class
-      imports.add(`${packageName}.${bc}.domain.aggregate.${inner}`);
+      if (SCALAR_IMPORTS[inner]) {
+        imports.add(SCALAR_IMPORTS[inner]);
+      } else {
+        // Aggregate domain class
+        imports.add(`${packageName}.${bc}.domain.aggregate.${inner}`);
+      }
     } else if (rt === aggregateName) {
       imports.add(`${packageName}.${bc}.domain.aggregate.${rt}`);
     }
@@ -765,6 +787,8 @@ function collectRepoInterfaceImports(methods, aggregateName, bc, packageName, bc
 
   if (hasOptional) imports.add('java.util.Optional');
   if (hasPage) imports.add('org.springframework.data.domain.Page');
+  if (hasSlice) imports.add('org.springframework.data.domain.Slice');
+  if (hasStream) imports.add('java.util.stream.Stream');
   if (hasPageable) imports.add('org.springframework.data.domain.Pageable');
 
   return [...imports].sort();
@@ -777,9 +801,13 @@ function collectJpaRepoImports(customMethods, aggregate, jpaEntityName, bc, pack
 
   let hasPage = false;
   let hasPageable = false;
+  let hasSlice = false;
+  let hasStream = false;
 
   for (const method of customMethods) {
     if (method.returnType.startsWith('Page<')) { hasPage = true; hasPageable = true; }
+    if (method.returnType.startsWith('Slice<')) { hasSlice = true; hasPageable = true; }
+    if (method.returnType.startsWith('Stream<')) hasStream = true;
     if (method.returnType.startsWith('List<')) imports.add('java.util.List');
 
     // Parse param types from paramsStr for imports
@@ -802,6 +830,8 @@ function collectJpaRepoImports(customMethods, aggregate, jpaEntityName, bc, pack
   }
 
   if (hasPage) imports.add('org.springframework.data.domain.Page');
+  if (hasSlice) imports.add('org.springframework.data.domain.Slice');
+  if (hasStream) imports.add('java.util.stream.Stream');
   if (hasPageable) imports.add('org.springframework.data.domain.Pageable');
 
   // @Modifying methods (e.g. softDelete) require extra imports
@@ -1142,7 +1172,12 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
 
   if (name === 'softDelete') {
     // softDelete(id) is implemented as a custom @Modifying @Query on the JPA repo.
-    return `jpaRepository.softDelete(${paramNames});`;
+    // D5: only emit as a void statement when the method actually returns void;
+    // if the domain port declares a non-void return, fall through to the normal
+    // Optional / aggregate dispatch below.
+    if (methodReturnType === 'void') {
+      return `jpaRepository.softDelete(${paramNames});`;
+    }
   }
 
   // R11: bulk operations. JpaRepository inherits these — we only emit the
@@ -1201,6 +1236,17 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
     return `return jpaRepository.${name}(${paramNames}).stream().map(mapper::toDomain).toList();`;
   }
 
+  // R15: Slice<T> — Spring Data's Slice.map() converts each Jpa entity to domain.
+  if (methodReturnType.startsWith('Slice<')) {
+    return `return jpaRepository.${name}(${paramNames}).map(mapper::toDomain);`;
+  }
+
+  // R15: Stream<T> — JPA streams require an open transaction; the class-level
+  // @Transactional(readOnly = true) covers read streams.
+  if (methodReturnType.startsWith('Stream<')) {
+    return `return jpaRepository.${name}(${paramNames}).map(mapper::toDomain);`;
+  }
+
   if (methodReturnType === aggregateName) {
     if (name === 'findById') {
       return `return jpaRepository.findById(${params[0]?.name || 'id'}).map(mapper::toDomain).orElse(null);`;
@@ -1224,11 +1270,15 @@ function collectImplImports(aggregateName, aggregate, methods, bc, packageName, 
   let hasOptional = false;
   let hasPage = false;
   let hasPageable = false;
+  let hasSlice = false;
+  let hasStream = false;
 
   for (const method of methods) {
     const rt = method.returnType;
     if (rt.startsWith('Optional<')) hasOptional = true;
     if (rt.startsWith('Page<')) { hasPage = true; hasPageable = true; }
+    if (rt.startsWith('Slice<')) { hasSlice = true; hasPageable = true; }
+    if (rt.startsWith('Stream<')) hasStream = true;
     if (rt.startsWith('List<')) imports.add('java.util.List');
 
     for (const p of method.params) {
@@ -1236,8 +1286,13 @@ function collectImplImports(aggregateName, aggregate, methods, bc, packageName, 
       if (p.javaType.startsWith('List<')) {
         imports.add('java.util.List');
         const inner = p.javaType.match(/^List<(.+)>$/)?.[1];
-        if (inner && isEnumType(inner, bcYaml)) {
-          imports.add(`${packageName}.${bc}.domain.enums.${inner}`);
+        if (inner) {
+          // D3: scalar types inside List<> (e.g. List<UUID>) need their own import
+          if (inner === 'UUID') imports.add('java.util.UUID');
+          else if (inner === 'BigDecimal') imports.add('java.math.BigDecimal');
+          else if (inner === 'Instant') imports.add('java.time.Instant');
+          else if (inner === 'LocalDate') imports.add('java.time.LocalDate');
+          else if (isEnumType(inner, bcYaml)) imports.add(`${packageName}.${bc}.domain.enums.${inner}`);
         }
       }
       if (isEnumType(p.javaType, bcYaml)) {
@@ -1247,10 +1302,10 @@ function collectImplImports(aggregateName, aggregate, methods, bc, packageName, 
     }
   }
 
-  // PageRequest needed when any Page<> method uses page+size Integer pagination
+  // PageRequest needed when any Page<>/Slice<> method uses page+size Integer pagination
   let hasPageRequest = false;
   for (const method of methods) {
-    if (method.returnType.startsWith('Page<')) {
+    if (method.returnType.startsWith('Page<') || method.returnType.startsWith('Slice<')) {
       const hasPageParam = method.params.some((p) => p.name === 'page');
       const hasSizeParam = method.params.some((p) => p.name === 'size');
       if (hasPageParam && hasSizeParam) hasPageRequest = true;
@@ -1259,6 +1314,8 @@ function collectImplImports(aggregateName, aggregate, methods, bc, packageName, 
 
   if (hasOptional) imports.add('java.util.Optional');
   if (hasPage) imports.add('org.springframework.data.domain.Page');
+  if (hasSlice) imports.add('org.springframework.data.domain.Slice');
+  if (hasStream) imports.add('java.util.stream.Stream');
   if (hasPageable) imports.add('org.springframework.data.domain.Pageable');
   if (hasPageRequest) imports.add('org.springframework.data.domain.PageRequest');
 
@@ -1353,7 +1410,9 @@ function buildJpaRepoInterfaceContext(aggregateName, normalizedMethods, aggregat
     let jpaReturnType = yamlReturnToJava(m.returns)
       .replace(`Optional<${aggregateName}>`, `Optional<${jpaEntityName}>`)
       .replace(`Page<${aggregateName}>`, `Page<${jpaEntityName}>`)
-      .replace(`List<${aggregateName}>`, `List<${jpaEntityName}>`);
+      .replace(`List<${aggregateName}>`, `List<${jpaEntityName}>`)
+      .replace(`Slice<${aggregateName}>`, `Slice<${jpaEntityName}>`)
+      .replace(`Stream<${aggregateName}>`, `Stream<${jpaEntityName}>`);
     if (jpaReturnType === aggregateName) {
       jpaReturnType = jpaEntityName;
     }
@@ -1500,7 +1559,7 @@ async function generateRepositories(bcYaml, config, outputDir) {
         const paramName = aggregateName.charAt(0).toLowerCase() + aggregateName.slice(1);
         normalized.params = [{ name: paramName, type: aggregateName, required: true }];
       }
-      return { ...normalized, derivedFrom: m.derivedFrom };
+      return { ...normalized, derivedFrom: m.derivedFrom, defaultSort: m.defaultSort };
     });
 
     // Soft-delete rename: when the aggregate uses softDelete, the YAML 'delete(id)'

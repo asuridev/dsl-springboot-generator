@@ -1,0 +1,37 @@
+openapi: "3.0.3"
+info:
+  title: Catalog API
+  version: "1.0.0"
+paths:
+  /products/export:
+    get:
+      operationId: exportProducts
+      summary: Export products as a stream for bulk processing.
+      parameters:
+        - name: name
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Streamed product list.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProductResponseDto'
+
+components:
+  schemas:
+    ProductResponseDto:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        price:
+          type: number
