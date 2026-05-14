@@ -1,0 +1,84 @@
+bc: catalog
+version: "1.0.0"
+
+enums:
+  - name: ProductStatus
+    description: Product lifecycle status.
+    values:
+      - value: ACTIVE
+        description: Active product.
+      - value: ARCHIVED
+        description: Archived product.
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: ownerId
+        type: Uuid
+        required: true
+      - name: name
+        type: String(100)
+        required: true
+      - name: status
+        type: ProductStatus
+        required: true
+      - name: secretNote
+        type: String(100)
+        required: false
+        hidden: true
+
+useCases:
+  - id: UC-CAT-001
+    name: ListMyProducts
+    type: query
+    actor: user
+    trigger:
+      kind: http
+      operationId: listMyProducts
+    aggregate: Product
+    input:
+      - name: ownerId
+        type: Uuid
+        source: authContext
+        required: true
+      - name: status
+        type: ProductStatus
+        source: query
+        required: false
+    returns: Page[ProductResponse]
+    pagination:
+      defaultSize: 20
+      maxSize: 100
+      sortable: [name]
+      defaultSort:
+        field: name
+        direction: ASC
+    implementation: full
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: save
+        signature: "save(Product): Product"
+    queryMethods:
+      - name: list
+        params:
+          - name: ownerId
+            type: Uuid
+            required: true
+          - name: status
+            type: ProductStatus
+            required: false
+          - name: page
+            type: PageRequest
+            required: true
+        returns: Page[Product]
+        derivedFrom: openapi:listMyProducts

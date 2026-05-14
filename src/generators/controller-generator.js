@@ -183,6 +183,10 @@ function getQueryFields(uc, agg, repoMethods, bcYaml = null) {
   const enumNames = new Set((bcYaml?.enums || []).map((e) => e.name));
 
   for (const input of (uc.input || [])) {
+    // Handler-side values from SecurityContext/JWT are not request params and
+    // are not part of the Query record constructor.
+    if (input.source === 'authContext') continue;
+
     const type = input.type;
     // [G8] Range[T] — controller will split into two @RequestParam (min/max). The Query
     // record receives the assembled Range<T>; carry inner Java type + import hint here.

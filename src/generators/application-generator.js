@@ -801,6 +801,10 @@ function buildQueryFields(uc, agg, repoMethods, bcYaml = null, packageName = nul
   const enumNames = new Set((bcYaml?.enums || []).map((e) => e.name));
 
   for (const input of (uc.input || [])) {
+    // Fields sourced from authContext are injected in the handler, not exposed
+    // in the controller request nor in the Query record.
+    if (input.source === 'authContext') continue;
+
     const type = input.type;
     const isOptional = input.required === false;
 
@@ -1350,7 +1354,7 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
 
   if (isList && !isPaged) {
     extraImports.add('java.util.List');
-    const callArgs = buildListCallArgs(methodParams, extraImports);
+    const callArgs = buildListCallArgs(methodParams, extraImports, packageName, uc);
     lines.push(
       `        List<${agg.name}> entities = ${repoFieldName}.${repoMethodName}(${callArgs});`
     );
@@ -1371,7 +1375,7 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
     );
   } else {
     // Single entity via non-loadAggregate path (findBy{Field})
-    const callArgs = buildListCallArgs(methodParams, extraImports);
+    const callArgs = buildListCallArgs(methodParams, extraImports, packageName, uc);
     if (isOptional) {
       // [G24] Optional[X]: do not throw — let the controller produce 200/404.
       extraImports.add('java.util.Optional');
@@ -1402,9 +1406,26 @@ function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, modu
   return { body: lines.join('\n'), extraImports: [...extraImports].sort() };
 }
 
-function buildListCallArgs(methodParams, imports) {
+function buildAuthContextQueryArg(param, ucInputByName, imports, packageName) {
+  const input = ucInputByName.get(param.name);
+  if (!input || input.source !== 'authContext') return null;
+  imports.add(`${packageName}.shared.infrastructure.security.SecurityContextUtil`);
+  if (param.type === 'Uuid') {
+    imports.add('java.util.UUID');
+    return `UUID.fromString(SecurityContextUtil.currentUserClaim("sub"))`;
+  }
+  return `SecurityContextUtil.currentUserClaim("sub")`;
+}
+
+function buildListCallArgs(methodParams, imports, packageName, uc = null) {
   const args = [];
+  const ucInputByName = new Map(((uc && uc.input) || []).map((i) => [i.name, i]));
   for (const param of methodParams) {
+    const authContextArg = buildAuthContextQueryArg(param, ucInputByName, imports, packageName);
+    if (authContextArg) {
+      args.push(authContextArg);
+      continue;
+    }
     if (param.type === 'Uuid') {
       imports.add('java.util.UUID');
       args.push(`UUID.fromString(query.${param.name}())`);
@@ -1424,6 +1445,11 @@ function buildPagedCallArgs(methodParams, agg, packageName, moduleName, imports,
   // [G7] When uc.pagination is declared, PageRequest is built with explicit Sort.
   const hasPagination = !!(uc && uc.pagination);
   for (const param of methodParams) {
+    const authContextArg = buildAuthContextQueryArg(param, ucInputByName, imports, packageName);
+    if (authContextArg) {
+      args.push(authContextArg);
+      continue;
+    }
     if (param.type === 'PageRequest' || param.type === 'Pageable') {
       if (hasPagination) {
         imports.add('org.springframework.data.domain.Sort');

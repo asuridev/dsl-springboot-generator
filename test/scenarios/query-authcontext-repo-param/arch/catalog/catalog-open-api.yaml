@@ -1,0 +1,25 @@
+openapi: "3.0.3"
+info:
+  title: Catalog API
+  version: "1.0.0"
+paths:
+  /products/mine:
+    get:
+      operationId: listMyProducts
+      summary: List products owned by the authenticated user.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [ACTIVE, ARCHIVED]
+      responses:
+        "200":
+          description: Page of products.
+          content:
+            application/json:
+              schema:
+                type: object
+components:
+  schemas: {}

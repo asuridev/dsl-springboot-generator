@@ -93,6 +93,7 @@ function validateProperties(properties, context, enums = []) {
  *   - Each value entry has a non-null value (or name) field (E4)
  *   - Each transition object has a non-null 'to' field (E1)
  *   - Each transition 'to' references a declared value in the same enum (E2)
+ *   - Each transition 'triggeredBy' is a string when present
  */
 function validateEnums(enums) {
   if (!Array.isArray(enums)) return;
@@ -115,6 +116,13 @@ function validateEnums(enums) {
         if (!t) continue;
         if (t.to == null) {
           fail(`Enum "${enumDef.name}" value "${from}": transition is missing the 'to' field.`);
+        }
+        if (t.triggeredBy != null && typeof t.triggeredBy !== 'string') {
+          fail(
+            `Enum "${enumDef.name}" value "${from}" transition to "${t.to}": 'triggeredBy' must be a string, ` +
+            `not ${Array.isArray(t.triggeredBy) ? 'an array' : typeof t.triggeredBy}. ` +
+            `Declare one transition entry per trigger when multiple use cases reach the same target state.`
+          );
         }
         if (!declaredValues.has(t.to)) {
           fail(
@@ -1775,6 +1783,29 @@ function validateRepositories(doc) {
           // Treat any other string as a domainRule id reference.
           if (!ruleIds.has(df)) {
             fail(`${ctx} has "derivedFrom: ${df}" but no domainRule with that id is defined. Allowed forms: "implicit", "openapi:<operationId>", or a domainRules[].id.`);
+          }
+        }
+      }
+
+      if (m._section === 'queryMethods' && m.derivedFrom != null && String(m.derivedFrom).startsWith('openapi:') && String(m.derivedFrom) !== 'openapi:') {
+        const operationId = String(m.derivedFrom).slice('openapi:'.length);
+        const uc = (doc.useCases || []).find((candidate) => (
+          candidate
+          && candidate.type === 'query'
+          && candidate.aggregate === repo.aggregate
+          && candidate.trigger
+          && candidate.trigger.kind === 'http'
+          && candidate.trigger.operationId === operationId
+        ));
+        if (uc) {
+          const inputNames = new Set((uc.input || []).map((input) => input && input.name).filter(Boolean));
+          for (const param of (m.params || [])) {
+            if (!param || !param.name) continue;
+            if (param.type === 'PageRequest' || param.type === 'Pageable') continue;
+            if (['page', 'size', 'sortBy', 'sortDirection'].includes(param.name)) continue;
+            if (!inputNames.has(param.name)) {
+              fail(`${ctx} declares param "${param.name}" but use case "${uc.id}" does not declare an input with that name. If the value comes from JWT/SecurityContext, declare it in useCases[].input with "source: authContext".`);
+            }
           }
         }
       }

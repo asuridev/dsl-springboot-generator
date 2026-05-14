@@ -1,0 +1,35 @@
+{
+  "src/main/java/com/test/catalog/application/usecases/ListMyProductsQueryHandler.java": {
+    "contains": [
+      "import com.test.shared.infrastructure.security.SecurityContextUtil",
+      "UUID.fromString(SecurityContextUtil.currentUserClaim(\"sub\"))",
+      "query.status()"
+    ],
+    "notContains": [
+      "query.ownerId()"
+    ]
+  },
+  "src/main/java/com/test/catalog/application/queries/ListMyProductsQuery.java": {
+    "notContains": [
+      "UUID ownerId",
+      "String ownerId"
+    ],
+    "contains": [
+      "ProductStatus status",
+      "int page",
+      "int size"
+    ]
+  },
+  "src/main/java/com/test/catalog/infrastructure/rest/controllers/product/v1/ProductV1Controller.java": {
+    "notContains": [
+      "SecurityContextHolder",
+      "ownerId",
+      "new ListMyProductsQuery(ownerId"
+    ]
+  },
+  "src/main/java/com/test/catalog/domain/aggregate/Product.java": {
+    "contains": [
+      "public String getSecretNote()"
+    ]
+  }
+}
