@@ -1,0 +1,72 @@
+{
+  "src/main/java/com/test/shared/application/sagas/FulfillmentSagaSteps.java": {
+    "_comment": "Saga constants with COMPENSATION field for step 1",
+    "contains": [
+      "public final class FulfillmentSagaSteps",
+      "NAME = \"FulfillmentSaga\"",
+      "TRIGGER_EVENT = \"OrderPlaced\"",
+      "TRIGGER_BC = \"orders\"",
+      "STEP_1_ORDER = 1",
+      "STEP_1_BC = \"inventory\"",
+      "STEP_1_TRIGGERED_BY = \"OrderPlaced\"",
+      "STEP_1_SUCCESS = \"StockReserved\"",
+      "STEP_1_FAILURE = \"StockReservationFailed\"",
+      "STEP_1_COMPENSATION = \"StockReleased\"",
+      "STEP_2_ORDER = 2",
+      "STEP_2_BC = \"payments\"",
+      "STEP_2_TRIGGERED_BY = \"StockReserved\"",
+      "STEP_2_SUCCESS = \"PaymentApproved\"",
+      "STEP_2_FAILURE = \"PaymentFailed\""
+    ]
+  },
+
+  "src/main/java/com/test/inventory/application/usecases/InventoryDomainEventHandler.java": {
+    "_comment": "inventory DomainEventHandler: StockReserved annotated SUCCESS, StockReservationFailed annotated FAILURE, StockReleased annotated COMPENSATION",
+    "contains": [
+      "InventoryDomainEventHandler",
+      "import com.test.shared.domain.annotations.SagaStep",
+      "role = SagaStep.Role.SUCCESS",
+      "role = SagaStep.Role.FAILURE",
+      "role = SagaStep.Role.COMPENSATION",
+      "event = \"StockReserved\"",
+      "event = \"StockReservationFailed\"",
+      "event = \"StockReleased\""
+    ]
+  },
+
+  "src/main/java/com/test/inventory/infrastructure/rabbitListener/PaymentFailedRabbitListener.java": {
+    "_comment": "inventory listener for PaymentFailed (compensation trigger). Must have @SagaStep FAILURE role from step 2",
+    "contains": [
+      "PaymentFailedRabbitListener",
+      "@SagaStep",
+      "saga = \"FulfillmentSaga\"",
+      "role = SagaStep.Role.FAILURE",
+      "order = 2",
+      "CorrelationContext.set",
+      "CorrelationContext.clear"
+    ]
+  },
+
+  "src/main/java/com/test/payments/infrastructure/rabbitListener/StockReservedRabbitListener.java": {
+    "_comment": "payments listener for StockReserved: @SagaStep SUCCESS role from step 1",
+    "contains": [
+      "StockReservedRabbitListener",
+      "@SagaStep",
+      "saga = \"FulfillmentSaga\"",
+      "role = SagaStep.Role.SUCCESS",
+      "order = 1"
+    ]
+  },
+
+  "src/main/java/com/test/payments/application/usecases/PaymentsDomainEventHandler.java": {
+    "_comment": "payments DomainEventHandler: PaymentApproved annotated SUCCESS (order=2), PaymentFailed annotated FAILURE (order=2)",
+    "contains": [
+      "PaymentsDomainEventHandler",
+      "role = SagaStep.Role.SUCCESS",
+      "role = SagaStep.Role.FAILURE",
+      "event = \"PaymentApproved\"",
+      "event = \"PaymentFailed\"",
+      "order = 2"
+    ]
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "src/main/java/com/test/shared/domain/annotations/SagaStep.java": {
+    "_comment": "SagaStep annotation generated when sagas are declared",
+    "contains": [
+      "public @interface SagaStep",
+      "String saga()",
+      "int order()",
+      "String event()",
+      "Role role()",
+      "enum Role",
+      "TRIGGER",
+      "SUCCESS",
+      "FAILURE",
+      "COMPENSATION",
+      "RetentionPolicy.RUNTIME"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/correlation/CorrelationContext.java": {
+    "_comment": "ThreadLocal + MDC correlation context",
+    "contains": [
+      "public final class CorrelationContext",
+      "MDC_KEY",
+      "correlationId",
+      "ThreadLocal",
+      "public static void set",
+      "public static String get",
+      "public static void clear"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/web/CorrelationFilter.java": {
+    "_comment": "HTTP filter that establishes correlation context for every request",
+    "contains": [
+      "public class CorrelationFilter extends OncePerRequestFilter",
+      "X-Correlation-Id",
+      "CorrelationContext.set",
+      "CorrelationContext.clear"
+    ]
+  },
+
+  "src/main/java/com/test/shared/application/sagas/CheckoutSagaSteps.java": {
+    "_comment": "Per-saga constants descriptor generated from system.yaml sagas section",
+    "contains": [
+      "public final class CheckoutSagaSteps",
+      "NAME = \"CheckoutSaga\"",
+      "TRIGGER_EVENT = \"OrderPlaced\"",
+      "TRIGGER_BC = \"orders\"",
+      "STEP_1_ORDER = 1",
+      "STEP_1_BC = \"inventory\"",
+      "STEP_1_TRIGGERED_BY = \"OrderPlaced\"",
+      "STEP_1_SUCCESS = \"StockReserved\"",
+      "STEP_1_FAILURE = \"StockReservationFailed\""
+    ]
+  },
+
+  "src/main/java/com/test/orders/application/usecases/OrdersDomainEventHandler.java": {
+    "_comment": "DomainEventHandler for orders BC. Must import SagaStep and annotate OrderPlaced handler with TRIGGER role",
+    "contains": [
+      "OrdersDomainEventHandler",
+      "import com.test.shared.domain.annotations.SagaStep",
+      "@SagaStep",
+      "saga = \"CheckoutSaga\"",
+      "role = SagaStep.Role.TRIGGER",
+      "order = 0",
+      "event = \"OrderPlaced\""
+    ]
+  },
+
+  "src/main/java/com/test/inventory/infrastructure/rabbitListener/OrderPlacedRabbitListener.java": {
+    "_comment": "RabbitMQ consumer in inventory. Must import CorrelationContext and annotate handle() with SagaStep TRIGGER",
+    "contains": [
+      "OrderPlacedRabbitListener",
+      "import com.test.shared.infrastructure.correlation.CorrelationContext",
+      "import com.test.shared.domain.annotations.SagaStep",
+      "@SagaStep",
+      "saga = \"CheckoutSaga\"",
+      "role = SagaStep.Role.TRIGGER",
+      "CorrelationContext.set",
+      "CorrelationContext.clear"
+    ]
+  }
+}

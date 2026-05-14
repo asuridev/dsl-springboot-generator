@@ -1,0 +1,33 @@
+bc: orders
+version: "1.0.0"
+
+aggregates:
+  - name: Order
+    root: Order
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: customerId
+        type: Uuid
+      - name: totalAmount
+        type: Decimal
+        precision: 10
+        scale: 2
+
+domainEvents:
+  published:
+    - name: OrderPlaced
+      scope: integration
+      channel: orders.order.placed
+      payload:
+        - name: orderId
+          type: Uuid
+          source: aggregate
+          field: id
+        - name: customerId
+          type: Uuid
+          source: aggregate
+          field: customerId

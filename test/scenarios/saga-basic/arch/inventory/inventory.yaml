@@ -1,0 +1,61 @@
+bc: inventory
+version: "1.0.0"
+
+aggregates:
+  - name: StockItem
+    root: StockItem
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: orderId
+        type: Uuid
+      - name: quantity
+        type: Integer
+    domainMethods:
+      - name: reserve
+        params:
+          - name: orderId
+            type: Uuid
+
+useCases:
+  - id: reserve-stock
+    name: ReserveStock
+    type: command
+    aggregate: StockItem
+    trigger:
+      kind: event
+      event: OrderPlaced
+    method: reserve
+
+domainEvents:
+  consumed:
+    - name: OrderPlaced
+      producer: orders
+      command: ReserveStock
+      queueKey: inventory-order-placed
+      payload:
+        - name: orderId
+          type: Uuid
+        - name: customerId
+          type: Uuid
+
+  published:
+    - name: StockReserved
+      scope: integration
+      channel: inventory.stock.reserved
+      payload:
+        - name: orderId
+          type: Uuid
+          source: aggregate
+          field: orderId
+    - name: StockReservationFailed
+      scope: integration
+      channel: inventory.stock.reservation-failed
+      payload:
+        - name: orderId
+          type: Uuid
+          source: aggregate
+          field: orderId

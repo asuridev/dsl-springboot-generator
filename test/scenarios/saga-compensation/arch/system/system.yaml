@@ -1,0 +1,72 @@
+system:
+  name: test-saga-compensation-system
+  description: Test system for saga with compensation steps.
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Manages customer orders.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+  - name: inventory
+    type: supporting
+    purpose: Manages stock. Handles reservation and compensation.
+    aggregates:
+      - name: StockItem
+        root: StockItem
+        entities: []
+
+  - name: payments
+    type: supporting
+    purpose: Handles payment processing.
+    aggregates:
+      - name: Payment
+        root: Payment
+        entities: []
+
+integrations:
+  - from: orders
+    to: inventory
+    pattern: event
+    channel: message-broker
+    contracts:
+      - name: OrderPlaced
+        channel: orders.order.placed
+
+  - from: inventory
+    to: payments
+    pattern: event
+    channel: message-broker
+    contracts:
+      - name: StockReserved
+        channel: inventory.stock.reserved
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc
+
+sagas:
+  - name: FulfillmentSaga
+    description: >
+      Coordinates stock reservation and payment. If payment fails, stock is released.
+    trigger:
+      event: OrderPlaced
+      bc: orders
+    steps:
+      - order: 1
+        bc: inventory
+        triggeredBy: OrderPlaced
+        onSuccess: StockReserved
+        onFailure: StockReservationFailed
+        compensation: StockReleased
+
+      - order: 2
+        bc: payments
+        triggeredBy: StockReserved
+        onSuccess: PaymentApproved
+        onFailure: PaymentFailed

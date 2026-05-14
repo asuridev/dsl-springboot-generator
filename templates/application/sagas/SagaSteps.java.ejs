@@ -35,13 +35,18 @@ public final class <%= sagaPascal %>Steps {
     public static final String TRIGGER_BC = "<%= trigger.bc %>";
 
     // ── Step events ─────────────────────────────────────────────────────────
-<% steps.forEach(s => { %>
-    /** Step <%= s.order %> — handled by {@code <%= s.bc %>}. */
-    public static final int STEP_<%= s.order %>_ORDER = <%= s.order %>;
-    public static final String STEP_<%= s.order %>_BC = "<%= s.bc %>";
-    public static final String STEP_<%= s.order %>_TRIGGERED_BY = "<%= s.triggeredBy %>";
-<% if (s.onSuccess) { %>    public static final String STEP_<%= s.order %>_SUCCESS = "<%= s.onSuccess %>";
-<% } %><% if (s.onFailure) { %>    public static final String STEP_<%= s.order %>_FAILURE = "<%= s.onFailure %>";
-<% } %><% if (s.compensation) { %>    public static final String STEP_<%= s.order %>_COMPENSATION = "<%= s.compensation %>";
+<% steps.forEach((s, _idx) => { %><%
+  // Defensive fallback: if order is undefined (validation should have caught this),
+  // use the 1-based array index to avoid emitting the invalid identifier `undefined`
+  // as a field name or as an integer literal in the generated Java source.
+  const _order = (s.order !== undefined && s.order !== null) ? s.order : (_idx + 1);
+%>
+    /** Step <%= _order %> — handled by {@code <%= s.bc %>}. */
+    public static final int STEP_<%= _order %>_ORDER = <%= _order %>;
+    public static final String STEP_<%= _order %>_BC = "<%= s.bc %>";
+    public static final String STEP_<%= _order %>_TRIGGERED_BY = "<%= s.triggeredBy %>";
+<% if (s.onSuccess) { %>    public static final String STEP_<%= _order %>_SUCCESS = "<%= s.onSuccess %>";
+<% } %><% if (s.onFailure) { %>    public static final String STEP_<%= _order %>_FAILURE = "<%= s.onFailure %>";
+<% } %><% if (s.compensation) { %>    public static final String STEP_<%= _order %>_COMPENSATION = "<%= s.compensation %>";
 <% } %><% }); %>
 }

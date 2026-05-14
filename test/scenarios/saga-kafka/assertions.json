@@ -1,0 +1,63 @@
+{
+  "src/main/java/com/test/shared/domain/annotations/SagaStep.java": {
+    "_comment": "SagaStep annotation must be generated for Kafka+outbox scenario too",
+    "contains": [
+      "public @interface SagaStep",
+      "enum Role",
+      "TRIGGER",
+      "SUCCESS",
+      "FAILURE",
+      "COMPENSATION"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/correlation/CorrelationContext.java": {
+    "_comment": "CorrelationContext generated when sagas declared",
+    "contains": [
+      "public final class CorrelationContext",
+      "ThreadLocal",
+      "MDC_KEY"
+    ]
+  },
+
+  "src/main/java/com/test/shared/application/sagas/PaymentSagaSteps.java": {
+    "_comment": "Per-saga constants descriptor for PaymentSaga",
+    "contains": [
+      "public final class PaymentSagaSteps",
+      "NAME = \"PaymentSaga\"",
+      "TRIGGER_EVENT = \"OrderPlaced\"",
+      "TRIGGER_BC = \"orders\"",
+      "STEP_1_ORDER = 1",
+      "STEP_1_BC = \"payments\"",
+      "STEP_1_SUCCESS = \"PaymentApproved\"",
+      "STEP_1_FAILURE = \"PaymentFailed\""
+    ]
+  },
+
+  "src/main/java/com/test/orders/application/usecases/OrdersDomainEventHandler.java": {
+    "_comment": "Outbox-mode DomainEventHandler for orders BC. @SagaStep with TRIGGER role on OrderPlaced handler",
+    "contains": [
+      "OrdersDomainEventHandler",
+      "import com.test.shared.domain.annotations.SagaStep",
+      "@SagaStep",
+      "saga = \"PaymentSaga\"",
+      "role = SagaStep.Role.TRIGGER",
+      "order = 0",
+      "@EventListener"
+    ]
+  },
+
+  "src/main/java/com/test/payments/infrastructure/kafkaListener/OrderPlacedKafkaListener.java": {
+    "_comment": "Kafka consumer in payments. Must have @SagaStep TRIGGER + CorrelationContext import",
+    "contains": [
+      "OrderPlacedKafkaListener",
+      "import com.test.shared.infrastructure.correlation.CorrelationContext",
+      "import com.test.shared.domain.annotations.SagaStep",
+      "@SagaStep",
+      "saga = \"PaymentSaga\"",
+      "role = SagaStep.Role.TRIGGER",
+      "CorrelationContext.set",
+      "CorrelationContext.clear"
+    ]
+  }
+}

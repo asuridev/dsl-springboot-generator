@@ -1,0 +1,51 @@
+system:
+  name: test-saga-kafka-system
+  description: Test system for choreographed saga with Kafka broker and outbox.
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Manages customer orders and publishes lifecycle events.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+  - name: payments
+    type: supporting
+    purpose: Handles payment processing. Reacts to order events.
+    aggregates:
+      - name: Payment
+        root: Payment
+        entities: []
+
+integrations:
+  - from: orders
+    to: payments
+    pattern: event
+    channel: message-broker
+    contracts:
+      - name: OrderPlaced
+        channel: orders.order.placed
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc
+  reliability:
+    outbox: true
+
+sagas:
+  - name: PaymentSaga
+    description: >
+      Coordinates payment processing after an order is placed.
+    trigger:
+      event: OrderPlaced
+      bc: orders
+    steps:
+      - order: 1
+        bc: payments
+        triggeredBy: OrderPlaced
+        onSuccess: PaymentApproved
+        onFailure: PaymentFailed

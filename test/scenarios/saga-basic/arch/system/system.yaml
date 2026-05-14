@@ -1,0 +1,49 @@
+system:
+  name: test-saga-system
+  description: Test system for choreographed saga with RabbitMQ.
+  domainType: core
+
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Manages customer orders and publishes lifecycle events.
+    aggregates:
+      - name: Order
+        root: Order
+        entities: []
+
+  - name: inventory
+    type: supporting
+    purpose: Manages stock. Reacts to order events and publishes stock events.
+    aggregates:
+      - name: StockItem
+        root: StockItem
+        entities: []
+
+integrations:
+  - from: orders
+    to: inventory
+    pattern: event
+    channel: message-broker
+    contracts:
+      - name: OrderPlaced
+        channel: orders.order.placed
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc
+
+sagas:
+  - name: CheckoutSaga
+    description: >
+      Coordinates stock reservation after an order is placed.
+    trigger:
+      event: OrderPlaced
+      bc: orders
+    steps:
+      - order: 1
+        bc: inventory
+        triggeredBy: OrderPlaced
+        onSuccess: StockReserved
+        onFailure: StockReservationFailed

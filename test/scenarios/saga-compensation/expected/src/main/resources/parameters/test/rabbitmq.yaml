@@ -1,0 +1,48 @@
+spring:
+  rabbitmq:
+    host: localhost
+    port: 5672
+    username: guest
+    password: guest
+    virtual-host: /
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    listener:
+      simple:
+        acknowledge-mode: manual
+        concurrency: 1
+        prefetch: 1
+        retry:
+          enabled: true
+          max-attempts: 2
+          initial-interval: 500
+          multiplier: 1.0
+          max-interval: 1000
+          stateless: true
+
+exchanges:
+  inventory: inventory.events
+  orders: orders.events
+  payments: payments.events
+
+
+
+queues:
+  inventory-order-placed: inventory.order-placed
+  inventory-payment-failed: inventory.payment-failed
+  payments-stock-reserved: payments.stock-reserved
+
+
+
+routing-keys:
+  stock-reserved: inventory.stock.reserved
+  stock-reservation-failed: inventory.stock.reservation-failed
+  stock-released: inventory.stock.released
+  inventory-order-placed: order.placed
+  inventory-payment-failed: payment.failed
+  order-placed: orders.order.placed
+  payment-approved: payments.payment.approved
+  payment-failed: payments.payment.failed
+  payments-stock-reserved: stock.reserved
+
+

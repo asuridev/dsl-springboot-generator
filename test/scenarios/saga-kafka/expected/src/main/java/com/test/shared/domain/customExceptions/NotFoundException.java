@@ -1,0 +1,28 @@
+package com.test.shared.domain.customExceptions;
+
+import java.util.List;
+
+public class NotFoundException extends DomainException {
+
+    protected NotFoundException() {}
+
+    public NotFoundException(String message) {
+        super(message);
+    }
+
+    public NotFoundException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
+    public NotFoundException(String message, String code, Object[] args) {
+        super(message, code, args);
+    }
+
+    public NotFoundException(String message, String code, Integer httpStatus, Object[] args) {
+        super(message, code, httpStatus, args);
+    }
+
+    public NotFoundException(String message, String code, Integer httpStatus, Object[] args, List<String> details) {
+        super(message, code, httpStatus, args, details);
+    }
+}

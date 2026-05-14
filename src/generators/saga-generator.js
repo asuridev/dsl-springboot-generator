@@ -29,6 +29,91 @@ async function renderAndWrite(templatePath, outPath, ctx) {
   await fs.writeFile(outPath, out, 'utf-8');
 }
 
+// ─── Input sanitisation helpers ───────────────────────────────────────────────
+
+/**
+ * Escapes characters that would break a Java string literal (backslash, double-
+ * quote) or introduce unexpected line breaks inside a single-line annotation
+ * attribute or constant value.
+ *
+ * Safe to apply to saga names, event names, and BC names before embedding
+ * them in `"<value>"` Java string contexts.
+ */
+function escapeJavaString(value) {
+  if (typeof value !== 'string') return String(value === undefined ? '' : value);
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\r?\n/g, '\\n');
+}
+
+/**
+ * Sanitises a Javadoc description so it cannot prematurely close the surrounding
+ * /** ... *​/ comment block.  Replaces every occurrence of `*​/` with `* /`.
+ */
+function sanitizeJavadoc(text) {
+  if (!text) return '';
+  return text.replace(/\*\//g, '* /');
+}
+
+// ─── Pre-generation validation ────────────────────────────────────────────────
+
+/**
+ * Validates the sagas list before any file is written.
+ * Throws a descriptive Error on the first detected problem so the user can fix
+ * system.yaml before the generator attempts to produce broken Java code.
+ *
+ * Checks:
+ *   1. Every step must declare a numeric integer `order` field.
+ *   2. `order` values must be unique within a single saga.
+ *   3. `compensation` must be a plain string (not an object).
+ *
+ * @param {object[]} list — normalised sagas array (guaranteed non-empty by caller)
+ */
+function validateSagaList(list) {
+  for (const saga of list) {
+    if (!saga || !saga.name) continue;
+    const steps = saga.steps || [];
+    const seenOrders = new Set();
+
+    steps.forEach((step, idx) => {
+      const pos = `saga "${saga.name}" step[${idx}]`;
+
+      // Check 1 — order must be present and an integer
+      if (step.order === undefined || step.order === null) {
+        throw new Error(
+          `[saga-generator] ${pos}: el campo "order" es requerido pero no está definido. ` +
+            `Agrega "order: ${idx + 1}" al paso en system.yaml.`
+        );
+      }
+      if (typeof step.order !== 'number' || !Number.isInteger(step.order)) {
+        throw new Error(
+          `[saga-generator] ${pos}: el campo "order" debe ser un entero, ` +
+            `recibido: ${JSON.stringify(step.order)}.`
+        );
+      }
+
+      // Check 2 — order must be unique inside the same saga
+      if (seenOrders.has(step.order)) {
+        throw new Error(
+          `[saga-generator] ${pos}: el valor "order: ${step.order}" está duplicado ` +
+            `en la saga "${saga.name}". Cada paso debe tener un "order" único.`
+        );
+      }
+      seenOrders.add(step.order);
+
+      // Check 3 — compensation, when present, must be a plain string
+      if (step.compensation !== undefined && typeof step.compensation !== 'string') {
+        throw new Error(
+          `[saga-generator] ${pos}: el campo "compensation" debe ser un string ` +
+            `PascalCase (nombre del evento de compensación), no un objeto. ` +
+            `Recibido: ${JSON.stringify(step.compensation)}. Ver references/saga-pattern-reference.md §10.4.`
+        );
+      }
+    });
+  }
+}
+
 /**
  * @param {object[]} sagas      — system.sagas (may be empty/undefined)
  * @param {object} config       — { packageName }
@@ -40,6 +125,9 @@ async function generateSagaArtifacts(sagas, config, outputDir) {
   if (list.length === 0) {
     return { count: 0, sagas: [] };
   }
+
+  // Fail-fast: detect structural problems before writing any file (BUG-1, BUG-2, BUG-5)
+  validateSagaList(list);
 
   const packageName = config.packageName;
   const javaRoot = path.join(
@@ -82,16 +170,34 @@ async function generateSagaArtifacts(sagas, config, outputDir) {
   for (const saga of list) {
     if (!saga || !saga.name) continue;
     const sagaPascal = toPascalCase(saga.name);
+
+    // Sanitise string values that will be embedded in Java string literals
+    // to prevent broken literals from special characters (BUG-4).
+    const rawTrigger = saga.trigger || {};
+    const safeTrigger = {
+      event: escapeJavaString(rawTrigger.event || 'Unknown'),
+      bc: escapeJavaString(rawTrigger.bc || 'unknown'),
+    };
+    const safeSteps = (saga.steps || []).map((s) => ({
+      order: s.order,
+      bc: escapeJavaString(s.bc || ''),
+      triggeredBy: escapeJavaString(s.triggeredBy || ''),
+      onSuccess: s.onSuccess ? escapeJavaString(s.onSuccess) : undefined,
+      onFailure: s.onFailure ? escapeJavaString(s.onFailure) : undefined,
+      compensation: s.compensation ? escapeJavaString(s.compensation) : undefined,
+    }));
+
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'application', 'sagas', 'SagaSteps.java.ejs'),
       path.join(sagasDir, `${sagaPascal}Steps.java`),
       {
         packageName,
-        sagaName: saga.name,
+        sagaName: escapeJavaString(saga.name),
         sagaPascal,
-        description: (saga.description || '').trim(),
-        trigger: saga.trigger || { event: 'Unknown', bc: 'unknown' },
-        steps: saga.steps || [],
+        // BUG-3: sanitise description to prevent premature Javadoc comment close
+        description: sanitizeJavadoc((saga.description || '').trim()),
+        trigger: safeTrigger,
+        steps: safeSteps,
       }
     );
   }

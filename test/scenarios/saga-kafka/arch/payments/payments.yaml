@@ -1,0 +1,63 @@
+bc: payments
+version: "1.0.0"
+
+aggregates:
+  - name: Payment
+    root: Payment
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: orderId
+        type: Uuid
+      - name: amount
+        type: Decimal
+        precision: 10
+        scale: 2
+    domainMethods:
+      - name: process
+        params:
+          - name: orderId
+            type: Uuid
+
+useCases:
+  - id: process-payment
+    name: ProcessPayment
+    type: command
+    aggregate: Payment
+    trigger:
+      kind: event
+      event: OrderPlaced
+    method: process
+
+domainEvents:
+  consumed:
+    - name: OrderPlaced
+      producer: orders
+      command: ProcessPayment
+      topicKey: payments-order-placed
+      payload:
+        - name: orderId
+          type: Uuid
+        - name: customerId
+          type: Uuid
+
+  published:
+    - name: PaymentApproved
+      scope: integration
+      channel: payments.payment.approved
+      payload:
+        - name: orderId
+          type: Uuid
+          source: aggregate
+          field: orderId
+    - name: PaymentFailed
+      scope: integration
+      channel: payments.payment.failed
+      payload:
+        - name: orderId
+          type: Uuid
+          source: aggregate
+          field: orderId

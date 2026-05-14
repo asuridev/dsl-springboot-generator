@@ -1,0 +1,48 @@
+package com.test.shared.infrastructure.correlation;
+
+import org.slf4j.MDC;
+
+/**
+ * Thread-local saga / correlation context.
+ *
+ * derived_from: system.yaml#/sagas
+ *
+ * Listeners call {@link #set(String)} as soon as a message is dequeued so that
+ *   - the value is available via {@link #get()} during command dispatch, and
+ *   - any domain event subsequently published inherits the same correlation id
+ *     (the {@code DomainEventHandler} reads it via {@code MDC.get("correlationId")}).
+ *
+ * Always pair {@link #set} with {@link #clear()} in a {@code finally} block
+ * to avoid leaking state across pooled threads.
+ */
+public final class CorrelationContext {
+
+    /** MDC key used by the application logger and by {@code DomainEventHandler}. */
+    public static final String MDC_KEY = "correlationId";
+
+    private static final ThreadLocal<String> CURRENT = new ThreadLocal<>();
+
+    private CorrelationContext() {
+        // utility class
+    }
+
+    /** Sets the correlation id for the current thread (and MDC). No-op if {@code null} / blank. */
+    public static void set(String correlationId) {
+        if (correlationId == null || correlationId.isBlank()) {
+            return;
+        }
+        CURRENT.set(correlationId);
+        MDC.put(MDC_KEY, correlationId);
+    }
+
+    /** @return the correlation id bound to the current thread, or {@code null} if none. */
+    public static String get() {
+        return CURRENT.get();
+    }
+
+    /** Clears thread-local + MDC. Must be called from a {@code finally} block. */
+    public static void clear() {
+        CURRENT.remove();
+        MDC.remove(MDC_KEY);
+    }
+}
