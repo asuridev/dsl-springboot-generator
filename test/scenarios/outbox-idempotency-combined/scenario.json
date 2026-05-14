@@ -1,0 +1,6 @@
+{
+  "description": "outbox: true + consumerIdempotency: true simultaneously. Validates that V1__reliability.sql emits BOTH outbox_event and processed_event tables, OutboxRelay (Kafka) is generated, and IdempotencyGuard is wired into the consumer KafkaListener.",
+  "expectFailure": false,
+  "compileGeneratedJava": true,
+  "gradleTask": "build"
+}

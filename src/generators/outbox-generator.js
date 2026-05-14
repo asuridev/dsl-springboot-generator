@@ -59,6 +59,11 @@ async function generateOutboxArtifacts(system, config, outputDir) {
       { packageName, purgeEnabled, retentionDays }
     );
 
+    if (!config.broker) {
+      throw new Error(
+        'outbox: true requires a broker to be configured (kafka or rabbitmq) in dsl-springboot.json'
+      );
+    }
     const relayTemplate = config.broker === 'kafka'
       ? 'OutboxRelayKafka.java.ejs'
       : 'OutboxRelayRabbit.java.ejs';

@@ -1,0 +1,6 @@
+{
+  "description": "outbox: true + broker: rabbitmq must emit OutboxRelayRabbit (RabbitTemplate, exchanges, routing-keys). Validates that the RabbitMQ relay template compiles and that DomainEventHandler uses exchanges/routing-keys injection — not topics.",
+  "expectFailure": false,
+  "compileGeneratedJava": true,
+  "gradleTask": "build"
+}

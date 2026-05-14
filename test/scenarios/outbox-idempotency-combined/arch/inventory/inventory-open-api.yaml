@@ -1,0 +1,6 @@
+openapi: "3.0.3"
+info:
+  title: Inventory API
+  version: "1.0.0"
+  description: Minimal public OpenAPI for outbox-idempotency-combined test scenario — no public endpoints.
+paths: {}

@@ -1,0 +1,76 @@
+{
+  "src/main/resources/db/migration/V1__reliability.sql": {
+    "_comment": "Both flags enabled: migration must emit BOTH outbox_event AND processed_event tables.",
+    "contains": [
+      "outbox_event",
+      "processed_event",
+      "CREATE TABLE IF NOT EXISTS outbox_event",
+      "CREATE TABLE IF NOT EXISTS processed_event"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/outbox/OutboxRelay.java": {
+    "_comment": "outbox: true + broker: kafka → Kafka relay variant. No purge (no outboxRetentionDays).",
+    "contains": [
+      "KafkaTemplate",
+      "OutboxEventJpaRepository"
+    ],
+    "notContains": [
+      "RabbitTemplate",
+      "purge",
+      "deletePublishedBefore",
+      "ChronoUnit"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/idempotency/IdempotencyGuard.java": {
+    "_comment": "consumerIdempotency: true → IdempotencyGuard must be generated. No purge (no processedEventRetentionDays).",
+    "contains": [
+      "IdempotencyGuard",
+      "tryRecord",
+      "ProcessedEventJpaRepository",
+      "DataIntegrityViolationException"
+    ],
+    "notContains": [
+      "purge",
+      "deleteProcessedBefore",
+      "ChronoUnit"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/idempotency/ProcessedEventJpa.java": {
+    "_comment": "ProcessedEventJpa must be generated with composite PK.",
+    "contains": [
+      "ProcessedEventJpa",
+      "@Entity",
+      "processed_event",
+      "ProcessedEventId",
+      "@EmbeddedId"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/usecases/CatalogDomainEventHandler.java": {
+    "_comment": "outbox enabled: DomainEventHandler must use @EventListener and OutboxEventJpaRepository.",
+    "contains": [
+      "OutboxEventJpaRepository",
+      "OutboxEventJpa",
+      "@EventListener",
+      "topics.product-activated"
+    ],
+    "notContains": [
+      "exchanges.",
+      "routing-keys."
+    ]
+  },
+
+  "src/main/java/com/test/inventory/infrastructure/kafkaListener/ProductActivatedKafkaListener.java": {
+    "_comment": "consumerIdempotency: true → KafkaListener must inject and call IdempotencyGuard.tryRecord.",
+    "contains": [
+      "ProductActivatedKafkaListener",
+      "@KafkaListener",
+      "IdempotencyGuard",
+      "tryRecord",
+      "RegisterProductInCatalogCommand"
+    ]
+  }
+}

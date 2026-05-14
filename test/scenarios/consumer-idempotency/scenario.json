@@ -1,4 +1,6 @@
 {
   "description": "consumerIdempotency: true WITHOUT processedEventRetentionDays must NOT emit purge() in IdempotencyGuard nor deleteProcessedBefore() in ProcessedEventJpaRepository.",
-  "expectFailure": false
+  "expectFailure": false,
+  "compileGeneratedJava": true,
+  "gradleTask": "build"
 }

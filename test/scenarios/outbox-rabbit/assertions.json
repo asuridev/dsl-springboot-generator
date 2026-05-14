@@ -1,0 +1,66 @@
+{
+  "src/main/java/com/test/catalog/application/usecases/CatalogDomainEventHandler.java": {
+    "_comment": "outbox+rabbitmq: DomainEventHandler must use exchanges/routing-keys injection (not topics). Must use OutboxEventJpaRepository (outbox branch active).",
+    "contains": [
+      "CatalogDomainEventHandler",
+      "OutboxEventJpaRepository",
+      "OutboxEventJpa",
+      "@EventListener",
+      "exchanges.catalog",
+      "routing-keys.product-activated",
+      "exchange",
+      "productActivatedRoutingKey"
+    ],
+    "notContains": [
+      "topics.",
+      "KafkaTemplate"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/outbox/OutboxRelay.java": {
+    "_comment": "OutboxRelay must be the RabbitMQ variant. Without outboxRetentionDays no purge should be generated.",
+    "contains": [
+      "RabbitTemplate",
+      "OutboxEventJpaRepository",
+      "MessageBuilder",
+      "MessageProperties"
+    ],
+    "notContains": [
+      "KafkaTemplate",
+      "purge",
+      "deletePublishedBefore",
+      "ChronoUnit"
+    ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/outbox/OutboxEventJpaRepository.java": {
+    "_comment": "Without outboxRetentionDays no purge method should be present.",
+    "contains": [
+      "findPending",
+      "OutboxEventJpa"
+    ],
+    "notContains": [
+      "deletePublishedBefore",
+      "@Modifying"
+    ]
+  },
+
+  "src/main/resources/db/migration/V1__reliability.sql": {
+    "_comment": "Only outbox_event table — consumerIdempotency is false.",
+    "contains": [
+      "outbox_event"
+    ],
+    "notContains": [
+      "processed_event"
+    ]
+  },
+
+  "src/main/java/com/test/inventory/infrastructure/rabbitListener/ProductActivatedRabbitListener.java": {
+    "_comment": "RabbitMQ consumer in inventory.",
+    "contains": [
+      "ProductActivatedRabbitListener",
+      "@RabbitListener",
+      "RegisterProductInCatalogCommand"
+    ]
+  }
+}
