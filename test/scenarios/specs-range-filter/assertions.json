@@ -1,0 +1,42 @@
+{
+  "src/main/java/com/test/catalog/infrastructure/persistence/specs/ProductSpecs.java": {
+    "_comment": "[G8] Specs class is generated when a query UC declares Range[T] input",
+    "contains": [
+      "package com.test.catalog.infrastructure.persistence.specs",
+      "import org.springframework.data.jpa.domain.Specification",
+      "import com.test.catalog.infrastructure.persistence.entities.ProductJpa",
+      "import com.test.shared.application.dtos.Range",
+      "import java.math.BigDecimal",
+      "public final class ProductSpecs",
+      "public static Specification<ProductJpa> byPriceRange(Range<BigDecimal> range)",
+      "derived_from: useCases[UC-CAT-010]",
+      "derived_from: useCases input \"priceRange\""
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/persistence/repositories/ProductJpaRepository.java": {
+    "_comment": "[G8] JPA repository must extend JpaSpecificationExecutor when aggregate has Range/SearchText query inputs",
+    "contains": [
+      "import org.springframework.data.jpa.repository.JpaSpecificationExecutor",
+      "extends JpaRepository<ProductJpa, UUID>, JpaSpecificationExecutor<ProductJpa>"
+    ],
+    "notContains": [
+      "extends JpaRepository<ProductJpa, UUID> {"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/usecases/SearchProductsByPriceRangeQueryHandler.java": {
+    "_comment": "Handler body is scaffolded (Range-based queries require Phase 3 Specification composition)",
+    "contains": [
+      "UnsupportedOperationException"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/queries/SearchProductsByPriceRangeQuery.java": {
+    "_comment": "Query record carries Range<BigDecimal> field",
+    "contains": [
+      "import com.test.shared.application.dtos.Range",
+      "Range<BigDecimal> priceRange"
+    ]
+  }
+}

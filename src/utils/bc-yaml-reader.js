@@ -1816,6 +1816,14 @@ function validateRepositories(doc) {
     // loadAggregate may also be declared on an individual input field
     const hasLoadAggregateOnInput = Array.isArray(uc.input) && uc.input.some((f) => f.loadAggregate === true);
     if (hasLoadAggregateOnInput) continue;
+    // [G8] Path C: Specification-based queries — any Range[T] or SearchText input
+    // signals that the handler composes Specification builders (JpaSpecificationExecutor)
+    // rather than a custom queryMethod. No queryMethods entry is required.
+    const SPECS_FILTER_RE = /^Range\[.+\]$/;
+    const hasSpecsInput = Array.isArray(uc.input) && uc.input.some(
+      (f) => SPECS_FILTER_RE.test(f.type) || f.type === 'SearchText'
+    );
+    if (hasSpecsInput) continue;
     const aggName = uc.aggregate;
     if (!aggName) continue;
     if (!aggregateNames.has(aggName)) continue; // covered elsewhere

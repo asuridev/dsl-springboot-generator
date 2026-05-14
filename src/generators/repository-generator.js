@@ -28,6 +28,20 @@ function isVoType(type, bcYaml) {
   return (bcYaml.valueObjects || []).some((vo) => vo.name === type);
 }
 
+// [G8] Returns true when any query UC targeting this aggregate declares a
+// Range[T] or SearchText input — meaning the JPA repository must extend
+// JpaSpecificationExecutor to expose findAll(Specification, Pageable).
+const SPECS_FILTER_RE = /^Range\[.+\]$/;
+function aggregateHasSpecsFilter(aggregateName, bcYaml) {
+  for (const uc of bcYaml.useCases || []) {
+    if (uc.type !== 'query' || uc.aggregate !== aggregateName) continue;
+    for (const inp of uc.input || []) {
+      if (SPECS_FILTER_RE.test(inp.type) || inp.type === 'SearchText') return true;
+    }
+  }
+  return false;
+}
+
 function getVoInnerProp(type, bcYaml) {
   const voDef = (bcYaml.valueObjects || []).find((vo) => vo.name === type);
   if (voDef && (voDef.properties || []).length === 1) return voDef.properties[0].name;
@@ -1479,8 +1493,11 @@ function buildJpaRepoInterfaceContext(aggregateName, normalizedMethods, aggregat
     });
   }
 
-  const imports = collectJpaRepoImports(customMethods, aggregate, jpaEntityName, bc, packageName, bcYaml);
-  return { packageName, bc, aggregateName, jpaEntityName, customMethods, imports };
+  const hasSpecs = aggregateHasSpecsFilter(aggregateName, bcYaml);
+  const rawImports = collectJpaRepoImports(customMethods, aggregate, jpaEntityName, bc, packageName, bcYaml);
+  const importsSet = new Set(rawImports);
+  if (hasSpecs) importsSet.add('org.springframework.data.jpa.repository.JpaSpecificationExecutor');
+  return { packageName, bc, aggregateName, jpaEntityName, customMethods, imports: [...importsSet].sort(), hasSpecs };
 }
 
 function buildRepoImplContext(aggregateName, normalizedMethods, aggregate, bc, packageName, bcYaml, hasDomainEvents) {

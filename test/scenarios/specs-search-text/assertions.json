@@ -1,0 +1,45 @@
+{
+  "src/main/java/com/test/catalog/infrastructure/persistence/specs/ProductSpecs.java": {
+    "_comment": "[G8] Specs class generated when a query UC declares SearchText input with fields[]",
+    "contains": [
+      "package com.test.catalog.infrastructure.persistence.specs",
+      "import org.springframework.data.jpa.domain.Specification",
+      "import com.test.catalog.infrastructure.persistence.entities.ProductJpa",
+      "public final class ProductSpecs",
+      "public static Specification<ProductJpa> bySearchText(String text)",
+      "cb.like(cb.lower(root.get(\"name\")), like)",
+      "cb.like(cb.lower(root.get(\"description\")), like)",
+      "cb.like(cb.lower(root.get(\"sku\")), like)",
+      "derived_from: useCases[UC-CAT-010]",
+      "derived_from: useCases input \"searchText\""
+    ],
+    "notContains": [
+      "import com.test.shared.application.dtos.Range"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/persistence/repositories/ProductJpaRepository.java": {
+    "_comment": "[G8] JPA repository must extend JpaSpecificationExecutor when aggregate has SearchText query inputs",
+    "contains": [
+      "import org.springframework.data.jpa.repository.JpaSpecificationExecutor",
+      "extends JpaRepository<ProductJpa, UUID>, JpaSpecificationExecutor<ProductJpa>"
+    ],
+    "notContains": [
+      "extends JpaRepository<ProductJpa, UUID> {"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/usecases/SearchProductsQueryHandler.java": {
+    "_comment": "Handler body is scaffolded (SearchText queries require Phase 3 Specification composition)",
+    "contains": [
+      "UnsupportedOperationException"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/queries/SearchProductsQuery.java": {
+    "_comment": "Query record carries String field for SearchText",
+    "contains": [
+      "String searchText"
+    ]
+  }
+}

@@ -1441,6 +1441,9 @@ function buildPagedCallArgs(methodParams, agg, packageName, moduleName, imports,
       );
     } else if (param.type === 'String' || /^String\(/.test(param.type)) {
       args.push(`query.${param.name}()`);
+    } else if (/^Range</.test(param.type)) {
+      // [G8] Range<T> repo param — pass directly from the query record.
+      args.push(`query.${param.name}()`);
     } else {
       // Enum<X> or bare enum type
       const enumMatch = /^Enum<(.+)>$/.exec(param.type);

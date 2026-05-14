@@ -14,7 +14,7 @@ import java.util.UUID;
  * Inherited from JpaRepository: findById, findAll, save, delete, count, etc.
  */
 @Repository
-public interface <%- aggregateName %>JpaRepository extends JpaRepository<<%- jpaEntityName %>, UUID> {
+public interface <%- aggregateName %>JpaRepository extends JpaRepository<<%- jpaEntityName %>, UUID><% if (hasSpecs) { %>, JpaSpecificationExecutor<<%- jpaEntityName %>><% } %> {
 <% customMethods.forEach(method => { %>
 <% if (method.derivedFrom && method.derivedFrom !== 'implicit') { %>    // derived_from: <%- method.derivedFrom %>
 <% } %><% if (method.modifying) { %>    @Modifying

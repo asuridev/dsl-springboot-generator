@@ -168,7 +168,13 @@ function validateUseCaseInputs(bcName, uc, operationEntry) {
     if (!input || !input.source) continue;
     const source = String(input.source);
     if (PARAMETER_SOURCES.has(source)) {
-      if (!hasParameter(parameters, input.name, source)) {
+      // [G8] Range[T] inputs map to two OpenAPI parameters ({name}Min + {name}Max).
+      // Accept if at least one of the pair is declared in the spec.
+      const isRange = /^Range\[.+\]$/.test(input.type);
+      const present = isRange
+        ? (hasParameter(parameters, `${input.name}Min`, source) || hasParameter(parameters, `${input.name}Max`, source))
+        : hasParameter(parameters, input.name, source);
+      if (!present) {
         diagnostics.push({
           code: 'HTTP-003',
           level: 'error',

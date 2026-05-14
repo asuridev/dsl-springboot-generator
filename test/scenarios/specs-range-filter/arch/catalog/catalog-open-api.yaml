@@ -1,0 +1,78 @@
+openapi: "3.0.3"
+info:
+  title: Catalog API
+  version: "1.0.0"
+  description: Product catalog with range-filter queries.
+
+paths:
+  /products:
+    get:
+      operationId: searchProductsByPriceRange
+      summary: Search products filtered by price range
+      tags:
+        - Products
+      parameters:
+        - name: priceRangeMin
+          in: query
+          required: false
+          schema:
+            type: number
+        - name: priceRangeMax
+          in: query
+          required: false
+          schema:
+            type: number
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: size
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: sortBy
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: sortDirection
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Products page returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+
+components:
+  schemas:
+    ProductResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        price:
+          type: number
+    ProductPage:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductResponse'
+        page:
+          type: integer
+        size:
+          type: integer
+        totalElements:
+          type: integer
+          format: int64

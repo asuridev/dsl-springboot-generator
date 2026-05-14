@@ -1,0 +1,48 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: true
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+      - name: description
+        type: String(1000)
+      - name: sku
+        type: String(50)
+
+useCases:
+
+  - id: UC-CAT-010
+    name: SearchProducts
+    type: query
+    actor: customer
+    trigger:
+      kind: http
+      operationId: searchProducts
+    aggregate: Product
+    pagination:
+      defaultSize: 20
+    input:
+      - name: searchText
+        type: SearchText
+        source: query
+        required: false
+        fields:
+          - name
+          - description
+          - sku
+    returns: Page[ProductResponse]
+    implementation: scaffold
+
+repositories:
+  - aggregate: Product
+    queryMethods: []
+
+errors: []

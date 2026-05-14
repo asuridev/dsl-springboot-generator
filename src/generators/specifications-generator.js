@@ -20,6 +20,7 @@ const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { mapType } = require('../utils/type-mapper');
 const { toPascalCase, toPackagePath } = require('../utils/naming');
+const { warn } = require('../utils/logger');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -56,11 +57,16 @@ function collectFilterInputs(aggregateName, useCases) {
         continue;
       }
       if (inp.type === 'SearchText') {
+        if (!Array.isArray(inp.fields) || inp.fields.length === 0) {
+          warn(`[G8] SearchText input "${inp.name}" on use case "${uc.id}" has no fields[] declared — skipping Specification builder. Add fields: [fieldName, ...] to enable text search.`);
+          touched = true;
+          continue;
+        }
         if (!searchByName.has(inp.name)) {
           searchByName.set(inp.name, {
             inputName: inp.name,
             methodName: `by${toPascalCase(inp.name)}`,
-            fields: Array.isArray(inp.fields) ? inp.fields.slice() : [],
+            fields: inp.fields.slice(),
           });
         }
         touched = true;
