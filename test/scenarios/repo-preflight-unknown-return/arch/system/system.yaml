@@ -1,0 +1,15 @@
+system:
+  name: test-repo-preflight-unknown-return
+  domainType: core
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Catalog.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

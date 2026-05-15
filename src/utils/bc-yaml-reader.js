@@ -1575,6 +1575,88 @@ function validateRepositories(doc) {
 
   const aggregateNames = new Set((doc.aggregates || []).map((a) => a.name));
   const aggregateByName = new Map((doc.aggregates || []).map((a) => [a.name, a]));
+  const projectionNames = new Set((doc.projections || []).map((p) => p.name));
+  const enumNames = new Set((doc.enums || []).map((e) => e.name));
+  const enumByName = new Map((doc.enums || []).map((e) => [e.name, e]));
+  const valueObjectNames = new Set((doc.valueObjects || []).map((vo) => vo.name));
+  const canonicalTypes = new Set([
+    'Uuid', 'String', 'Text', 'Email', 'Integer', 'Long', 'Boolean', 'Decimal',
+    'DateTime', 'Date', 'Url', 'Money', 'PageRequest', 'SearchText',
+  ]);
+
+  const unwrapReturnType = (returns) => {
+    const value = String(returns || '').trim();
+    if (!value || value === 'void' || value === 'Boolean' || value === 'Int' || value === 'Long') {
+      return null;
+    }
+    const optional = value.match(/^(.+)\?$/);
+    if (optional) return optional[1];
+    const wrapped = value.match(/^(?:Page|Slice|Stream|List)\[(.+)\]$/);
+    if (wrapped) return wrapped[1];
+    return value;
+  };
+
+  const typeBase = (type) => String(type || '')
+    .replace(/\(.*\)$/, '')
+    .replace(/^List\[(.+)\]$/, '$1')
+    .replace(/^Enum<(.+)>$/, '$1')
+    .trim();
+
+  const isKnownType = (type) => {
+    const base = typeBase(type);
+    return canonicalTypes.has(base)
+      || aggregateNames.has(base)
+      || projectionNames.has(base)
+      || enumNames.has(base)
+      || valueObjectNames.has(base);
+  };
+
+  const aggregateFieldMap = (aggregate) => {
+    const map = new Map();
+    if (!aggregate) return map;
+    for (const prop of [
+      ...((aggregate.properties || [])),
+      ...((aggregate.attributes || [])),
+      ...((aggregate.fields || [])),
+    ]) {
+      if (prop && prop.name) map.set(prop.name, prop.type || 'String');
+    }
+    map.set('id', 'Uuid');
+    map.set('createdAt', 'DateTime');
+    map.set('updatedAt', 'DateTime');
+    map.set('deletedAt', 'DateTime');
+    return map;
+  };
+
+  const isScalarComparableType = (type) => {
+    const base = typeBase(type);
+    const comparableCanonicalTypes = new Set(['Uuid', 'String', 'Text', 'Email', 'Integer', 'Long', 'Boolean', 'Decimal', 'DateTime', 'Date', 'Url']);
+    return comparableCanonicalTypes.has(base) || enumNames.has(base);
+  };
+
+  const resolveStatusQualifier = (qualifier, aggregate, ctx) => {
+    if (!aggregate) return;
+    if ((qualifier === 'NonDeleted' || qualifier === 'NotDeleted' || qualifier === 'Deleted') && aggregate.softDelete === true) {
+      return;
+    }
+    const statusProp = (aggregate.properties || []).find(
+      (p) => p.name === 'status' || (p.type && String(p.type).endsWith('Status'))
+    );
+    if (!statusProp) {
+      fail(`${ctx} uses qualifier "${qualifier}" but aggregate "${aggregate.name}" has no status enum field and is not softDelete:true.`);
+    }
+    const enumDef = enumByName.get(statusProp.type);
+    if (!enumDef) {
+      fail(`${ctx} uses qualifier "${qualifier}" but field "${statusProp.name}" does not reference a declared enum.`);
+    }
+    const values = (enumDef.values || []).map((v) => (typeof v === 'string' ? v : v.value));
+    const candidate = qualifier.startsWith('Non')
+      ? qualifier.slice(3).replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()
+      : qualifier.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase();
+    if (!values.includes(candidate)) {
+      fail(`${ctx} uses unsupported status qualifier "${qualifier}". Known ${enumDef.name} values: ${values.join(', ')}.`);
+    }
+  };
 
   // Domain rules can be declared at the document root *or* nested inside each
   // aggregate (the bc-yaml schema supports both). Collect from both scopes and
@@ -1662,6 +1744,10 @@ function validateRepositories(doc) {
         if (!matched) {
           fail(`${ctx} has unsupported "returns": "${m.returns}". Allowed forms: T, T?, List[T], Page[T], Int, Boolean, void.`);
         }
+        const innerReturnType = unwrapReturnType(m.returns);
+        if (innerReturnType && !isKnownType(innerReturnType)) {
+          fail(`${ctx} returns unknown type "${innerReturnType}". Declare it under aggregates[], projections[], enums[] or valueObjects[], or use a supported canonical type.`);
+        }
       }
 
       // defaultSort / sortable validation. Only meaningful in queryMethods and
@@ -1719,6 +1805,7 @@ function validateRepositories(doc) {
         if (!Array.isArray(m.params)) {
           fail(`${ctx} "params" must be a list.`);
         }
+        const fieldMap = aggregateFieldMap(aggregate);
         for (const p of m.params) {
           if (!p || typeof p !== 'object' || Array.isArray(p)) continue;
           // Inline form { name: Type } with no `name`/`type` keys is tolerated by the generator.
@@ -1732,12 +1819,40 @@ function validateRepositories(doc) {
             if (p.operator != null && !ALLOWED_OPERATORS.has(p.operator)) {
               fail(`${ctx} param "${p.name}" has unsupported operator "${p.operator}". Allowed: ${[...ALLOWED_OPERATORS].join(', ')}.`);
             }
+            if (p.type && !isKnownType(p.type)) {
+              fail(`${ctx} param "${p.name}" uses unknown type "${p.type}". Declare the type or use a supported canonical type.`);
+            }
             if (p.filterOn != null) {
               if (!Array.isArray(p.filterOn) || p.filterOn.length === 0) {
                 fail(`${ctx} param "${p.name}" has invalid "filterOn"; expected a non-empty list of aggregate property names.`);
               }
               if (p.operator == null) {
                 fail(`${ctx} param "${p.name}" declares "filterOn" but is missing required "operator". Operators allowed with filterOn: LIKE_CONTAINS, LIKE_STARTS, LIKE_ENDS.`);
+              }
+              for (const field of p.filterOn) {
+                if (!fieldMap.has(field)) {
+                  fail(`${ctx} param "${p.name}" filterOn references unknown aggregate field "${field}".`);
+                }
+                if (p.operator && p.operator.startsWith('LIKE_')) {
+                  const fieldType = fieldMap.get(field);
+                  if (!isScalarComparableType(fieldType)) {
+                    fail(`${ctx} param "${p.name}" uses ${p.operator} on field "${field}" of type "${fieldType}". LIKE filters are supported only on scalar aggregate fields.`);
+                  }
+                }
+              }
+            }
+            if (p.type && /^List\[/.test(p.type) && p.operator && p.operator !== 'IN') {
+              fail(`${ctx} param "${p.name}" is ${p.type}; list parameters require operator: IN.`);
+            }
+            if (p.type && /^List\[Uuid\]$/.test(p.type) && p.name && p.name.endsWith('Ids') && !p.filterOn) {
+              const aggregateIdsName = `${repo.aggregate.charAt(0).toLowerCase()}${repo.aggregate.slice(1)}Ids`;
+              const entitySuffix = p.name.slice(0, -3).toLowerCase();
+              const matchesAggregateIds = p.name === aggregateIdsName;
+              const matchesChildEntity = (aggregate.entities || []).some(
+                (e) => e.name.toLowerCase() === entitySuffix || e.name.toLowerCase().endsWith(entitySuffix)
+              );
+              if (!matchesAggregateIds && !matchesChildEntity) {
+                fail(`${ctx} param "${p.name}" is List[Uuid] ending in Ids but cannot be mapped to aggregate id or a child entity id. Add explicit filterOn or rename the param.`);
               }
             }
           }
@@ -1755,6 +1870,28 @@ function validateRepositories(doc) {
         }
         if (/^existsBy[A-Z]/.test(m.name) && ret !== 'Boolean') {
           fail(`${ctx} naming convention "existsBy*" requires returns: Boolean; got "${ret}".`);
+        }
+        const qualifiedExists = m.name.match(/^exists(.+)By([A-Z][A-Za-z0-9]*)$/);
+        if (qualifiedExists && !m.name.startsWith('existsBy')) {
+          if (ret !== 'Boolean') {
+            fail(`${ctx} naming convention "exists{Qualifier}By*" requires returns: Boolean; got "${ret}".`);
+          }
+          const [, qualifier, fieldRaw] = qualifiedExists;
+          resolveStatusQualifier(qualifier, aggregate, ctx);
+          const field = fieldRaw.charAt(0).toLowerCase() + fieldRaw.slice(1);
+          if (!aggregateFieldMap(aggregate).has(field)) {
+            fail(`${ctx} references unknown aggregate field "${field}" in method name "${m.name}".`);
+          }
+        }
+        const qualifiedSearch = m.name.match(/^search(?!By)([A-Z][A-Za-z0-9]*)$/);
+        if (qualifiedSearch) {
+          if (!/^Page\[/.test(ret) && !/^Slice\[/.test(ret) && !/^Stream\[/.test(ret)) {
+            fail(`${ctx} naming convention "search*" requires Page[T], Slice[T] or Stream[T] returns; got "${ret}".`);
+          }
+          const qualifier = qualifiedSearch[1];
+          if (qualifier !== 'All') {
+            resolveStatusQualifier(qualifier, aggregate, ctx);
+          }
         }
       }
 

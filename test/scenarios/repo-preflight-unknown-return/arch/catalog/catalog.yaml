@@ -1,0 +1,23 @@
+bc: catalog
+version: "1.0.0"
+aggregates:
+  - name: Product
+    root: Product
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+repositories:
+  - aggregate: Product
+    queryMethods:
+      - name: listMissing
+        params:
+          - name: page
+            type: PageRequest
+            required: true
+        returns: Page[MissingProjection]
+        derivedFrom: implicit
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"

@@ -1,0 +1,4 @@
+{
+  "expectFailure": true,
+  "expectedErrorPattern": "returns unknown type \"MissingProjection\""
+}

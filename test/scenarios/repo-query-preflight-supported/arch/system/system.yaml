@@ -1,0 +1,18 @@
+system:
+  name: test-repo-query-preflight-supported
+  description: Test system for supported repository query preflight patterns.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

@@ -1,0 +1,30 @@
+bc: catalog
+version: "1.0.0"
+aggregates:
+  - name: Product
+    root: Product
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(100)
+repositories:
+  - aggregate: Product
+    queryMethods:
+      - name: searchAll
+        params:
+          - name: search
+            type: String(100)
+            required: false
+            filterOn: [unknownField]
+            operator: LIKE_CONTAINS
+          - name: page
+            type: PageRequest
+            required: true
+        returns: Page[Product]
+        derivedFrom: implicit
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"

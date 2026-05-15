@@ -1,0 +1,37 @@
+bc: catalog
+version: "1.0.0"
+enums:
+  - name: ProductStatus
+    values:
+      - value: DRAFT
+      - value: ACTIVE
+aggregates:
+  - name: Product
+    root: Product
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: status
+        type: ProductStatus
+      - name: name
+        type: String(100)
+repositories:
+  - aggregate: Product
+    queryMethods:
+      - name: searchPublished
+        params:
+          - name: search
+            type: String(100)
+            required: false
+            filterOn: [name]
+            operator: LIKE_CONTAINS
+          - name: page
+            type: PageRequest
+            required: true
+        returns: Page[Product]
+        derivedFrom: implicit
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"

@@ -477,7 +477,7 @@ function isEnumType(type, bcYaml) {
 }
 
 // ─── Helper: build imports for an aggregate class ────────────────────────────
-function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvents) {
+function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvents, staticFactory = null) {
   const bc = bcYaml.bc;
   const pkg = config.packageName;
   const imports = new Set();
@@ -566,8 +566,10 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
   if (aggregate.auditable) imports.add('import java.time.Instant;');
   if (aggregate.softDelete) imports.add('import java.time.Instant;');
 
-  // Business method param types
-  for (const method of businessMethods || []) {
+  // Business method and static factory param types
+  const methodsForParamImports = [...(businessMethods || [])];
+  if (staticFactory) methodsForParamImports.push({ params: staticFactory.params || [] });
+  for (const method of methodsForParamImports) {
     for (const param of method.params || []) {
       const jt = param.javaType;
       if (jt === 'UUID') continue; // already imported
@@ -992,7 +994,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
     }
 
     // ── 6. Build imports (after businessMethods so param types are included) ──
-    const imports = buildImports(aggregate, bcYaml, config, businessMethods, aggregatePublishedEvents);
+    const imports = buildImports(aggregate, bcYaml, config, businessMethods, aggregatePublishedEvents, staticFactory);
 
     // [Phase 3, Gap E1.d] Imports required by terminalState try/catch wrapper.
     if (terminalStateErrorClass) {

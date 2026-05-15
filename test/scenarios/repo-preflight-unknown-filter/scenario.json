@@ -1,0 +1,4 @@
+{
+  "expectFailure": true,
+  "expectedErrorPattern": "filterOn references unknown aggregate field \"unknownField\""
+}

@@ -28,6 +28,20 @@ function isVoType(type, bcYaml) {
   return (bcYaml.valueObjects || []).some((vo) => vo.name === type);
 }
 
+function isProjectionType(type, bcYaml) {
+  return (bcYaml && bcYaml.projections || []).some((p) => p.name === type);
+}
+
+function getWrappedReturnInner(returnType) {
+  const match = returnType && returnType.match(/^(?:Optional|Page|List|Slice|Stream)<(.+)>$/);
+  return match ? match[1] : null;
+}
+
+function isProjectionReturnType(returnType, bcYaml) {
+  const inner = getWrappedReturnInner(returnType) || returnType;
+  return isProjectionType(inner, bcYaml);
+}
+
 // [G8] Returns true when any query UC targeting this aggregate declares a
 // Range[T] or SearchText input — meaning the JPA repository must extend
 // JpaSpecificationExecutor to expose findAll(Specification, Pageable).
@@ -217,10 +231,10 @@ function normalizeMethod(yamlMethod) {
  */
 function resolveEffectiveOperator(param) {
   if (param.operator) return param.operator;
+  if (param.type && /^List\[/.test(param.type)) return 'IN';
   if (param.filterOn && Array.isArray(param.filterOn) && param.filterOn.length > 0) {
     return 'LIKE_CONTAINS';
   }
-  if (param.type && /^List\[/.test(param.type)) return 'IN';
   return 'EQ';
 }
 
@@ -251,15 +265,15 @@ function buildParamPredicate(param, alias) {
       return fields.map((f) => `${a}.${f} <= :${pn}`).join(' OR ');
     case 'LIKE_CONTAINS':
       return fields
-        .map((f) => `LOWER(${a}.${f}) LIKE LOWER(CONCAT('%', :${pn}, '%'))`)
+        .map((f) => `LOWER(${jpqlLikeFieldExpression(param, a, f)}) LIKE LOWER(CONCAT('%', :${pn}, '%'))`)
         .join(' OR ');
     case 'LIKE_STARTS':
       return fields
-        .map((f) => `LOWER(${a}.${f}) LIKE LOWER(CONCAT(:${pn}, '%'))`)
+        .map((f) => `LOWER(${jpqlLikeFieldExpression(param, a, f)}) LIKE LOWER(CONCAT(:${pn}, '%'))`)
         .join(' OR ');
     case 'LIKE_ENDS':
       return fields
-        .map((f) => `LOWER(${a}.${f}) LIKE LOWER(CONCAT('%', :${pn}))`)
+        .map((f) => `LOWER(${jpqlLikeFieldExpression(param, a, f)}) LIKE LOWER(CONCAT('%', :${pn}))`)
         .join(' OR ');
     case 'IN': {
       // For IN we expect a single field, derived either from filterOn or by
@@ -297,7 +311,7 @@ function buildOrderByClause(method, alias) {
  * Build the JPQL query for a "list" method (optional-filter + pagination).
  * entityAlias — single-letter alias; jpaEntityName — "ProductJpa"; optional params
  */
-function buildListQuery(jpaEntityName, optionalParams, requiredFilterParams, alias) {
+function buildListQuery(jpaEntityName, optionalParams, requiredFilterParams, alias, extraConditions = []) {
   const a = alias || jpaEntityName.charAt(0).toLowerCase();
   const reqConditions = (requiredFilterParams || []).map((p) => {
     const pred = buildParamPredicate(p, a);
@@ -309,9 +323,44 @@ function buildListQuery(jpaEntityName, optionalParams, requiredFilterParams, ali
     const wrapped = pred.includes(' OR ') ? `(${pred})` : pred;
     return `(:${p.name} IS NULL OR ${wrapped})`;
   });
-  const allConditions = [...reqConditions, ...optConditions];
+  const allConditions = [...(extraConditions || []), ...reqConditions, ...optConditions];
   const where = allConditions.length > 0 ? ` WHERE ${allConditions.join(' AND ')}` : '';
   return `SELECT ${a} FROM ${jpaEntityName} ${a}${where}`;
+}
+
+function resolveSearchQualifierConditions(methodName, aggregate, bcYaml, alias) {
+  const match = methodName.match(/^search(?!By)([A-Z][a-zA-Z]*)$/);
+  if (!match) return [];
+  const qualifier = match[1];
+  if (qualifier === 'All') return [];
+  return resolveCountQualifier(qualifier, aggregate, bcYaml, alias, methodName);
+}
+
+function normalizeQueryParamForAggregate(param, aggregate) {
+  if (!param || !aggregate || param.filterOn) return param;
+  const aggregateIdsName = `${toCamelCase(aggregate.name)}Ids`;
+  if (param.name === aggregateIdsName && /^List\[Uuid\]$/.test(param.type || '')) {
+    return { ...param, filterOn: ['id'] };
+  }
+  return param;
+}
+
+function enrichFilterParamFieldTypes(param, aggregate) {
+  if (!param || !aggregate) return param;
+  const fields = (param.filterOn && param.filterOn.length > 0) ? param.filterOn : [param.name];
+  const fieldTypes = {};
+  for (const field of fields) {
+    const prop = (aggregate.properties || []).find((p) => p.name === field);
+    if (prop && prop.type) fieldTypes[field] = prop.type;
+  }
+  return Object.keys(fieldTypes).length > 0 ? { ...param, filterFieldTypes: fieldTypes } : param;
+}
+
+function jpqlLikeFieldExpression(param, alias, field) {
+  const type = param && param.filterFieldTypes ? param.filterFieldTypes[field] : null;
+  const expr = `${alias}.${field}`;
+  if (!type || type === 'String' || type === 'Text' || type === 'Email' || /^String\(/.test(type)) return expr;
+  return `CAST(${expr} AS string)`;
 }
 
 /**
@@ -482,11 +531,20 @@ function buildSearchQuery(methodName, jpaEntityName, aggregate) {
   const a = jpaEntityName.charAt(0).toLowerCase();
   // Extract field names from method name: searchByNameOrSku → [name, sku]
   const fieldsMatch = methodName.match(/^searchBy(.+)$/);
-  if (!fieldsMatch) return `// TODO: write @Query for ${methodName}`;
+  if (!fieldsMatch) {
+    throw new Error(`[repository-generator] Cannot build search query for method '${methodName}'. Supported forms: searchBy{Field}Or{Field}, searchAll, or search{StatusQualifier}.`);
+  }
 
   const fieldNames = fieldsMatch[1]
     .split('Or')
     .map((f) => f.charAt(0).toLowerCase() + f.slice(1));
+
+  const aggregateFields = new Set((aggregate.properties || []).map((p) => p.name));
+  for (const field of fieldNames) {
+    if (!aggregateFields.has(field)) {
+      throw new Error(`[repository-generator] Cannot build search query '${methodName}': field '${field}' is not a property of aggregate '${aggregate.name}'.`);
+    }
+  }
 
   const conditions = fieldNames.map((f) => `LOWER(${a}.${f}) LIKE LOWER(CONCAT('%', :query, '%'))`);
   return `SELECT ${a} FROM ${jpaEntityName} ${a} WHERE ${conditions.join(' OR ')}`;
@@ -521,6 +579,7 @@ function classifyMethod(method) {
   // long as the last param is Pageable.
   if (/^findBy[A-Z]/.test(method.name)) {
     const nonPageable = (method.params || []).filter((p) => p.type !== 'PageRequest' && p.name !== 'pageable');
+    if (nonPageable.some((p) => /^List\[/.test(p.type || ''))) return 'custom';
     const tokens = method.name.replace(/^findBy/, '').split(/And|Or/).filter(Boolean);
     const isPageReturn = method.returns && method.returns.startsWith('Page[');
     // Page return needs an explicit PageRequest/pageable param the YAML must declare;
@@ -583,18 +642,34 @@ function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
     return `DELETE FROM ${jpaEntityName} ${a} WHERE ${a}.${field} = :${paramName}`;
   }
 
+  const existsQualifiedMatch = name.match(/^exists(.+)By([A-Z][a-zA-Z]*)$/);
+  if ((returns === 'Boolean' || returns === 'boolean') && existsQualifiedMatch && !name.startsWith('existsBy')) {
+    const [, qualifier, fieldRaw] = existsQualifiedMatch;
+    const a = jpaEntityName.charAt(0).toLowerCase();
+    const field = fieldRaw.charAt(0).toLowerCase() + fieldRaw.slice(1);
+    const paramName = (params && params[0] && params[0].name) || field;
+    const qualifierConditions = resolveCountQualifier(qualifier, aggregate, bcYaml, a, name);
+    const conditions = [...qualifierConditions, `${a}.${field} = :${paramName}`];
+    return `SELECT CASE WHEN COUNT(${a}) > 0 THEN true ELSE false END FROM ${jpaEntityName} ${a} WHERE ${conditions.join(' AND ')}`;
+  }
+
   if (returns && (returns.startsWith('Page[') || returns.startsWith('Slice[') || returns.startsWith('Stream['))) {
     // list or search — Slice and Stream follow identical JPQL rules to Page
-    if (/^search/.test(name)) {
+    if (/^searchBy/.test(name)) {
       return buildSearchQuery(name, jpaEntityName, aggregate);
     }
     // page/size Integer params are pagination — exclude from JPQL conditions
     const isPaginationParam = (p) =>
       p.type === 'PageRequest' || p.name === 'pageable' ||
       ((p.name === 'page' || p.name === 'size') && p.type === 'Integer');
-    const requiredFilterParams = (params || []).filter((p) => !isPaginationParam(p) && p.required !== false);
-    const optionalParams = (params || []).filter((p) => !isPaginationParam(p) && p.required === false);
-    return buildListQuery(jpaEntityName, optionalParams, requiredFilterParams);
+    const queryParams = (params || [])
+      .map((p) => normalizeQueryParamForAggregate(p, aggregate))
+      .map((p) => enrichFilterParamFieldTypes(p, aggregate));
+    const requiredFilterParams = queryParams.filter((p) => !isPaginationParam(p) && p.required !== false);
+    const optionalParams = queryParams.filter((p) => !isPaginationParam(p) && p.required === false);
+    const alias = jpaEntityName.charAt(0).toLowerCase();
+    const qualifierConditions = resolveSearchQualifierConditions(name, aggregate, bcYaml, alias);
+    return buildListQuery(jpaEntityName, optionalParams, requiredFilterParams, alias, qualifierConditions);
   }
 
   if (returns === 'Int' || returns === 'Integer') {
@@ -604,6 +679,8 @@ function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
   if (returns && returns.startsWith('List[')) {
     const a = jpaEntityName.charAt(0).toLowerCase();
     const filterParams = (params || [])
+      .map((p) => normalizeQueryParamForAggregate(p, aggregate))
+      .map((p) => enrichFilterParamFieldTypes(p, aggregate))
       .filter((p) => p.type !== 'PageRequest' && p.name !== 'pageable');
 
     // Detect {subEntityName}Ids params — the IDs belong to a sub-entity, not a
@@ -790,12 +867,16 @@ function collectRepoInterfaceImports(methods, aggregateName, bc, packageName, bc
       const inner = aggMatch[1];
       if (SCALAR_IMPORTS[inner]) {
         imports.add(SCALAR_IMPORTS[inner]);
+      } else if (isProjectionType(inner, bcYaml)) {
+        imports.add(`${packageName}.${bc}.application.dtos.${inner}`);
       } else {
         // Aggregate domain class
         imports.add(`${packageName}.${bc}.domain.aggregate.${inner}`);
       }
     } else if (rt === aggregateName) {
       imports.add(`${packageName}.${bc}.domain.aggregate.${rt}`);
+    } else if (isProjectionType(rt, bcYaml)) {
+      imports.add(`${packageName}.${bc}.application.dtos.${rt}`);
     }
   }
 
@@ -823,6 +904,11 @@ function collectJpaRepoImports(customMethods, aggregate, jpaEntityName, bc, pack
     if (method.returnType.startsWith('Slice<')) { hasSlice = true; hasPageable = true; }
     if (method.returnType.startsWith('Stream<')) hasStream = true;
     if (method.returnType.startsWith('List<')) imports.add('java.util.List');
+
+    const returnInner = getWrappedReturnInner(method.returnType) || method.returnType;
+    if (isProjectionType(returnInner, bcYaml)) {
+      imports.add(`${packageName}.${bc}.application.dtos.${returnInner}`);
+    }
 
     // Parse param types from paramsStr for imports
     const params = method._params || [];
@@ -1152,7 +1238,7 @@ function buildChildToJpaBody(entity, bcYaml) {
 /**
  * Build the Java method body for a RepositoryImpl method.
  */
-function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents, aggregateName) {
+function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents, aggregateName, bcYaml) {
   const { name, params } = normalizedMethod;
   const paramNames = (params || []).map((p) => p.name).join(', ');
   const entityParam = params[0]?.name || 'entity';
@@ -1217,6 +1303,9 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
   }
 
   if (methodReturnType.startsWith('Optional<')) {
+    if (isProjectionReturnType(methodReturnType, bcYaml)) {
+      return `return jpaRepository.${name}(${paramNames});`;
+    }
     if (name === 'findById') {
       return `return jpaRepository.findById(${params[0]?.name || 'id'}).map(mapper::toDomain);`;
     }
@@ -1224,6 +1313,9 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
   }
 
   if (methodReturnType.startsWith('Page<')) {
+    if (isProjectionReturnType(methodReturnType, bcYaml)) {
+      return `return jpaRepository.${name}(${paramNames});`;
+    }
     // If params include page+size pair, build PageRequest.of(page, size) for JPA call
     const pageParam = (params || []).find((p) => p.name === 'page');
     const sizeParam = (params || []).find((p) => p.name === 'size');
@@ -1247,17 +1339,26 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
   }
 
   if (methodReturnType.startsWith('List<')) {
+    if (isProjectionReturnType(methodReturnType, bcYaml)) {
+      return `return jpaRepository.${name}(${paramNames});`;
+    }
     return `return jpaRepository.${name}(${paramNames}).stream().map(mapper::toDomain).toList();`;
   }
 
   // R15: Slice<T> — Spring Data's Slice.map() converts each Jpa entity to domain.
   if (methodReturnType.startsWith('Slice<')) {
+    if (isProjectionReturnType(methodReturnType, bcYaml)) {
+      return `return jpaRepository.${name}(${paramNames});`;
+    }
     return `return jpaRepository.${name}(${paramNames}).map(mapper::toDomain);`;
   }
 
   // R15: Stream<T> — JPA streams require an open transaction; the class-level
   // @Transactional(readOnly = true) covers read streams.
   if (methodReturnType.startsWith('Stream<')) {
+    if (isProjectionReturnType(methodReturnType, bcYaml)) {
+      return `return jpaRepository.${name}(${paramNames});`;
+    }
     return `return jpaRepository.${name}(${paramNames}).map(mapper::toDomain);`;
   }
 
@@ -1294,6 +1395,11 @@ function collectImplImports(aggregateName, aggregate, methods, bc, packageName, 
     if (rt.startsWith('Slice<')) { hasSlice = true; hasPageable = true; }
     if (rt.startsWith('Stream<')) hasStream = true;
     if (rt.startsWith('List<')) imports.add('java.util.List');
+
+    const returnInner = getWrappedReturnInner(rt) || rt;
+    if (isProjectionType(returnInner, bcYaml)) {
+      imports.add(`${packageName}.${bc}.application.dtos.${returnInner}`);
+    }
 
     for (const p of method.params) {
       if (p.javaType === 'UUID') imports.add('java.util.UUID');
@@ -1456,6 +1562,9 @@ function buildJpaRepoInterfaceContext(aggregateName, normalizedMethods, aggregat
     }
 
     const query = needsQuery ? buildJpqlQuery(m, jpaEntityName, aggregate, bcYaml) : null;
+    if (needsQuery && (!query || /^\s*\/\//.test(query))) {
+      throw new Error(`[repository-generator] Unsupported repository method '${aggregateName}.${m.name}'. The generator could not derive a valid JPQL @Query from the YAML declaration.`);
+    }
 
     // R10: deleteBy{Field} requires @Modifying. R13: findByIdForUpdate needs
     // @Lock(LockModeType.PESSIMISTIC_WRITE). Both flags travel through the
@@ -1509,7 +1618,7 @@ function buildRepoImplContext(aggregateName, normalizedMethods, aggregate, bc, p
       name: p.name,
       javaType: yamlTypeToJava(p.type),
     }));
-    const body = buildImplMethodBody(m, returnType, hasDomainEvents, aggregateName);
+    const body = buildImplMethodBody(m, returnType, hasDomainEvents, aggregateName, bcYaml);
     // R20: methods that mutate state must run inside a read-write transaction.
     // The class-level annotation defaults everything to readOnly=true; these
     // methods opt back in to a writable transaction.

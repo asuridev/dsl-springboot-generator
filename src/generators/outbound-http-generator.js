@@ -53,6 +53,10 @@ function resolveSchema(schema, components) {
   return schema;
 }
 
+function isObjectSchema(schema) {
+  return !!schema && (schema.type === 'object' || !!schema.properties);
+}
+
 // ─── Schema → flat field list ─────────────────────────────────────────────────
 
 /**
@@ -65,12 +69,20 @@ function schemaToFields(schema, components, nestedDtoNames = new Set()) {
   return Object.entries(properties).map(([name, propSchema]) => {
     if (propSchema.$ref) {
       const refName = resolveRefName(propSchema.$ref);
+      const refSchema = (components.schemas || {})[refName] || {};
+      if (!isObjectSchema(refSchema)) {
+        return { name, javaType: openApiTypeToJava(refSchema) };
+      }
       nestedDtoNames.add(refName);
       return { name, javaType: refName + 'Dto' };
     }
     if (propSchema.type === 'array' && propSchema.items) {
       if (propSchema.items.$ref) {
         const refName = resolveRefName(propSchema.items.$ref);
+        const refSchema = (components.schemas || {})[refName] || {};
+        if (!isObjectSchema(refSchema)) {
+          return { name, javaType: `List<${openApiTypeToJava(refSchema)}>` };
+        }
         nestedDtoNames.add(refName);
         return { name, javaType: `List<${refName}Dto>` };
       }
@@ -107,6 +119,11 @@ function buildDomainModelFields(schema, components, bcYaml, packageName, moduleN
   for (const [name, propSchema] of Object.entries(properties)) {
     if (propSchema.$ref) {
       const refName = resolveRefName(propSchema.$ref);
+      const refSchema = (components.schemas || {})[refName] || {};
+      if (!isObjectSchema(refSchema)) {
+        fields.push({ name, javaType: openApiTypeToJava(refSchema), isVo: false });
+        continue;
+      }
       const matchingVo = findMatchingVo(refName, bcYaml.valueObjects);
       if (matchingVo) {
         // Re-use the existing VO from the consuming BC
@@ -121,6 +138,11 @@ function buildDomainModelFields(schema, components, bcYaml, packageName, moduleN
     } else if (propSchema.type === 'array' && propSchema.items) {
       if (propSchema.items.$ref) {
         const refName = resolveRefName(propSchema.items.$ref);
+        const refSchema = (components.schemas || {})[refName] || {};
+        if (!isObjectSchema(refSchema)) {
+          fields.push({ name, javaType: `List<${openApiTypeToJava(refSchema)}>`, isVo: false });
+          continue;
+        }
         const matchingVo = findMatchingVo(refName, bcYaml.valueObjects);
         if (matchingVo) {
           const voImport = `${packageName}.${moduleName}.domain.valueobject.${refName}`;

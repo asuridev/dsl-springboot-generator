@@ -1082,6 +1082,7 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
   }
 
   const callArgs = [];
+  const ucInputByName = new Map((uc.input || []).map((input) => [input.name, input]));
 
   if (isCreate && dmParams.length === 0) {
     // Bare 'create' with no explicit params — derive args from uc.input[] (exclude loadAggregate inputs)
@@ -1118,6 +1119,11 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
   } else {
     // Use domainMethod params as the source of truth for the call args
     for (const p of dmParams) {
+      const authContextArg = buildAuthContextQueryArg(p, ucInputByName, extraImports, packageName);
+      if (authContextArg) {
+        callArgs.push(authContextArg);
+        continue;
+      }
       // If the matching aggregate property declares source: authContext, inject from SecurityContext.
       const aggPropDef = (aggDef?.properties || []).find((prop) => prop.name === p.name);
       if (aggPropDef?.source === 'authContext') {
