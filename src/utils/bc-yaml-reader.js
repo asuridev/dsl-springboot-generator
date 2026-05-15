@@ -1658,6 +1658,36 @@ function validateRepositories(doc) {
     }
   };
 
+  const statusQualifierMatches = (qualifier, aggregate) => {
+    if (!aggregate) return false;
+    if ((qualifier === 'NonDeleted' || qualifier === 'NotDeleted' || qualifier === 'Deleted') && aggregate.softDelete === true) {
+      return true;
+    }
+    const statusProp = (aggregate.properties || []).find(
+      (p) => p.name === 'status' || (p.type && String(p.type).endsWith('Status'))
+    );
+    if (!statusProp) return false;
+    const enumDef = enumByName.get(statusProp.type);
+    if (!enumDef) return false;
+    const values = (enumDef.values || []).map((v) => (typeof v === 'string' ? v : v.value));
+    if ((qualifier === 'NonDeleted' || qualifier === 'NotDeleted' || qualifier === 'Deleted') && values.includes('DELETED')) return true;
+    const candidate = qualifier.startsWith('Non')
+      ? qualifier.slice(3).replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()
+      : qualifier.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase();
+    return values.includes(candidate);
+  };
+
+  const hasStatusQualifierSource = (aggregate) => {
+    if (!aggregate) return false;
+    if (aggregate.softDelete === true) return true;
+    return (aggregate.properties || []).some((p) => p.name === 'status' || (p.type && String(p.type).endsWith('Status')));
+  };
+
+  const qualifierMatchesEntity = (aggregate, qualifier) => {
+    if (!aggregate) return false;
+    return (aggregate.entities || []).some((entity) => entity.name === qualifier || String(entity.name).endsWith(qualifier));
+  };
+
   // Domain rules can be declared at the document root *or* nested inside each
   // aggregate (the bc-yaml schema supports both). Collect from both scopes and
   // remember which aggregate each rule belongs to for deleteGuard lookup.
@@ -1865,8 +1895,36 @@ function validateRepositories(doc) {
         if (/^findBy[A-Z]/.test(m.name) && !/\?$/.test(ret) && !/^List\[/.test(ret) && !/^Page\[/.test(ret)) {
           fail(`${ctx} naming convention "findBy*" requires returns of T?, List[T] or Page[T]; got "${ret}".`);
         }
+        const qualifiedFind = m.name.match(/^find(?!By)([A-Z][A-Za-z0-9]*)By([A-Z][A-Za-z0-9]*)$/);
+        if (qualifiedFind) {
+          const [, qualifier, fieldRaw] = qualifiedFind;
+          const field = fieldRaw.charAt(0).toLowerCase() + fieldRaw.slice(1);
+          if (statusQualifierMatches(qualifier, aggregate)) {
+            if (!/\?$/.test(ret) && !/^List\[/.test(ret) && !/^Page\[/.test(ret)) {
+              fail(`${ctx} naming convention "find{Qualifier}By*" requires returns of T?, List[T] or Page[T]; got "${ret}".`);
+            }
+            resolveStatusQualifier(qualifier, aggregate, ctx);
+            if (!aggregateFieldMap(aggregate).has(field)) {
+              fail(`${ctx} references unknown aggregate field "${field}" in method name "${m.name}".`);
+            }
+          } else if (hasStatusQualifierSource(aggregate) && !qualifierMatchesEntity(aggregate, qualifier) && qualifier !== aggregate.name && aggregateFieldMap(aggregate).has(field)) {
+            resolveStatusQualifier(qualifier, aggregate, ctx);
+          }
+        }
         if (/^countBy[A-Z]/.test(m.name) && ret !== 'Int' && ret !== 'Long') {
           fail(`${ctx} naming convention "countBy*" requires returns: Int or Long; got "${ret}".`);
+        }
+        const qualifiedCount = m.name.match(/^count(.+)By([A-Z][A-Za-z0-9]*)$/);
+        if (qualifiedCount && !m.name.startsWith('countBy')) {
+          if (ret !== 'Int' && ret !== 'Long') {
+            fail(`${ctx} naming convention "count{Qualifier}By*" requires returns: Int or Long; got "${ret}".`);
+          }
+          const [, qualifier, fieldRaw] = qualifiedCount;
+          resolveStatusQualifier(qualifier, aggregate, ctx);
+          const field = fieldRaw.charAt(0).toLowerCase() + fieldRaw.slice(1);
+          if (!aggregateFieldMap(aggregate).has(field)) {
+            fail(`${ctx} references unknown aggregate field "${field}" in method name "${m.name}".`);
+          }
         }
         if (/^existsBy[A-Z]/.test(m.name) && ret !== 'Boolean') {
           fail(`${ctx} naming convention "existsBy*" requires returns: Boolean; got "${ret}".`);

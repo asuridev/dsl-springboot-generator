@@ -439,6 +439,25 @@ function findStatusEnum(aggregate, bcYaml) {
   return { field: statusProp.name, enumName: enumDef.name, values };
 }
 
+function statusQualifierMatches(qualifier, aggregate, bcYaml) {
+  if (!aggregate) return false;
+  if ((qualifier === 'NonDeleted' || qualifier === 'NotDeleted' || qualifier === 'Deleted') && aggregate.softDelete === true) {
+    return true;
+  }
+  const statusInfo = findStatusEnum(aggregate, bcYaml);
+  if (!statusInfo) return false;
+  if ((qualifier === 'NonDeleted' || qualifier === 'NotDeleted' || qualifier === 'Deleted') && statusInfo.values.includes('DELETED')) {
+    return true;
+  }
+  const upper = qualifier.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase();
+  if (statusInfo.values.includes(upper)) return true;
+  if (qualifier.startsWith('Non')) {
+    const innerUpper = qualifier.slice(3).replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase();
+    return statusInfo.values.includes(innerUpper);
+  }
+  return false;
+}
+
 /**
  * Build the JPQL query for a "count across entity" method.
  * Method name pattern: count{Entities}InXxx or count{Entities}ByXxx
@@ -562,6 +581,8 @@ function classifyMethod(method) {
     // the normal derived/custom classification below.
     if (/^findBy[A-Z]/.test(method.name) && method.name !== 'findById') {
       // fall through
+    } else if (/^find(?!By)[A-Z][A-Za-z0-9]*By[A-Z][A-Za-z0-9]*$/.test(method.name)) {
+      // fall through
     } else {
       return 'skip';
     }
@@ -653,6 +674,17 @@ function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
     return `SELECT CASE WHEN COUNT(${a}) > 0 THEN true ELSE false END FROM ${jpaEntityName} ${a} WHERE ${conditions.join(' AND ')}`;
   }
 
+  const findQualifiedMatch = name.match(/^find(?!By)([A-Z][A-Za-z0-9]*)By([A-Z][A-Za-z0-9]*)$/);
+  if (findQualifiedMatch && statusQualifierMatches(findQualifiedMatch[1], aggregate, bcYaml)) {
+    const [, qualifier, fieldRaw] = findQualifiedMatch;
+    const a = jpaEntityName.charAt(0).toLowerCase();
+    const field = fieldRaw.charAt(0).toLowerCase() + fieldRaw.slice(1);
+    const paramName = (params && params[0] && params[0].name) || field;
+    const qualifierConditions = resolveCountQualifier(qualifier, aggregate, bcYaml, a, name);
+    const conditions = [...qualifierConditions, `${a}.${field} = :${paramName}`];
+    return `SELECT ${a} FROM ${jpaEntityName} ${a} WHERE ${conditions.join(' AND ')}`;
+  }
+
   if (returns && (returns.startsWith('Page[') || returns.startsWith('Slice[') || returns.startsWith('Stream['))) {
     // list or search — Slice and Stream follow identical JPQL rules to Page
     if (/^searchBy/.test(name)) {
@@ -672,7 +704,7 @@ function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
     return buildListQuery(jpaEntityName, optionalParams, requiredFilterParams, alias, qualifierConditions);
   }
 
-  if (returns === 'Int' || returns === 'Integer') {
+  if (returns === 'Int' || returns === 'Integer' || returns === 'Long' || returns === 'long') {
     return buildCountQuery(name, params || [], bcYaml, jpaEntityName, aggregate);
   }
 
@@ -1298,7 +1330,7 @@ function buildImplMethodBody(normalizedMethod, methodReturnType, hasDomainEvents
     return `jpaRepository.${name}(${paramNames});`;
   }
 
-  if (methodReturnType === 'int') {
+  if (methodReturnType === 'int' || methodReturnType === 'long') {
     return `return jpaRepository.${name}(${paramNames});`;
   }
 

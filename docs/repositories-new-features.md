@@ -250,6 +250,36 @@ SELECT p FROM ProductJpa p WHERE
 
 ---
 
+### 7.1 `find{Qualifier}By{Field}` — lookup por estado declarado
+
+Los métodos `find{Qualifier}By{Field}` son soportados cuando `{Qualifier}` resuelve contra el estado del agregado (`status` o `*Status`) o contra soft delete. Esto permite expresar lecturas puntuales como el carrito activo de un cliente sin mover la condición de estado a lógica manual.
+
+**YAML:**
+
+```yaml
+queryMethods:
+  - name: findActiveByCustomerId
+    params:
+      - name: customerId
+        type: Uuid
+        required: true
+    returns: Cart?
+```
+
+**JPQL generado:**
+
+```sql
+SELECT c FROM CartJpa c WHERE c.status = 'ACTIVE' AND c.customerId = :customerId
+```
+
+Reglas:
+- `{Qualifier}` debe existir como literal del enum de estado (`ACTIVE` ⇔ `Active`) o ser `Deleted`, `NonDeleted`/`NotDeleted` cuando el agregado es `softDelete: true` o declara un estado `DELETED`.
+- `{Field}` debe existir en el agregado raíz.
+- Retornos válidos: `T?`, `List[T]`, `Page[T]`.
+- `find{SubEntity}By{Field}` sigue reservado para joins contra subentidades cuando `{Qualifier}` no resuelve como estado.
+
+---
+
 ## 8. `defaultSort` y `sortable[]` — ordering declarativo (R8)
 
 Antes los listados quedaban con orden indefinido (bug clásico de paginación inestable). Dos hints opt-in:

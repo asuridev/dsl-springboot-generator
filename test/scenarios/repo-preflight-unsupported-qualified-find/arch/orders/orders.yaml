@@ -1,0 +1,32 @@
+bc: orders
+version: "1.0.0"
+enums:
+  - name: CartStatus
+    values:
+      - value: ACTIVE
+      - value: CHECKED_OUT
+aggregates:
+  - name: Cart
+    root: Cart
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: customerId
+        type: Uuid
+      - name: status
+        type: CartStatus
+repositories:
+  - aggregate: Cart
+    queryMethods:
+      - name: findActiveByCustomerId
+        params:
+          - name: customerId
+            type: Uuid
+            required: true
+        returns: Cart?
+        derivedFrom: implicit
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Cart?"

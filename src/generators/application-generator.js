@@ -996,6 +996,12 @@ function buildThrowNewExpr(errorType, errorEntry, rawExpr, uuidExpr) {
   return `throw new ${errorType}(${argExprs})`;
 }
 
+function commandUuidExpr(inputOrParam, uc) {
+  const rawExpr = `command.${inputOrParam.name}()`;
+  const eventTriggered = !!(uc && uc.trigger && uc.trigger.kind === 'event');
+  return inputOrParam.type === 'Uuid' && eventTriggered ? rawExpr : `UUID.fromString(${rawExpr})`;
+}
+
 function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcYaml) {
   const lines = [];
   const extraImports = new Set();
@@ -1020,7 +1026,7 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
     const errorType = errorEntry ? errorEntry.errorType : 'NotFoundException';
     extraImports.add(`${packageName}.${moduleName}.domain.errors.${errorType}`);
     const rawCmdExpr = `command.${loadAggInput.name}()`;
-    const uuidCmdExpr = `UUID.fromString(${rawCmdExpr})`;
+    const uuidCmdExpr = commandUuidExpr(loadAggInput, uc);
     lines.push(
       `        ${agg.name} ${aggVarName} = ${repoFieldName}.findById(${uuidCmdExpr}).${buildOrElseThrowExpr(errorType, errorEntry, rawCmdExpr, uuidCmdExpr)};`
     );
@@ -1051,7 +1057,8 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
     const fkAggregate = fk.aggregate || fk.references;
     if (!fkAggregate) continue;
     const fkRawExpr = `command.${fkParam}()`;
-    const fkUuidExpr = `UUID.fromString(command.${fkParam}())`;
+    const fkInput = (uc.input || []).find((input) => input.name === fkParam);
+    const fkUuidExpr = commandUuidExpr({ name: fkParam, type: fkInput ? fkInput.type : 'String' }, uc);
     if (hasLocalReadModel(fk, bcYaml || { bc: moduleName, aggregates: [] })) {
       const fkRepoFieldName = `${toCamelCase(fkAggregate)}Repository`;
       extraImports.add(`${packageName}.${moduleName}.domain.errors.${fkErrorType}`);
@@ -1108,7 +1115,7 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
         const propGetters = inputVoDef.properties.map((p) => `command.${input.name}().${p.name}()`).join(', ');
         callArgs.push(`new ${input.type}(${propGetters})`);
       } else if (input.type === 'Uuid') {
-        callArgs.push(`UUID.fromString(command.${input.name}())`);
+        callArgs.push(commandUuidExpr(input, uc));
       } else if (input.type === 'Url') {
         extraImports.add('java.net.URI');
         callArgs.push(`URI.create(command.${input.name}())`);
@@ -1148,7 +1155,7 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
         const propGetters = paramVoDef.properties.map((prop) => `command.${p.name}().${prop.name}()`).join(', ');
         callArgs.push(`new ${p.type}(${propGetters})`);
       } else if (p.type === 'Uuid') {
-        callArgs.push(`UUID.fromString(command.${p.name}())`);
+        callArgs.push(commandUuidExpr(p, uc));
       } else if (p.type === 'Url') {
         extraImports.add('java.net.URI');
         callArgs.push(`URI.create(command.${p.name}())`);

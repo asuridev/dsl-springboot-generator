@@ -1,0 +1,4 @@
+{
+  "expectFailure": true,
+  "expectedErrorPattern": "uses unsupported status qualifier \"Archived\""
+}

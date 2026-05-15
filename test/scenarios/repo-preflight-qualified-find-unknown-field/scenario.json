@@ -1,0 +1,4 @@
+{
+  "expectFailure": true,
+  "expectedErrorPattern": "references unknown aggregate field \"missingField\""
+}

@@ -135,5 +135,12 @@ repositories:
             required: true
         returns: Boolean
         derivedFrom: RULE-CAT-003
+      - name: countActiveByCategoryId
+        params:
+          - name: categoryId
+            type: Uuid
+            required: true
+        returns: Long
+        derivedFrom: RULE-CAT-003
       - name: save
         signature: "save(Product): Product"

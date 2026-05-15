@@ -1,0 +1,8 @@
+{
+  "src/main/java/com/test/orders/infrastructure/persistence/repositories/CartJpaRepository.java": {
+    "contains": [
+      "@Query(\"SELECT c FROM CartJpa c WHERE c.status = 'ACTIVE' AND c.customerId = :customerId\")",
+      "Optional<CartJpa> findActiveByCustomerId(@Param(\"customerId\") UUID customerId);"
+    ]
+  }
+}

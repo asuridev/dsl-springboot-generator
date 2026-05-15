@@ -135,6 +135,33 @@ queryMethods:
 | `filterOn` | lista camelCase | no | Lista de columnas JPA sobre las que se aplica el filtro. Si se omite, se usa el nombre del propio parámetro como columna JPA. Cuando se declara `filterOn`, `operator` es **obligatorio**. |
 | `operator` | enum | no si `filterOn` omitido | Operador de comparación. Ver tabla siguiente. **Obligatorio** cuando se declara `filterOn`. Sin `filterOn`: default `EQ` para escalares, `IN` para `List[T]`. |
 
+#### Métodos `find{Qualifier}By{Field}`
+
+`find{Qualifier}By{Field}` declara una búsqueda por campo del agregado raíz más una condición de estado derivada del nombre.
+
+```yaml
+queryMethods:
+  - name: findActiveByCustomerId
+    params:
+      - name: customerId
+        type: Uuid
+        required: true
+    returns: Cart?
+```
+
+El generador emite una consulta equivalente a:
+
+```sql
+SELECT c FROM CartJpa c WHERE c.status = 'ACTIVE' AND c.customerId = :customerId
+```
+
+Reglas de validación:
+
+- `Active` debe resolver a un literal del enum del campo `status`/`*Status` (`ACTIVE`).
+- `CustomerId` debe resolver a un campo del agregado raíz (`customerId`).
+- Los retornos soportados son `T?`, `List[T]` y `Page[T]`.
+- Si el primer segmento no resuelve como estado, el generador conserva la convención `find{SubEntity}By{Field}` para subentidades.
+
 #### Operadores disponibles
 
 | Operador | JPQL generado | Uso típico |

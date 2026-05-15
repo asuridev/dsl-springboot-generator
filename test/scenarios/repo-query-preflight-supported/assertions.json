@@ -4,7 +4,8 @@
       "SELECT p FROM ProductJpa p WHERE p.status = 'ACTIVE'",
       "SELECT p FROM ProductJpa p WHERE (:categoryId IS NULL OR p.categoryId = :categoryId)",
       "SELECT p FROM ProductJpa p WHERE p.id IN :productIds",
-      "SELECT CASE WHEN COUNT(p) > 0 THEN true ELSE false END FROM ProductJpa p WHERE p.status = 'ACTIVE' AND p.categoryId = :categoryId"
+      "SELECT CASE WHEN COUNT(p) > 0 THEN true ELSE false END FROM ProductJpa p WHERE p.status = 'ACTIVE' AND p.categoryId = :categoryId",
+      "SELECT COUNT(p) FROM ProductJpa p WHERE p.status = 'ACTIVE' AND p.categoryId = :categoryId"
     ],
     "notContains": [
       "// TODO: write @Query"
