@@ -671,18 +671,21 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
   const fields = [];
   const voRequestsNeeded = new Set();
   const propMap = buildAggPropertyMap(agg);
-
-  // Event-triggered commands: if uc.input[] is empty, the command record is empty too
-  // (the listener calls new XyzCommand() with no args and the handler resolves what it
-  // needs from the aggregate repository). If uc.input[] is declared, those fields ARE
-  // included in the command record — they come from the consumed event payload via the
-  // listener. In that case we fall through to the normal field-building loop below.
   const isEventTriggered = !!(uc.trigger && uc.trigger.kind === 'event');
-  if (isEventTriggered && !(uc.input || []).some((i) => i.source !== 'authContext')) {
-    return { fields, imports: [...imports].sort(), voRequestsNeeded };
+  let commandInputs = uc.input || [];
+
+  // Event-triggered commands: uc.input[] narrows the command payload. When absent,
+  // mirror the listener fallback and use the consumed event payload. If neither is
+  // declared, the command record stays empty and the listener calls new XyzCommand().
+  if (isEventTriggered && !commandInputs.some((i) => i.source !== 'authContext')) {
+    const consumedEvent = (bcYaml?.domainEvents?.consumed || []).find((event) => event.name === uc.trigger.consumes);
+    commandInputs = consumedEvent?.payload || [];
+    if (commandInputs.length === 0) {
+      return { fields, imports: [...imports].sort(), voRequestsNeeded };
+    }
   }
 
-  for (const input of (uc.input || [])) {
+  for (const input of commandInputs) {
     // Fields sourced from authContext are injected in the handler, not in the command record
     if (input.source === 'authContext') continue;
 
@@ -1002,6 +1005,35 @@ function commandUuidExpr(inputOrParam, uc) {
   return inputOrParam.type === 'Uuid' && eventTriggered ? rawExpr : `UUID.fromString(${rawExpr})`;
 }
 
+function resolveCommandInputForDomainParam(param, uc, aggregateDef) {
+  const inputs = uc.input || [];
+  const byName = new Map(inputs.map((input) => [input.name, input]));
+  if (byName.has(param.name)) return byName.get(param.name);
+
+  const explicitName = param.input || param.inputName || param.sourceInput || param.field;
+  if (explicitName && byName.has(explicitName)) return byName.get(explicitName);
+
+  const candidates = [];
+  const aggregatePrefix = toCamelCase(aggregateDef?.name || '');
+  if (aggregatePrefix && param.name.startsWith(aggregatePrefix) && param.name.length > aggregatePrefix.length) {
+    const rest = param.name.slice(aggregatePrefix.length);
+    if (/^[A-Z]/.test(rest)) candidates.push(rest.charAt(0).toLowerCase() + rest.slice(1));
+  }
+  for (const entity of aggregateDef?.entities || []) {
+    const entityCamel = toCamelCase(entity.name);
+    if (param.name === `${entityCamel}Id` && entityCamel.startsWith(aggregatePrefix)) {
+      const rest = entityCamel.slice(aggregatePrefix.length);
+      if (rest) candidates.push(`${rest.charAt(0).toLowerCase() + rest.slice(1)}Id`);
+    }
+  }
+
+  for (const candidate of candidates) {
+    if (byName.has(candidate)) return byName.get(candidate);
+  }
+
+  return null;
+}
+
 function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcYaml) {
   const lines = [];
   const extraImports = new Set();
@@ -1139,6 +1171,8 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
         callArgs.push(`UUID.fromString(SecurityContextUtil.currentUserClaim("sub"))`);
         continue;
       }
+      const commandInput = resolveCommandInputForDomainParam(p, uc, aggDef);
+      const commandParam = commandInput ? { ...p, name: commandInput.name, type: commandInput.type || p.type } : p;
       // Check for List[MultiPropVO] — convert List<VoRequest> → List<DomainVo>
       const listInnerMatchP = /^List\[(.+)\]$/.exec(p.type);
       const listInnerVoNameP = listInnerMatchP ? listInnerMatchP[1] : null;
@@ -1149,18 +1183,18 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
       if (listInnerVoDefP) {
         extraImports.add(`${packageName}.${moduleName}.domain.valueobject.${listInnerVoNameP}`);
         const ctorArgs = listInnerVoDefP.properties.map((prop) => `r.${prop.name}()`).join(', ');
-        callArgs.push(`command.${p.name}().stream().map(r -> new ${listInnerVoNameP}(${ctorArgs})).toList()`);
+        callArgs.push(`command.${commandParam.name}().stream().map(r -> new ${listInnerVoNameP}(${ctorArgs})).toList()`);
       } else if (paramVoDef) {
         extraImports.add(`${packageName}.${moduleName}.domain.valueobject.${p.type}`);
-        const propGetters = paramVoDef.properties.map((prop) => `command.${p.name}().${prop.name}()`).join(', ');
+        const propGetters = paramVoDef.properties.map((prop) => `command.${commandParam.name}().${prop.name}()`).join(', ');
         callArgs.push(`new ${p.type}(${propGetters})`);
       } else if (p.type === 'Uuid') {
-        callArgs.push(commandUuidExpr(p, uc));
+        callArgs.push(commandUuidExpr(commandParam, uc));
       } else if (p.type === 'Url') {
         extraImports.add('java.net.URI');
-        callArgs.push(`URI.create(command.${p.name}())`);
+        callArgs.push(`URI.create(command.${commandParam.name}())`);
       } else {
-        callArgs.push(`command.${p.name}()`);
+        callArgs.push(`command.${commandParam.name}()`);
       }
     }
   }

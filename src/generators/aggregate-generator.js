@@ -183,27 +183,30 @@ function detectStateTransition(ucId, aggregate, bcEnums) {
 //
 // eventConfig (Phase 1): { bcName, metadataEnabled } — when metadataEnabled,
 // prepends an EventMetadata.now("<EventName>", <version>, "<bcName>") argument.
-function buildRaiseCall(eventNameOrList, publishedEvents, aggregate, methodParams, eventConfig = null) {
+function buildRaiseCall(eventNameOrList, publishedEvents, aggregate, methodParams, eventConfig = null, bcEnums = []) {
   if (!eventNameOrList) return null;
   if (!publishedEvents || publishedEvents.length === 0) return null;
 
   if (Array.isArray(eventNameOrList)) {
     const calls = eventNameOrList
-      .map((n) => buildRaiseCallSingle(n, publishedEvents, aggregate, methodParams, eventConfig))
+      .map((n) => buildRaiseCallSingle(n, publishedEvents, aggregate, methodParams, eventConfig, bcEnums))
       .filter(Boolean);
     if (calls.length === 0) return null;
     return calls.join('\n        ');
   }
-  return buildRaiseCallSingle(eventNameOrList, publishedEvents, aggregate, methodParams, eventConfig);
+  return buildRaiseCallSingle(eventNameOrList, publishedEvents, aggregate, methodParams, eventConfig, bcEnums);
 }
 
-function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParams, eventConfig = null) {
+function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParams, eventConfig = null, bcEnums = []) {
   const event = publishedEvents.find((e) => e.name === eventName);
   if (!event) return null;
 
   const aggregateCamelId = aggregate.name.charAt(0).toLowerCase() + aggregate.name.slice(1) + 'Id';
   const aggregatePropNames = new Set((aggregate.properties || []).map((pr) => pr.name));
+  const aggregatePropByName = new Map((aggregate.properties || []).map((pr) => [pr.name, pr]));
   const methodParamNames = new Set((methodParams || []).map((p) => p.name));
+  const methodParamByName = new Map((methodParams || []).map((p) => [p.name, p]));
+  const enumNames = new Set((bcEnums || []).map((e) => e.name));
 
   // Phase 1: when metadata is enabled, the canonical fields are carried by the
   // EventMetadata record component, not by the payload. Filter them out so we
@@ -217,6 +220,17 @@ function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParam
 
   const unresolved = [];
   const getterFor = (propName) => `this.get${propName.charAt(0).toUpperCase() + propName.slice(1)}()`;
+  const enumTypeName = (type) => {
+    if (!type) return null;
+    const match = /^Enum<(.+)>$/.exec(type);
+    return match ? match[1] : type;
+  };
+  const isEnumType = (type) => enumNames.has(enumTypeName(type));
+  const isStringType = (type) => /^String(?:\(\d+\))?$/.test(type || '');
+  const coerceForPayload = (expr, sourceType, payloadType) => {
+    if (isEnumType(sourceType) && isStringType(payloadType)) return `${expr}.name()`;
+    return expr;
+  };
   // Phase 3: explicit source mapping — payload[].source overrides the heuristic.
   // Supported: aggregate | param | timestamp | constant | auth-context | derived
   const resolveExplicit = (p) => {
@@ -237,7 +251,7 @@ function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParam
         if (p.subField) {
           return `${getterFor(field)}.get${p.subField.charAt(0).toUpperCase() + p.subField.slice(1)}()`;
         }
-        return getterFor(field);
+        return coerceForPayload(getterFor(field), aggregatePropByName.get(field)?.type, p.type);
       }
       case 'param': {
         const pname = p.param || p.name;
@@ -245,7 +259,7 @@ function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParam
           unresolved.push(`${p.name} (source: param, param: ${pname} not found)`);
           return `null /* TODO domainEvent(${event.name}, ${p.name}): source=param but parameter "${pname}" not in method signature */`;
         }
-        return pname;
+        return coerceForPayload(pname, methodParamByName.get(pname)?.type, p.type);
       }
       case 'timestamp':
         return 'Instant.now()';
@@ -280,8 +294,8 @@ function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParam
     if (explicit !== null) return explicit;
 
     if (p.name === aggregateCamelId) return 'this.getId()';
-    if (aggregatePropNames.has(p.name)) return getterFor(p.name);
-    if (methodParamNames.has(p.name)) return p.name;
+    if (aggregatePropNames.has(p.name)) return coerceForPayload(getterFor(p.name), aggregatePropByName.get(p.name)?.type, p.type);
+    if (methodParamNames.has(p.name)) return coerceForPayload(p.name, methodParamByName.get(p.name)?.type, p.type);
     if (p.type === 'DateTime' || p.type === 'Instant') return 'Instant.now()';
     // gap #19: surface unresolved mappings instead of silently emitting `null`.
     unresolved.push(p.name);
@@ -349,12 +363,12 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
           body += `        ${transitionLine}`;
         }
         const emitsName = sig.emits || transition.emits;
-        const raiseCall = buildRaiseCall(emitsName, publishedEvents, aggregate, params, eventConfig);
+        const raiseCall = buildRaiseCall(emitsName, publishedEvents, aggregate, params, eventConfig, bcEnums);
         if (raiseCall) body += `\n        ${raiseCall}`;
         return body;
       }
     }
-    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig);
+    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig, bcEnums);
     if (raiseCall) {
       return `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}\n        ${raiseCall}`;
     }
@@ -373,7 +387,7 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
         body = transitionLine;
       }
       const emitsName = sig.emits || transition.emits;
-      const raiseCall = buildRaiseCall(emitsName, publishedEvents, aggregate, params, eventConfig);
+      const raiseCall = buildRaiseCall(emitsName, publishedEvents, aggregate, params, eventConfig, bcEnums);
       if (raiseCall) body += `\n        ${raiseCall}`;
       return body;
     }
@@ -407,7 +421,7 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
       let body = isOneToOne
         ? `this.${fieldName} = new ${entity.name}(${ctorArgs});`
         : `this.${fieldName}.add(new ${entity.name}(${ctorArgs}));`;
-      const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig);
+      const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig, bcEnums);
       if (raiseCall) body += `\n        ${raiseCall}`;
       return body;
     }
@@ -431,7 +445,7 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
       let body = isOneToOne
         ? `if (this.${fieldName} != null && this.${fieldName}.getId().equals(${idParam})) {\n            this.${fieldName} = null;\n        }`
         : `this.${fieldName}.removeIf(${varName} -> ${varName}.getId().equals(${idParam}));`;
-      const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig);
+      const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig, bcEnums);
       if (raiseCall) body += `\n        ${raiseCall}`;
       return body;
     }
@@ -443,14 +457,14 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
   );
   if (allMatch) {
     let body = params.map((p) => `this.${p.name} = ${p.name};`).join('\n        ');
-    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig);
+    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig, bcEnums);
     if (raiseCall) body += `\n        ${raiseCall}`;
     return body;
   }
 
   // ── Fallback: scaffold ──────────────────────────────────────────
   {
-    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig);
+    const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig, bcEnums);
     if (raiseCall) {
       return `// TODO: implement business logic — ver ${bcName}-flows.md\n        ${raiseCall}`;
     }
@@ -886,7 +900,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
             factoryParamNames.has(p.name) ? p.name : `null /* TODO: compute ${p.name} */`
           ).join(', ');
           const dmCreateEmits = (dmCreate.emitsList && dmCreate.emitsList.length > 0) ? dmCreate.emitsList : null;
-          const raiseCallRaw = buildRaiseCall(dmCreateEmits, aggregatePublishedEvents, aggregate, dmCreate.params || [], eventConfig);
+          const raiseCallRaw = buildRaiseCall(dmCreateEmits, aggregatePublishedEvents, aggregate, dmCreate.params || [], eventConfig, bcYaml.enums || []);
           // In the static factory the variable is named `instance`, not `this`.
           // Strip the "// derived_from: ..." comment prefix (incompatible with inline call)
           // and rewrite `this.` → `instance.` so the call compiles inside a static method.

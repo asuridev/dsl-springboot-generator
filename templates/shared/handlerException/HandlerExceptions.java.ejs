@@ -30,6 +30,8 @@ import org.springframework.security.access.AccessDeniedException;
 
 <% const constraintMap = (typeof constraintErrorMap !== 'undefined' ? constraintErrorMap : []) || []; -%>
 <% const infraMap = (typeof infrastructureErrorMap !== 'undefined' ? infrastructureErrorMap : []) || []; -%>
+<% const dataIntegrityInfra = infraMap.find(i => i.triggerSimple === 'DataIntegrityViolationException') || null; -%>
+<% const dedicatedInfraMap = infraMap.filter(i => i.triggerSimple !== 'DataIntegrityViolationException'); -%>
 <% constraintMap.forEach(c => { -%>
 import <%= c.errorClassFqn %>;
 <% }); -%>
@@ -38,7 +40,7 @@ import java.util.Map;
 <% } -%>
 <% infraMap.forEach(i => { -%>
 import <%= i.errorClassFqn %>;
-<% if (i.triggerFqn.includes('.')) { -%>
+<% if (i.triggerFqn.includes('.') && i.triggerSimple !== 'DataIntegrityViolationException') { -%>
 import <%= i.triggerFqn %>;
 <% } -%>
 <% }); -%>
@@ -133,9 +135,26 @@ public class HandlerExceptions {
             }
         }
 <% } -%>
+<% if (dataIntegrityInfra) { -%>
+    // `DataIntegrityViolationException` already has a framework-level handler
+    // in this class. Infrastructure mappings that target it are resolved here
+    // to avoid ambiguous Spring @ExceptionHandler mappings at startup.
+    DomainException domainEx = new <%= dataIntegrityInfra.errorClassSimple %>();
+    Integer rawStatus = domainEx.getHttpStatus();
+    HttpStatus status = rawStatus != null ? HttpStatus.valueOf(rawStatus) : HttpStatus.CONFLICT;
+    ErrorResponse mappedBody = new ErrorResponse(
+        status.value(),
+        status.getReasonPhrase(),
+        domainEx.getCode(),
+        domainEx.getMessage() != null ? domainEx.getMessage() : status.getReasonPhrase(),
+        domainEx.getDetails()
+    );
+    return ResponseEntity.status(status).body(mappedBody);
+<% } else { -%>
         ErrorResponse body = new ErrorResponse(HttpStatus.CONFLICT.value(), "Conflict",
                 "Data integrity violation — a constraint was not satisfied");
         return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+<% } -%>
     }
 <% if (constraintMap.length > 0) { -%>
 
@@ -241,7 +260,7 @@ public class HandlerExceptions {
         );
         return ResponseEntity.status(http).body(body);
     }
-<% if (infraMap.length > 0) { -%>
+<% if (dedicatedInfraMap.length > 0) { -%>
 
     // ── Infrastructure → domain error translation ─────────────────
     // [Phase 4, Gap E5] Each `errors[]` entry declared with
@@ -249,7 +268,7 @@ public class HandlerExceptions {
     // dedicated handler that converts the underlying JVM exception into
     // the corresponding domain error. The original cause is preserved as
     // the throwable cause when the domain error declares `chainable: true`.
-<% infraMap.forEach(i => { -%>
+<% dedicatedInfraMap.forEach(i => { -%>
 
     @ExceptionHandler(<%= i.triggerSimple %>.class)
     @ResponseBody
