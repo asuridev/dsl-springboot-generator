@@ -607,6 +607,21 @@ async function buildCommand(options = {}) {
       }
     }
 
+    // ── Phase 3 skill + agent deployment ────────────────────────────────────
+    const skillsSrcDir = path.join(__dirname, '..', 'skills');
+    if (await fs.pathExists(skillsSrcDir)) {
+      const skillsDestDir = path.join(outputDir, '.agents', 'skills');
+      await fs.copy(skillsSrcDir, skillsDestDir, { overwrite: true });
+      logger.success('Phase 3 skills deployed to .agents/skills/');
+    }
+
+    const agentsSrcDir = path.join(__dirname, '..', 'agents');
+    if (await fs.pathExists(agentsSrcDir)) {
+      const agentsDestDir = path.join(outputDir, '.github', 'agents');
+      await fs.copy(agentsSrcDir, agentsDestDir, { overwrite: true });
+      logger.success('Phase 3 agents deployed to .github/agents/');
+    }
+
     console.log('');
     logger.success('Build complete!');
     logger.info(`Project generated at: ${outputDir}`);
