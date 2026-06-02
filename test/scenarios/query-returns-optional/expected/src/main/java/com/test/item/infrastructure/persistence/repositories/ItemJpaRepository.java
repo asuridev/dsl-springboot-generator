@@ -14,5 +14,6 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 public interface ItemJpaRepository extends JpaRepository<ItemJpa, UUID> {
+    @Query("SELECT i FROM ItemJpa i WHERE i.name = :name")
     Optional<ItemJpa> findItemByName(@Param("name") String name);
 }

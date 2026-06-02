@@ -34,7 +34,7 @@ public class HandlerExceptions {
 
     // ── Validation errors ──────────────────────────────────────────
 
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
     @ExceptionHandler(MethodArgumentNotValidException.class)
     @ResponseBody
     public ErrorResponse onMethodArgumentNotValidException(MethodArgumentNotValidException ex) {
@@ -44,10 +44,16 @@ public class HandlerExceptions {
             .stream()
             .map(error -> error.getField() + " " + error.getDefaultMessage())
             .toList();
-        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", "Validation failed", details);
+        return new ErrorResponse(
+            HttpStatus.UNPROCESSABLE_ENTITY.value(),
+            "Validation Error",
+            "VALIDATION_ERROR",
+            "Validation failed",
+            details
+        );
     }
 
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
     @ExceptionHandler(ConstraintViolationException.class)
     @ResponseBody
     public ErrorResponse onConstraintViolationException(ConstraintViolationException ex) {
@@ -56,7 +62,13 @@ public class HandlerExceptions {
             .stream()
             .map(v -> v.getPropertyPath() + " " + v.getMessage())
             .toList();
-        return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", "Constraint violation", details);
+        return new ErrorResponse(
+            HttpStatus.UNPROCESSABLE_ENTITY.value(),
+            "Validation Error",
+            "VALIDATION_ERROR",
+            "Constraint violation",
+            details
+        );
     }
 
     @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)

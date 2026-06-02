@@ -1,0 +1,5 @@
+integration:
+
+  search-service.base-url: ${SEARCH_SERVICE_URL}
+
+

@@ -793,6 +793,13 @@ function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
       const paramName = (params && params[0] && params[0].name) || field;
       return `SELECT ${a} FROM ${jpaEntityName} ${a} JOIN ${a}.${collectionField} ${v} WHERE ${v}.${field} = :${paramName}`;
     }
+    // Qualifier is the aggregate root itself (e.g. findItemByName on Item aggregate).
+    // Emit a simple field equality lookup on the root entity.
+    if (aggregate && entityNameSuffix === aggregate.name) {
+      const a = jpaEntityName.charAt(0).toLowerCase();
+      const paramName = (params && params[0] && params[0].name) || field;
+      return `SELECT ${a} FROM ${jpaEntityName} ${a} WHERE ${a}.${field} = :${paramName}`;
+    }
   }
 
   return null;

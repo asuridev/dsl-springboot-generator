@@ -1,0 +1,28 @@
+package com.test.shared.domain.customExceptions;
+
+import java.util.List;
+
+public class BadRequestException extends DomainException {
+
+    public BadRequestException(String msg) {
+        super(msg);
+    }
+
+    public BadRequestException(String msg, Throwable cause) {
+        super(msg, cause);
+    }
+
+    public BadRequestException(String msg, String code, Object[] args) {
+        super(msg, code, args);
+    }
+
+    public BadRequestException(String msg, String code, Integer httpStatus, Object[] args) {
+        super(msg, code, httpStatus, args);
+    }
+
+    public BadRequestException(String msg, String code, Integer httpStatus, Object[] args, List<String> details) {
+        super(msg, code, httpStatus, args, details);
+    }
+
+    protected BadRequestException() {}
+}

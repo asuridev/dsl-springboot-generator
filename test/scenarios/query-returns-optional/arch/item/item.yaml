@@ -58,6 +58,7 @@ errors:
   - code: ITEM_NOT_FOUND
     httpStatus: 404
     description: Item not found.
+    usedFor: manual
 
 repositories:
   - aggregate: Item

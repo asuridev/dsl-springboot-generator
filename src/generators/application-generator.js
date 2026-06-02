@@ -651,6 +651,17 @@ function getTypeValidationAnnotations(rawType, imports) {
   return [];
 }
 
+function getCollectionSizeAnnotations(inputOrSchema, imports) {
+  const min = inputOrSchema?.minSize ?? inputOrSchema?.minItems;
+  const max = inputOrSchema?.maxSize ?? inputOrSchema?.maxItems;
+  if (min == null && max == null) return [];
+  imports.add(`${JAKARTA}.Size`);
+  const attrs = [];
+  if (min != null) attrs.push(`min = ${min}`);
+  if (max != null) attrs.push(`max = ${max}`);
+  return [`@Size(${attrs.join(', ')})`];
+}
+
 /**
  * Returns the presence annotation (@NotBlank for String, @NotNull for all others)
  * when the field is required. Returns [] for optional fields.
@@ -718,6 +729,7 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
         imports.add(`${JAKARTA}.NotNull`);
         annotations.push('@NotNull');
       }
+      annotations.push(...getCollectionSizeAnnotations(input, imports));
       annotations.push('@Valid');
       fields.push({ type: `List<${listInnerVoName}Request>`, name: input.name, annotations });
       voRequestsNeeded.add(listInnerVoName);
@@ -770,6 +782,7 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
 
       // 2. Type-based annotations (e.g. @Size(max=n) for String(n), @Email)
       const typeAnnotations = getTypeValidationAnnotations(rawType, imports);
+      const collectionAnnotations = /^List\[/.test(rawType) ? getCollectionSizeAnnotations(input, imports) : [];
 
       // 3. DSL validations[] from aggregate property definition
       const { annotations: dslAnnotations, imports: dslImports } =
@@ -777,7 +790,7 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
       for (const imp of dslImports) imports.add(imp);
 
       // 4. Merge @Size(max=n) + @Size(min=N) → @Size(min=N, max=n)
-      const mergedAnnotations = mergeAnnotations(typeAnnotations, dslAnnotations);
+      const mergedAnnotations = mergeAnnotations([...typeAnnotations, ...collectionAnnotations], dslAnnotations);
 
       // 5. Final order: required → type/dsl merged
       fields.push({ type: javaType, name: input.name, annotations: [...requiredAnnotations, ...mergedAnnotations] });
@@ -1091,10 +1104,20 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
     const fkRawExpr = `command.${fkParam}()`;
     const fkInput = (uc.input || []).find((input) => input.name === fkParam);
     const fkUuidExpr = commandUuidExpr({ name: fkParam, type: fkInput ? fkInput.type : 'String' }, uc);
+    const isConditionalFk = fk.conditional === true || fkInput?.required === false;
+    const appendFkLine = (line) => {
+      if (isConditionalFk) {
+        lines.push(`        if (${fkRawExpr} != null) {`);
+        lines.push(`    ${line}`);
+        lines.push('        }');
+      } else {
+        lines.push(line);
+      }
+    };
     if (hasLocalReadModel(fk, bcYaml || { bc: moduleName, aggregates: [] })) {
       const fkRepoFieldName = `${toCamelCase(fkAggregate)}Repository`;
       extraImports.add(`${packageName}.${moduleName}.domain.errors.${fkErrorType}`);
-      lines.push(
+      appendFkLine(
         `        if (${fkRepoFieldName}.findById(${fkUuidExpr}).isEmpty()) ${buildThrowNewExpr(fkErrorType, fkErrorEntry, fkRawExpr, fkUuidExpr)};`
       );
     } else if (fk.bc) {
@@ -1102,7 +1125,7 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
       const portFieldName = `${toCamelCase(fk.bc)}ServicePort`;
       const methodName = `exists${fkAggregate}`;
       extraImports.add(`${packageName}.${moduleName}.domain.errors.${fkErrorType}`);
-      lines.push(
+      appendFkLine(
         `        if (!${portFieldName}.${methodName}(${fkUuidExpr})) ${buildThrowNewExpr(fkErrorType, fkErrorEntry, fkRawExpr, fkUuidExpr)};`
       );
     }
@@ -2187,6 +2210,9 @@ function buildInternalSchemaFields(schemaName, components, forCommand = false, c
       if (requiredSet.has(propName) && propSchema.type !== 'integer' && propSchema.type !== 'boolean') {
         imports.add('jakarta.validation.constraints.NotNull');
         annotations.push('@NotNull');
+      }
+      if (propSchema.type === 'array') {
+        annotations.push(...getCollectionSizeAnnotations(propSchema, imports));
       }
     }
     fields.push({ type: javaType, name: propName, annotations });

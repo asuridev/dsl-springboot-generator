@@ -1,0 +1,5 @@
+integration:
+
+  search-service.base-url: https://api.search-service.example.com
+
+

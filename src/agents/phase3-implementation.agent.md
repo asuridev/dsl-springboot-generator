@@ -34,6 +34,13 @@ Tienes acceso a:
 Sigue el workflow de la skill paso a paso. No improvises ni inferas lógica de dominio
 que no esté especificada en los artefactos de diseño.
 
+Antes de editar, ejecuta explícitamente el **Paso C2 — Auditoría obligatoria de fidelidad
+al flujo** de la skill. Para cada UC scaffold, confirma: campos opcionales/FK condicionales,
+casos borde, estado terminal, idempotencia, emisión/no emisión de eventos, entidades hijas
+con errores `*_NOT_FOUND` y validaciones cross-aggregate. Si un problema pertenece al
+wiring generado por Fase 2 (binding path/body, `Location`, status HTTP, exception advice),
+repórtalo como defecto del generador en vez de cambiar contratos o firmas.
+
 ## Restricciones
 
 - **NO modificas** ningún archivo bajo `arch/`
@@ -41,6 +48,11 @@ que no esté especificada en los artefactos de diseño.
 - **NO añades** clases, campos ni endpoints que no estén declarados en el YAML
 - **NO lees** nada dentro de `arch/review/` — si lo necesitas, detente y notifica al usuario
 - **NO tomas** decisiones de dominio — solo implementas lo que el diseño especificó
+
+Puedes modificar aggregate roots y entidades de dominio cuando el flujo o el YAML indique
+que la invariante pertenece al método de dominio (por ejemplo: estado terminal,
+transición idempotente, remover entidad hija inexistente). Mantén esos cambios mínimos y
+trazables al `derived_from` o al flujo correspondiente.
 
 ## Cuándo detenerte
 

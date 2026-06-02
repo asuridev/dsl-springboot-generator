@@ -1,0 +1,24 @@
+package com.test.shared.infrastructure.web;
+
+import java.lang.annotation.ElementType;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.lang.annotation.Target;
+
+/**
+ * Marks an HTTP endpoint as idempotent. The {@link IdempotencyFilter} reads
+ * the named header from the incoming request, and — when present — replays
+ * the previously stored response for the same key instead of re-invoking the
+ * handler. Stored responses expire after {@code ttl} (ISO-8601 duration).
+ *
+ * derived_from: useCases[*].idempotency
+ */
+@Target(ElementType.METHOD)
+@Retention(RetentionPolicy.RUNTIME)
+public @interface Idempotent {
+    /** HTTP request header carrying the idempotency key (e.g. "Idempotency-Key"). */
+    String header();
+
+    /** ISO-8601 duration after which the cached response is discarded (e.g. "PT24H", "P1D"). */
+    String ttl();
+}

@@ -1,0 +1,89 @@
+package com.test.shared.infrastructure.web;
+
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
+import java.util.Base64;
+import java.util.concurrent.TimeUnit;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Component;
+
+/**
+ * Redis-backed implementation of {@link IdempotencyStore}.
+ *
+ * Key layout (all values are JSON strings):
+ *   "idempotency:{key}"  →  { "state": "PENDING" }
+ *                        →  { "state": "COMPLETE", "status": 200, "body": "<base64>", "contentType": "application/json" }
+ *
+ * PENDING entries use a short TTL equal to {@code ttl} so they are auto-cleaned
+ * if the service crashes before calling {@link #release} or {@link #complete}.
+ *
+ * derived_from: useCases[*].idempotency.storage = cache
+ */
+@Component
+public class RedisIdempotencyStore implements IdempotencyStore {
+
+    private static final String PREFIX = "idempotency:";
+
+    private final StringRedisTemplate redis;
+    private final ObjectMapper mapper;
+
+    public RedisIdempotencyStore(StringRedisTemplate redis, ObjectMapper mapper) {
+        this.redis = redis;
+        this.mapper = mapper;
+    }
+
+    @Override
+    public FindResult find(String key) {
+        String raw = redis.opsForValue().get(PREFIX + key);
+        if (raw == null) {
+            return new FindResult(State.ABSENT, null);
+        }
+        try {
+            var node = mapper.readTree(raw);
+            String state = node.path("state").asText();
+            if ("COMPLETE".equals(state)) {
+                int status = node.path("status").asInt();
+                String bodyBase64 = node.path("body").asText(null);
+                byte[] body = bodyBase64 != null ? Base64.getDecoder().decode(bodyBase64) : null;
+                String contentType = node.path("contentType").asText(null);
+                return new FindResult(State.COMPLETE, new StoredResponse(status, body, contentType));
+            }
+            return new FindResult(State.PENDING, null);
+        } catch (JsonProcessingException e) {
+            // Corrupt entry — treat as absent so the request proceeds.
+            return new FindResult(State.ABSENT, null);
+        }
+    }
+
+    @Override
+    public boolean claim(String key, Duration ttl) {
+        String value = "{\"state\":\"PENDING\"}";
+        Boolean set = redis.opsForValue().setIfAbsent(PREFIX + key, value, ttl.toSeconds(), TimeUnit.SECONDS);
+        return Boolean.TRUE.equals(set);
+    }
+
+    @Override
+    public void complete(String key, String requestHash, StoredResponse response, Duration ttl) {
+        try {
+            String bodyBase64 = response.body() != null ? Base64.getEncoder().encodeToString(response.body()) : null;
+            var payload = mapper.createObjectNode();
+            payload.put("state", "COMPLETE");
+            payload.put("requestHash", requestHash);
+            payload.put("status", response.status());
+            if (bodyBase64 != null) payload.put("body", bodyBase64);
+            if (response.contentType() != null) payload.put("contentType", response.contentType());
+            redis
+                .opsForValue()
+                .set(PREFIX + key, mapper.writeValueAsString(payload), ttl.toSeconds(), TimeUnit.SECONDS);
+        } catch (JsonProcessingException e) {
+            // Serialization failure should never happen with simple types.
+            throw new IllegalStateException("Failed to serialize idempotency response for key: " + key, e);
+        }
+    }
+
+    @Override
+    public void release(String key) {
+        redis.delete(PREFIX + key);
+    }
+}

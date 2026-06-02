@@ -1,0 +1,156 @@
+package com.test.shared.infrastructure.web;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import java.io.IOException;
+import java.lang.reflect.Method;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.time.Duration;
+import java.util.HexFormat;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.web.method.HandlerMethod;
+import org.springframework.web.servlet.HandlerExecutionChain;
+import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
+import org.springframework.web.util.ContentCachingRequestWrapper;
+import org.springframework.web.util.ContentCachingResponseWrapper;
+
+/**
+ * Servlet filter that gives {@link Idempotent}-annotated controller methods
+ * exactly-once semantics using a three-state protocol:
+ *
+ *   ABSENT  + claim() wins  → execute handler → complete() on 2xx / release() otherwise
+ *   ABSENT  + claim() loses → 409 Conflict (concurrent duplicate)
+ *   PENDING                 → 409 Conflict (in-flight duplicate)
+ *   COMPLETE                → replay stored response
+ *
+ * The filter uses {@link ContentCachingResponseWrapper} so it can inspect and
+ * store the response body after the handler executes.
+ *
+ * derived_from: useCases[*].idempotency
+ */
+@Component
+public class IdempotencyFilter extends OncePerRequestFilter {
+
+    private final IdempotencyStore store;
+    private final RequestMappingHandlerMapping handlerMapping;
+
+    public IdempotencyFilter(
+        IdempotencyStore store,
+        @Qualifier("requestMappingHandlerMapping") RequestMappingHandlerMapping handlerMapping
+    ) {
+        this.store = store;
+        this.handlerMapping = handlerMapping;
+    }
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+        throws ServletException, IOException {
+        Idempotent annotation = resolveAnnotation(request);
+        if (annotation == null) {
+            chain.doFilter(request, response);
+            return;
+        }
+
+        String key = request.getHeader(annotation.header());
+        if (key == null || key.isBlank()) {
+            response.sendError(
+                HttpServletResponse.SC_BAD_REQUEST,
+                "Missing required idempotency header: " + annotation.header()
+            );
+            return;
+        }
+
+        Duration ttl = Duration.parse(annotation.ttl());
+
+        // ── State probe ──────────────────────────────────────────────────────
+        IdempotencyStore.FindResult result = store.find(key);
+
+        if (result.state() == IdempotencyStore.State.COMPLETE) {
+            writeCached(response, result.response());
+            return;
+        }
+
+        if (result.state() == IdempotencyStore.State.PENDING) {
+            response.sendError(
+                HttpStatus.CONFLICT.value(),
+                "A request with the same idempotency key is currently being processed."
+            );
+            return;
+        }
+
+        // ABSENT — attempt to claim the slot atomically
+        if (!store.claim(key, ttl)) {
+            // Another thread/node claimed it in the race window
+            response.sendError(
+                HttpStatus.CONFLICT.value(),
+                "A request with the same idempotency key is currently being processed."
+            );
+            return;
+        }
+
+        // We hold the PENDING slot — execute the handler
+        ContentCachingRequestWrapper requestWrapper = new ContentCachingRequestWrapper(request);
+        ContentCachingResponseWrapper responseWrapper = new ContentCachingResponseWrapper(response);
+
+        try {
+            chain.doFilter(requestWrapper, responseWrapper);
+
+            int status = responseWrapper.getStatus();
+            if (status >= 200 && status < 300) {
+                byte[] body = responseWrapper.getContentAsByteArray();
+                String contentType = responseWrapper.getContentType();
+                String hash = sha256(requestWrapper.getContentAsByteArray());
+                store.complete(key, hash, new IdempotencyStore.StoredResponse(status, body, contentType), ttl);
+            } else {
+                // Non-2xx: release so clients may retry with the same key
+                store.release(key);
+            }
+        } catch (Exception ex) {
+            store.release(key);
+            throw ex;
+        } finally {
+            responseWrapper.copyBodyToResponse();
+        }
+    }
+
+    private Idempotent resolveAnnotation(HttpServletRequest request) {
+        try {
+            HandlerExecutionChain chain = handlerMapping.getHandler(request);
+            if (chain == null) return null;
+            Object handler = chain.getHandler();
+            if (!(handler instanceof HandlerMethod handlerMethod)) return null;
+            Method method = handlerMethod.getMethod();
+            return method.getAnnotation(Idempotent.class);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static void writeCached(HttpServletResponse response, IdempotencyStore.StoredResponse cached)
+        throws IOException {
+        response.setStatus(cached.status());
+        if (cached.contentType() != null) {
+            response.setContentType(cached.contentType());
+        }
+        if (cached.body() != null && cached.body().length > 0) {
+            response.getOutputStream().write(cached.body());
+            response.getOutputStream().flush();
+        }
+    }
+
+    private static String sha256(byte[] bytes) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            return HexFormat.of().formatHex(digest.digest(bytes == null ? new byte[0] : bytes));
+        } catch (NoSuchAlgorithmException ex) {
+            // SHA-256 is mandated by every JRE; failure is impossible.
+            return Integer.toHexString(java.util.Arrays.hashCode(bytes));
+        }
+    }
+}

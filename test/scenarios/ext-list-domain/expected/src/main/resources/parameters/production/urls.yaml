@@ -1,0 +1,5 @@
+integration:
+
+  order-hub.base-url: ${ORDER_HUB_URL}
+
+

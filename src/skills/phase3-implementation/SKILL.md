@@ -86,6 +86,35 @@ Lee `references/virtual-threads-in-handlers.md` para decidir. Solo aplica cuando
 Implementa primero los domain services (si hay), luego los handlers que los usan.
 Dentro de los handlers, sigue el orden de los flujos en `flows.md`.
 
+### Paso C2 — Auditoría obligatoria de fidelidad al flujo
+
+Antes de editar cualquier handler o aggregate, construye una mini-checklist por UC usando
+`{bc-name}.yaml` + `{bc-name}-flows.md`:
+
+- **Campos opcionales**: si un input tiene `required: false` o una `fkValidation` tiene
+    `conditional: true`, el handler solo debe parsear/consultar ese valor cuando venga presente.
+    Nunca hagas `UUID.fromString(command.x())` sobre un campo opcional sin guardia.
+- **Casos borde**: cada entrada en "Casos borde" del flujo debe quedar cubierta por una
+    excepción de dominio, una transición idempotente o una respuesta explícita. Si el código
+    generado no tiene el error/clase necesaria, detente y repórtalo.
+- **Estado terminal**: si una regla `terminalState` o el flujo dice que un agregado en estado
+    terminal no puede modificarse, verifica todos los métodos afectados (`update`, `addChild`,
+    `removeChild`, cambios de estado), no solo el handler principal.
+- **Transiciones idempotentes**: si el flujo exige `204` cuando el estado ya es el destino,
+    el domain method debe retornar sin emitir un evento duplicado.
+- **Entidades hijas**: si un flujo exige `*_NOT_FOUND` al remover/actualizar una entidad hija,
+    el aggregate debe buscar primero y lanzar el error; no uses `removeIf` silencioso.
+- **Eventos**: confirma tanto la emisión como la no-emisión. Los flujos de error o de
+    idempotencia no deben publicar eventos si el diseño lo prohíbe.
+- **Cross-aggregate**: cualquier validación que consulte otro aggregate local requiere el
+    repository correspondiente y debe ejecutarse antes del domain method.
+- **Wiring HTTP generado**: si detectas binding path/body incorrecto, falta de `Location`,
+    status HTTP incorrecto o advice de validación mal generado, repórtalo como defecto de
+    Fase 2. No cambies firmas ni contratos para compensarlo salvo instrucción explícita.
+
+Si la checklist revela una contradicción entre YAML, OpenAPI/AsyncAPI y flows.md, detente
+antes de implementar y reporta la inconsistencia exacta.
+
 ---
 
 ### Paso D — Crear domain services (si son necesarios)
@@ -110,6 +139,8 @@ Para cada handler TODO:
 3. Implementa siguiendo estrictamente los pasos del Then
 4. Elimina el `throw new UnsupportedOperationException(...)` al terminar
 5. Preserva el comentario `derived_from:` en el Javadoc
+6. Vuelve a revisar la checklist del Paso C2 para confirmar que no quedó ningún caso borde
+    del flujo sin implementar.
 
 **Patrón de un handler command típico:**
 

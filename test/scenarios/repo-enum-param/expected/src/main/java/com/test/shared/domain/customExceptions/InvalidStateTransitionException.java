@@ -1,0 +1,14 @@
+package com.test.shared.domain.customExceptions;
+
+public class InvalidStateTransitionException extends DomainException {
+
+    public InvalidStateTransitionException(String from, String to) {
+        super("Invalid state transition from '" + from + "' to '" + to + "'");
+    }
+
+    public InvalidStateTransitionException(String from, String to, Throwable cause) {
+        super("Invalid state transition from '" + from + "' to '" + to + "'", cause);
+    }
+
+    protected InvalidStateTransitionException() {}
+}

@@ -460,13 +460,18 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
   // aggIdPathVar: handles the case where path var is '{aggName}Id' but field is 'id'
   const aggNameCamel = toCamelCase(agg.name);
   const aggIdPathVar = pathVarNames.find((v) => v === `${aggNameCamel}Id`) || null;
-  // Returns the path variable name a field resolves to, or null if it's a body/param field.
+  // Returns the path variable name a field resolves to, or null if it is sourced
+  // from the request body/header/query/etc. Prefer the explicit DSL input.source
+  // over name heuristics so PATCH body fields such as categoryId are not
+  // accidentally rebound to the path variable {id}.
   const resolveToPathVar = (fieldName) => {
+    const input = inputMap.get(fieldName);
+    if (input && input.source && input.source !== 'path') return null;
     if (pathFieldNames.has(fieldName)) return fieldName;
     // field 'id' → path var '{aggName}Id' (old schema compat)
     if (fieldName === 'id' && aggIdPathVar) return aggIdPathVar;
     // field '{anything}Id' → path var 'id' (new schema: loadAggregate inputs named after aggregate)
-    if (fieldName.endsWith('Id') && pathFieldNames.has('id')) return 'id';
+    if (!input && fieldName.endsWith('Id') && pathFieldNames.has('id')) return 'id';
     return null;
   };
   const bodyFieldNames = allCmdFields.filter(
@@ -768,16 +773,19 @@ function buildInternalOperation(uc, internalApiOp, commonPrefix, agg, repoMethod
 
   if (isCommand) {
     const allCmdFields = getCommandFields(uc, agg);
+    const inputMap = new Map((uc.input || []).map((input) => [input.name, input]));
     const pathFieldNames = new Set(pathParams);
     const aggNameCamel = toCamelCase(agg.name);
     const aggIdPathVar = pathParams.find((v) => v === `${aggNameCamel}Id`) || null;
     const resolveToPathVar = (fieldName) => {
+      const input = inputMap.get(fieldName);
+      if (input && input.source && input.source !== 'path') return null;
       if (pathFieldNames.has(fieldName)) return fieldName;
       if (fieldName === 'id' && aggIdPathVar) return aggIdPathVar;
       return null;
     };
     bodyFieldNames = allCmdFields.filter((f) => resolveToPathVar(f) === null);
-    commandHasId = allCmdFields.includes('id');
+    commandHasId = allCmdFields.some((f) => resolveToPathVar(f) !== null);
     const hasOnlyPathFields = allCmdFields.length > 0 && bodyFieldNames.length === 0 && !hasRequestBody;
 
     if (allCmdFields.length === 0) {
