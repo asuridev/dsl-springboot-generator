@@ -13,7 +13,7 @@ spring:
       ack-mode: manual_immediate
 
 topics:
-  notifications-shipment-dispatched: warehouse.shipment-dispatched
-  shipment-dispatched: warehouse.shipment-dispatched
+  notifications-shipment-dispatched: warehouse.shipment.dispatched
+  shipment-dispatched: warehouse.shipment.dispatched
 
 

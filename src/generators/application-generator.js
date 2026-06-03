@@ -374,6 +374,21 @@ function findProjection(name, bcYaml) {
   return (bcYaml?.projections || []).find((p) => p.name === name) || null;
 }
 
+function projectionNamesInType(type, bcYaml) {
+  const names = [];
+  const visit = (raw) => {
+    if (!raw || typeof raw !== 'string') return;
+    const wrapped = /^(?:List|Page|Optional)\[(.+)\]$/.exec(raw);
+    if (wrapped) {
+      visit(wrapped[1]);
+      return;
+    }
+    if (findProjection(raw, bcYaml)) names.push(raw);
+  };
+  visit(type);
+  return names;
+}
+
 /**
  * Map of getterName → property declaration for derivability checks against
  * an aggregate root. Includes audit fields when applicable.
@@ -1790,6 +1805,11 @@ async function generateApplicationMapper(agg, moduleName, packageName, bcDir, vo
       for (const prop of projection.properties || []) {
         // Collect type imports via the side-effect call (matches existing pattern in buildMapperFields)
         javaTypeForDto(prop.type, packageName, moduleName, importsSet, voNames, bcYaml);
+        for (const nestedProjectionName of projectionNamesInType(prop.type, bcYaml)) {
+          if (nestedProjectionName !== projection.name) {
+            importsSet.add(`${packageName}.${moduleName}.application.dtos.${nestedProjectionName}`);
+          }
+        }
         const aggProp = aggMap.get(prop.name);
         const baseGetter = getterName(prop.name);
         // Url type — domain holds URI, DTO expects String; emit an explicit conversion.

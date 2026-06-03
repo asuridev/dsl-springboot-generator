@@ -13,7 +13,7 @@ spring:
       ack-mode: manual_immediate
 
 topics:
-  product-activated: catalog.product-activated
-  inventory-product-activated: catalog.product-activated
+  product-activated: catalog.product.activated
+  inventory-product-activated: catalog.product.activated
 
 

@@ -175,6 +175,9 @@ public void handle(DeactivateCategoryCommand command) {
 - [ ] ¿El servicio es stateless?
 - [ ] ¿El servicio depende solo de interfaces de dominio (repositorios como puertos), no de JPA ni HTTP?
 - [ ] ¿El flujo en `flows.md` hace referencia implícita o explícita a esta lógica compartida?
+- [ ] ¿Todos los imports compilan: repositorios de dominio, errores tipados, value objects,
+      `UUID`, `Instant`, `BigDecimal`, `Normalizer`, `Component`, etc.?
+- [ ] ¿El handler que lo inyecta importa el service y conserva las firmas generadas?
 
 Si todas son verdaderas → crea el domain service.
 Si no → implementa la lógica directamente en el handler.

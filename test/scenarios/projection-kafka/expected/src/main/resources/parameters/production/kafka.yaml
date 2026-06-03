@@ -13,9 +13,9 @@ spring:
       ack-mode: manual_immediate
 
 topics:
-  product-activated: catalog.product-activated
-  product-price-changed: catalog.product-price-changed
-  orders-projection-local-product-view-product-activated: catalog.product-activated
-  orders-projection-local-product-view-product-price-changed: catalog.product-price-changed
+  product-activated: catalog.product.activated
+  product-price-changed: catalog.product.price.changed
+  orders-projection-local-product-view-product-activated: catalog.product.activated
+  orders-projection-local-product-view-product-price-changed: catalog.product.price.changed
 
 

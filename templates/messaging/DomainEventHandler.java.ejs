@@ -62,7 +62,7 @@ public class <%= bcPascal %>DomainEventHandler {
     @Value("${exchanges.<%= bc %>:<%= bc %>.events}")
     private String exchange;
 <% domainEvents.forEach(event => { %>
-    @Value("${routing-keys.<%= event.topicNameKebab %>:<%= bc %>.<%= event.topicNameKebab %>}")
+    @Value("${routing-keys.<%= event.topicNameKebab %>:<%= event.routingKey %>}")
     private String <%= event.topicNameCamel %>RoutingKey;
 <% }); %>
 <% } %>

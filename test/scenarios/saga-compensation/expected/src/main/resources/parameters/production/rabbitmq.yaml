@@ -48,11 +48,11 @@ routing-keys:
   stock-reserved: inventory.stock.reserved
   stock-reservation-failed: inventory.stock.reservation-failed
   stock-released: inventory.stock.released
-  inventory-order-placed: order.placed
-  inventory-payment-failed: payment.failed
+  inventory-order-placed: orders.order.placed
+  inventory-payment-failed: payments.payment.failed
   order-placed: orders.order.placed
   payment-approved: payments.payment.approved
   payment-failed: payments.payment.failed
-  payments-stock-reserved: stock.reserved
+  payments-stock-reserved: inventory.stock.reserved
 
 

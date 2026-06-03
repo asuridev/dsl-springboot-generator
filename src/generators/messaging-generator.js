@@ -172,6 +172,34 @@ function toRoutingKeyKebab(eventName) {
   return toKebabCase(eventName);
 }
 
+function eventDotName(eventName) {
+  return toRoutingKeyKebab(eventName).replace(/-/g, '.');
+}
+
+function resolveAsyncApiChannel(eventName, asyncApiDoc, action = 'send') {
+  const channels = asyncApiDoc?.channels || [];
+  const normalized = String(eventName || '').toLowerCase();
+  const candidates = new Set([
+    eventName,
+    `${eventName}Event`,
+    `${eventName}IntegrationEvent`,
+  ].map((v) => String(v || '').toLowerCase()));
+
+  const byMessage = channels.find((ch) =>
+    (!action || ch.action === action) && candidates.has(String(ch.messageName || '').toLowerCase())
+  );
+  if (byMessage?.channel) return byMessage.channel;
+
+  const byAddress = channels.find((ch) =>
+    (!action || ch.action === action) && String(ch.channel || '').replace(/[.-]/g, '').toLowerCase().includes(normalized)
+  );
+  return byAddress?.channel || null;
+}
+
+function resolvePublishedChannel(event, moduleName, asyncApiDoc = null) {
+  return event.channel || resolveAsyncApiChannel(event.name, asyncApiDoc, 'send') || `${moduleName}.${eventDotName(event.name)}`;
+}
+
 // ─── Event context builder ────────────────────────────────────────────────────
 
 // Canonical metadata field names that, if present in the YAML payload, are
@@ -194,6 +222,7 @@ function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumName
   const topicNameKebab = toRoutingKeyKebab(event.name);
   const topicNameCamel = toCamelCase(topicNameKebab);
   const integrationEventClassName = `${event.name}IntegrationEvent`;
+  const channel = resolvePublishedChannel(event, moduleName, asyncApiDoc);
 
   // Use bc.yaml payload if present; fall back to async-api schema
   let rawPayload = event.payload || [];
@@ -237,7 +266,8 @@ function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumName
     topicNameKebab,                             // e.g. product-activated
     topicNameCamel,                             // e.g. productActivated
     description: event.description || null,    // gap #2: propagate to Javadoc
-    channel: event.channel || null,             // gap #1: propagate for traceability
+    channel,                                    // canonical AsyncAPI/Rabbit/Kafka channel
+    routingKey: channel,                        // RabbitMQ routing-key value follows the channel contract
     metadataEnabled,                            // Phase 1: drives template branching
     fields: eventFields,                        // for DomainEventHandler record accessor calls
     eventFields,                                // for IntegrationEvent record fields
@@ -909,10 +939,9 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
  *
  * Derivation rules (matches test-eva reference pattern):
  *   exchanges  : one entry per BC that publishes — key = bcName, value = {bcName}.events
- *   queues     : published → key = {event-kebab},          value = {bcName}.{event-kebab}
- *                consumed  → key = {consumerBc}-{event-kebab}, value = {consumerBc}.{event-kebab}
- *   routing-keys: published → key = {event-kebab},          value = {event.dot.case}
- *                 consumed  → key = {consumerBc}-{event-kebab}, value = {event.dot.case}
+ *   queues     : consumed  → key = {consumerBc}-{event-kebab}, value = {consumerBc}.{event-kebab}
+ *   routing-keys: published → key = {event-kebab},          value = {bcName}.{event.dot.case}
+ *                 consumed  → key = {consumerBc}-{event-kebab}, value = {producerBc}.{event.dot.case}
  *
  * @param {Array<object>} allBcYamls - All parsed {bc}.yaml objects
  * @returns {{ exchanges: Array<{key,value}>, queues: Array<{key,value}>, routingKeys: Array<{key,value}> }}
@@ -936,10 +965,10 @@ function buildRabbitMQTopology(allBcYamls) {
 
       for (const event of externalPublished) {
         const eventKebab = toKebabCase(event.name);
-        const dotCase    = eventKebab.replace(/-/g, '.');
+        const dotCase    = eventDotName(event.name);
         // gap #1: when published[].channel is declared in the YAML, it takes
         // precedence over the derived kebab→dot fallback.
-        const routingKey = event.channel || dotCase;
+        const routingKey = event.channel || `${bcName}.${dotCase}`;
         // Publisher BC does not declare a queue for its own events.
         // Each consumer BC declares its own queue (e.g. {consumerBc}-{event-kebab})
         // bound to this exchange — see consumed[] loop below.
@@ -950,18 +979,19 @@ function buildRabbitMQTopology(allBcYamls) {
 
     for (const event of consumed) {
       const eventKebab = toKebabCase(event.name);
-      const dotCase    = eventKebab.replace(/-/g, '.');
+      const dotCase    = eventDotName(event.name);
       const queueKey   = event.queueKey || `${bcName}-${eventKebab}`;
       // gap #1: honour declared channel as the routing-key value.
-      const routingKey = event.channel || dotCase;
+      const producerBc = (event.channel ? event.channel.split('.')[0] : null) || event.sourceBc || event.producer || bcName;
+      const routingKey = event.channel || `${producerBc}.${dotCase}`;
       queueMap.set(queueKey, `${bcName}.${eventKebab}`);
       rkMap.set(queueKey,    routingKey);
       // Add producer BC exchange derived from channel (e.g. "inventory.stock-item.reserved" → "inventory")
       // or from sourceBc when channel is not declared. This ensures external producer exchanges are
       // declared even if that BC is not in allBcYamls.
-      const producerBc = (event.channel ? event.channel.split('.')[0] : null) || event.sourceBc || null;
-      if (producerBc && !exchangeMap.has(producerBc)) {
-        exchangeMap.set(producerBc, `${producerBc}.events`);
+      const producerExchangeBc = (event.channel ? event.channel.split('.')[0] : null) || event.sourceBc || event.producer || null;
+      if (producerExchangeBc && !exchangeMap.has(producerExchangeBc)) {
+        exchangeMap.set(producerExchangeBc, `${producerExchangeBc}.events`);
       }
     }
 
@@ -974,7 +1004,7 @@ function buildRabbitMQTopology(allBcYamls) {
       const eventKebab = toKebabCase(proj.source.event);
       const queueKey   = `${bcName}-projection-${projKebab}-${eventKebab}`;
       queueMap.set(queueKey, `${bcName}.${queueKey}`);
-      rkMap.set(queueKey,    eventKebab.replace(/-/g, '.'));
+      rkMap.set(queueKey,    `${proj.source.from || bcName}.${eventDotName(proj.source.event)}`);
       if (proj.source.from && !exchangeMap.has(proj.source.from)) {
         exchangeMap.set(proj.source.from, `${proj.source.from}.events`);
       }
@@ -983,7 +1013,7 @@ function buildRabbitMQTopology(allBcYamls) {
         const srcEventKebab = toKebabCase(src.event);
         const srcQueueKey   = `${bcName}-projection-${projKebab}-${srcEventKebab}`;
         queueMap.set(srcQueueKey, `${bcName}.${srcQueueKey}`);
-        rkMap.set(srcQueueKey, srcEventKebab.replace(/-/g, '.'));
+        rkMap.set(srcQueueKey, `${src.from || proj.source.from || bcName}.${eventDotName(src.event)}`);
         if (src.from && !exchangeMap.has(src.from)) {
           exchangeMap.set(src.from, `${src.from}.events`);
         }
@@ -1004,8 +1034,8 @@ function buildRabbitMQTopology(allBcYamls) {
  * Aggregates Kafka topic topology from ALL BCs' domain events.
  *
  * Derivation rules:
- *   topics: published → key = {event-kebab}, value = {bcName}.{event-kebab}
- *           consumed  → key = {consumerBc}-{event-kebab}, value = {bcName}.{event-kebab}
+ *   topics: published → key = {event-kebab}, value = {bcName}.{event.dot.case}
+ *           consumed  → key = {consumerBc}-{event-kebab}, value = {producerBc}.{event.dot.case}
  *
  * @param {Array<object>} allBcYamls
  * @returns {{ topics: Array<{key, value}> }}
@@ -1022,7 +1052,7 @@ function buildKafkaTopology(allBcYamls) {
       // Phase 4 (gap #13) — internal-only events have no broker topic.
       if ((event.scope || 'both') === 'internal') continue;
       const eventKebab = toKebabCase(event.name);
-      topicMap.set(eventKebab, `${bcName}.${eventKebab}`);
+      topicMap.set(eventKebab, event.channel || `${bcName}.${eventDotName(event.name)}`);
     }
 
     for (const event of consumed) {
@@ -1031,8 +1061,8 @@ function buildKafkaTopology(allBcYamls) {
       // Derive producer BC from the first segment of the declared channel.
       // This ensures consumers subscribe to the same topic the producer publishes to.
       // Falls back to bcName (consumer) when channel is not declared — preserves prior behaviour.
-      const producerBc = event.channel ? event.channel.split('.')[0] : bcName;
-      topicMap.set(topicKey, `${producerBc}.${eventKebab}`);
+      const producerBc = event.channel ? event.channel.split('.')[0] : (event.sourceBc || event.producer || bcName);
+      topicMap.set(topicKey, event.channel || `${producerBc}.${eventDotName(event.name)}`);
     }
 
     // Persistent projections (Phase 3) declare an independent topic key.
@@ -1043,13 +1073,13 @@ function buildKafkaTopology(allBcYamls) {
       const eventKebab = toKebabCase(proj.source.event);
       const topicKey   = `${bcName}-projection-${projKebab}-${eventKebab}`;
       const sourceBc   = proj.source.from || bcName;
-      topicMap.set(topicKey, `${sourceBc}.${eventKebab}`);
+      topicMap.set(topicKey, `${sourceBc}.${eventDotName(proj.source.event)}`);
       // Additional sources (partial updaters)
       for (const src of (proj.additionalSources || [])) {
         const srcEventKebab = toKebabCase(src.event);
         const srcTopicKey   = `${bcName}-projection-${projKebab}-${srcEventKebab}`;
         const srcBc         = src.from || bcName;
-        topicMap.set(srcTopicKey, `${srcBc}.${srcEventKebab}`);
+        topicMap.set(srcTopicKey, `${srcBc}.${eventDotName(src.event)}`);
       }
     }
   }

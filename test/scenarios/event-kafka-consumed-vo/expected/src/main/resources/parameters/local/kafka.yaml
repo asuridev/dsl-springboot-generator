@@ -13,7 +13,7 @@ spring:
       ack-mode: manual_immediate
 
 topics:
-  billing-order-placed: sales.order-placed
-  order-placed: sales.order-placed
+  billing-order-placed: sales.order.placed
+  order-placed: sales.order.placed
 
 

@@ -31,7 +31,7 @@ queues:
 
 
 routing-keys:
-  booking-projection-daily-capacity-slot-capacity-published: slot.capacity.published
+  booking-projection-daily-capacity-slot-capacity-published: calendar.slot.capacity.published
   slot-capacity-published: calendar.slot.capacity-published
 
 

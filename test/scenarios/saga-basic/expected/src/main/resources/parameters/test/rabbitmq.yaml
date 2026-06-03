@@ -34,7 +34,7 @@ queues:
 routing-keys:
   stock-reserved: inventory.stock.reserved
   stock-reservation-failed: inventory.stock.reservation-failed
-  inventory-order-placed: order.placed
+  inventory-order-placed: orders.order.placed
   order-placed: orders.order.placed
 
 

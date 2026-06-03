@@ -13,9 +13,9 @@ spring:
       ack-mode: manual_immediate
 
 topics:
-  order-placed: orders.order-placed
-  payment-approved: payments.payment-approved
-  payment-failed: payments.payment-failed
-  payments-order-placed: payments.order-placed
+  order-placed: orders.order.placed
+  payment-approved: payments.payment.approved
+  payment-failed: payments.payment.failed
+  payments-order-placed: orders.order.placed
 
 

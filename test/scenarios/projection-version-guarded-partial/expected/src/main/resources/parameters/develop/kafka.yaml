@@ -13,9 +13,9 @@ spring:
       ack-mode: manual_immediate
 
 topics:
-  stock-initialized: catalog.stock-initialized
-  stock-reserved: catalog.stock-reserved
-  inventory-projection-product-stock-stock-initialized: catalog.stock-initialized
-  inventory-projection-product-stock-stock-reserved: catalog.stock-reserved
+  stock-initialized: catalog.product.stock-initialized
+  stock-reserved: catalog.product.stock-reserved
+  inventory-projection-product-stock-stock-initialized: catalog.stock.initialized
+  inventory-projection-product-stock-stock-reserved: catalog.stock.reserved
 
 

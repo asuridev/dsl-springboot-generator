@@ -13,9 +13,9 @@ spring:
       ack-mode: manual_immediate
 
 topics:
-  dashboard-projection-service-metrics-service-check-completed: monitoring.service-check-completed
-  dashboard-projection-service-metrics-service-latency-updated: monitoring.service-latency-updated
-  service-check-completed: monitoring.service-check-completed
-  service-latency-updated: monitoring.service-latency-updated
+  dashboard-projection-service-metrics-service-check-completed: monitoring.service.check.completed
+  dashboard-projection-service-metrics-service-latency-updated: monitoring.service.latency.updated
+  service-check-completed: monitoring.service-check.completed
+  service-latency-updated: monitoring.service-check.latency-updated
 
 

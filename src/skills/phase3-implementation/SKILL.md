@@ -21,8 +21,9 @@ infiere. Implementas exactamente lo que los artefactos de diseño especifican.
 
 ```
 Fase 1: Diseño (humano + IA)  →  Fase 2: Generador determinístico  →  Fase 3: Tú
-  arch/{bc-name}.yaml              scaffold + // TODO handlers            completa los TODO
-  {bc-name}-flows.md               UnsupportedOperationException          siguiendo flows.md
+    arch/{bc-name}.yaml              scaffold + // TODO handlers            completa los TODO
+    {bc-name}-flows.md               UnsupportedOperationException          siguiendo flows.md
+    contratos API/eventos            wiring generado                         auditoría de consistencia
 ```
 
 El `{bc-name}-flows.md` es tu especificación ejecutable. Cada flujo Given/When/Then mapea
@@ -42,6 +43,9 @@ de escribir cualquier código.
    - `arch/{bc-name}/{bc-name}.yaml` — fuente de verdad: aggregates, use cases, domain_rules, repositories
    - `arch/{bc-name}/{bc-name}-flows.md` — especificación ejecutable de los TODOs
    - `arch/{bc-name}/{bc-name}-spec.md` — contexto de responsabilidades (referencia)
+    - `arch/{bc-name}/{bc-name}-open-api.yaml` — solo para auditar binding/status/query params generados
+    - `arch/{bc-name}/{bc-name}-internal-api.yaml` — si existe, solo para auditar contratos internos
+    - `arch/{bc-name}/{bc-name}-async-api.yaml` — solo para auditar canales, routing keys y payloads
 3. Lee `references/bc-artifacts-guide.md` para saber qué extraer de cada archivo
 
 > **Nunca leas `arch/review/`**. Si detectas que un artefacto necesario está ahí,
@@ -111,6 +115,13 @@ Antes de editar cualquier handler o aggregate, construye una mini-checklist por 
 - **Wiring HTTP generado**: si detectas binding path/body incorrecto, falta de `Location`,
     status HTTP incorrecto o advice de validación mal generado, repórtalo como defecto de
     Fase 2. No cambies firmas ni contratos para compensarlo salvo instrucción explícita.
+- **OpenAPI vs controller/query**: verifica que los query params generados coincidan con el
+    contrato. Ejemplo: no aceptar `sortBy/sortDirection` si OpenAPI define un único `sort`, salvo
+    que el diseño lo declare explícitamente.
+- **AsyncAPI vs mensajería**: verifica que `channel`, routing-key/topic, exchange/queue bindings
+    y listeners usen el mismo valor contractual. El fallback permitido es `{bc}.{event-kebab-con-puntos}`.
+- **Imports y compilación**: después de tocar aggregates, handlers, mappers o services, revisa que
+    todas las clases de error, value objects, DTOs de proyección y excepciones usadas estén importadas.
 
 Si la checklist revela una contradicción entre YAML, OpenAPI/AsyncAPI y flows.md, detente
 antes de implementar y reporta la inconsistencia exacta.
@@ -141,6 +152,8 @@ Para cada handler TODO:
 5. Preserva el comentario `derived_from:` en el Javadoc
 6. Vuelve a revisar la checklist del Paso C2 para confirmar que no quedó ningún caso borde
     del flujo sin implementar.
+7. Ejecuta una verificación de compilación disponible para el proyecto. No escribas ni generes
+    tests de negocio en Fase 3; los tests pertenecen a una fase posterior.
 
 **Patrón de un handler command típico:**
 
@@ -194,6 +207,8 @@ public PagedResponse<CategoryResponseDto> handle(ListCategoriesQuery query) {
 5. **Cada paso implementado debe ser trazable** al flujo correspondiente en `flows.md`
 6. Las convenciones de código (sin Lombok en dominio, sin setters, constructores, etc.)
    están en `AGENTS.md` — síguelas sin excepción
+7. **No implementas tests de negocio en Fase 3**. Puedes ejecutar compilación o checks existentes
+    para validar imports y wiring, pero no crear nuevos tests salvo instrucción explícita.
 
 ---
 

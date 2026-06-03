@@ -319,8 +319,62 @@ function buildRaiseCallSingle(eventName, publishedEvents, aggregate, methodParam
   return `// derived_from: domainEvents.published.${event.name}\n        raise(new ${event.name}Event(${args.join(', ')}));`;
 }
 
+function toScreamingSnake(name) {
+  return String(name || '')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[-\s]+/g, '_')
+    .toUpperCase();
+}
+
+function terminalStateGuard(aggregate, bcEnums, terminalStateErrorClass) {
+  if (!terminalStateErrorClass) return null;
+  const terminalRule = (aggregate.domainRules || []).find((r) => r.type === 'terminalState' && r.errorCode);
+  if (!terminalRule) return null;
+
+  const statusField = (aggregate.properties || []).find((p) => (bcEnums || []).some((e) => e.name === p.type));
+  if (!statusField) return null;
+
+  const enumDef = (bcEnums || []).find((e) => e.name === statusField.type);
+  if (!enumDef) return null;
+
+  const description = `${terminalRule.description || ''} ${terminalRule.condition || ''} ${terminalRule.state || ''}`;
+  let terminalValue = (enumDef.values || []).find((v) => description.includes(v.value));
+  if (!terminalValue) {
+    terminalValue = (enumDef.values || []).find((v) =>
+      Array.isArray(v.transitions) && v.transitions.length === 0 && v.value !== statusField.defaultValue
+    );
+  }
+  if (!terminalValue) return null;
+
+  const getter = `this.${statusField.name}`;
+  return `if (${getter} == ${statusField.type}.${terminalValue.value}) {\n            throw new ${terminalStateErrorClass}();\n        }`;
+}
+
+function resolveChildNotFoundErrorClass(entity, method, bcYaml) {
+  if (method && method.notFoundError) {
+    const err = (bcYaml.errors || []).find((e) => e.code === method.notFoundError);
+    return err ? (err.errorType || deriveErrorTypeLocal(err.code)) : deriveErrorTypeLocal(method.notFoundError);
+  }
+  const entityCode = `${toScreamingSnake(entity.name)}_NOT_FOUND`;
+  const suffix = entity.name.replace(/^.*?(?=[A-Z][a-z]*$)/, '');
+  const suffixCode = `${toScreamingSnake(suffix)}_NOT_FOUND`;
+  const err = (bcYaml.errors || []).find((e) => e.code === entityCode || e.code === suffixCode);
+  return err ? (err.errorType || deriveErrorTypeLocal(err.code)) : null;
+}
+
+function domainErrorClassesInBody(body, bcYaml) {
+  const declared = new Map((bcYaml.errors || []).map((e) => [e.errorType || deriveErrorTypeLocal(e.code), e]));
+  const result = new Set();
+  const re = /new\s+([A-Z][A-Za-z0-9]*Error)\s*\(/g;
+  let match;
+  while ((match = re.exec(body || '')) !== null) {
+    if (declared.has(match[1])) result.add(match[1]);
+  }
+  return [...result];
+}
+
 // ─── Helper: compute the body string for a business method ───────────────────
-function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents, eventConfig = null, terminalStateErrorClass = null) {
+function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents, eventConfig = null, terminalStateErrorClass = null, bcYaml = null) {
   const rules = uc.rules || [];
   // Split rule IDs into validation-style vs side-effect-style based on the
   // aggregate's domainRules catalog (S13). Side effects are scaffolded as a
@@ -339,6 +393,8 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
   const scaffoldBody = `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}\n        throw new UnsupportedOperationException("Not implemented yet");`;
 
   const { name: methodName, params } = sig;
+  const guardTerminal = terminalStateGuard(aggregate, bcEnums, terminalStateErrorClass);
+  const withTerminalGuard = (body) => guardTerminal ? `${guardTerminal}\n        ${body}` : body;
 
   // ── Case 0: softDelete — always deterministic, overrides scaffold ─────────
   if (methodName === 'softDelete' && aggregate.softDelete === true) {
@@ -421,6 +477,7 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
       let body = isOneToOne
         ? `this.${fieldName} = new ${entity.name}(${ctorArgs});`
         : `this.${fieldName}.add(new ${entity.name}(${ctorArgs}));`;
+      body = withTerminalGuard(body);
       const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig, bcEnums);
       if (raiseCall) body += `\n        ${raiseCall}`;
       return body;
@@ -442,9 +499,18 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
         : toCamelCase(pluralizeWord(entity.name));
       const idParam = params[0].name;
       const varName = entity.name.charAt(0).toLowerCase() + entity.name.slice(1);
-      let body = isOneToOne
-        ? `if (this.${fieldName} != null && this.${fieldName}.getId().equals(${idParam})) {\n            this.${fieldName} = null;\n        }`
-        : `this.${fieldName}.removeIf(${varName} -> ${varName}.getId().equals(${idParam}));`;
+      const childNotFoundErrorClass = resolveChildNotFoundErrorClass(entity, sig, bcYaml || { errors: [] });
+      let body;
+      if (isOneToOne) {
+        body = childNotFoundErrorClass
+          ? `if (this.${fieldName} == null || !this.${fieldName}.getId().equals(${idParam})) {\n            throw new ${childNotFoundErrorClass}();\n        }\n        this.${fieldName} = null;`
+          : `if (this.${fieldName} != null && this.${fieldName}.getId().equals(${idParam})) {\n            this.${fieldName} = null;\n        }`;
+      } else if (childNotFoundErrorClass) {
+        body = `${entity.name} ${varName} = this.${fieldName}.stream()\n            .filter(item -> item.getId().equals(${idParam}))\n            .findFirst()\n            .orElseThrow(${childNotFoundErrorClass}::new);\n        this.${fieldName}.remove(${varName});`;
+      } else {
+        body = `this.${fieldName}.removeIf(${varName} -> ${varName}.getId().equals(${idParam}));`;
+      }
+      body = withTerminalGuard(body);
       const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig, bcEnums);
       if (raiseCall) body += `\n        ${raiseCall}`;
       return body;
@@ -457,6 +523,7 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
   );
   if (allMatch) {
     let body = params.map((p) => `this.${p.name} = ${p.name};`).join('\n        ');
+    body = withTerminalGuard(body);
     const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig, bcEnums);
     if (raiseCall) body += `\n        ${raiseCall}`;
     return body;
@@ -965,8 +1032,8 @@ async function generateAggregates(bcYaml, config, outputDir) {
       const returnType = resolveReturnType(dm.returns, aggregate.name);
       // computeMethodBody receives a sig-like object with {name, params, emits}
       const dmEmits = (dm.emitsList && dm.emitsList.length > 0) ? dm.emitsList : null;
-      const sigForBody = { name: dm.name, params: rawDmParams.map((p) => ({ name: p.name, optional: p.optional || false, typeHint: p.type })), emits: dmEmits };
-      const body = computeMethodBody(uc, sigForBody, aggregate, bcEnums, bc, aggregatePublishedEvents, eventConfig, terminalStateErrorClass);
+      const sigForBody = { name: dm.name, params: rawDmParams.map((p) => ({ name: p.name, optional: p.optional || false, typeHint: p.type })), emits: dmEmits, notFoundError: dm.notFoundError || uc.childNotFoundError || uc.itemNotFoundError };
+      const body = computeMethodBody(uc, sigForBody, aggregate, bcEnums, bc, aggregatePublishedEvents, eventConfig, terminalStateErrorClass, bcYaml);
 
       businessMethods.push({
         name: dm.name,
@@ -1016,6 +1083,13 @@ async function generateAggregates(bcYaml, config, outputDir) {
       if (!imports.includes(errImp)) imports.push(errImp);
       const isteImp = `import ${config.packageName}.shared.domain.customExceptions.InvalidStateTransitionException;`;
       if (!imports.includes(isteImp)) imports.push(isteImp);
+    }
+
+    for (const method of businessMethods) {
+      for (const errorClass of domainErrorClassesInBody(method.body, bcYaml)) {
+        const errImp = `import ${config.packageName}.${bc}.domain.errors.${errorClass};`;
+        if (!imports.includes(errImp)) imports.push(errImp);
+      }
     }
 
     // ── 6.b Validation checks for the creation constructor ─────────────────────

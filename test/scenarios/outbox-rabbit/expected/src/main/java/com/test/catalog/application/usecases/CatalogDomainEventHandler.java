@@ -38,7 +38,7 @@ public class CatalogDomainEventHandler {
     @Value("${exchanges.catalog:catalog.events}")
     private String exchange;
 
-    @Value("${routing-keys.product-activated:catalog.product-activated}")
+    @Value("${routing-keys.product-activated:catalog.product.activated}")
     private String productActivatedRoutingKey;
 
     public CatalogDomainEventHandler(OutboxEventJpaRepository outboxRepository, ObjectMapper objectMapper) {

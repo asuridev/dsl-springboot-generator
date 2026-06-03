@@ -12,8 +12,9 @@ para implementar los handlers de la Fase 3.
 | `{bc-name}.yaml` | Siempre, primero | Use cases scaffold, domain_rules, aggregates, repositories, errors |
 | `{bc-name}-flows.md` | Siempre, segundo | Pasos exactos del Then para cada UC scaffold |
 | `{bc-name}-spec.md` | Cuando necesitas contexto de responsabilidades | Qué hace y qué NO hace este BC |
-| `{bc-name}-open-api.yaml` | Nunca en Fase 3 | Ya fue procesado por el generador |
-| `{bc-name}-async-api.yaml` | Nunca en Fase 3 | Ya fue procesado por el generador |
+| `{bc-name}-open-api.yaml` | Para auditoría de wiring HTTP | Paths, status, request bodies, query params y respuestas que el código generado debe respetar |
+| `{bc-name}-internal-api.yaml` | Si existe y hay integraciones internas | Contratos internos, DTOs compartidos y puertos que no deben contradecir el YAML |
+| `{bc-name}-async-api.yaml` | Para auditoría de eventos | Channels, routing keys/topics, payloads y mensajes consumidos/publicados |
 
 ---
 
@@ -90,6 +91,34 @@ errors:
 
 Las clases de error están generadas en `domain/errors/`. Úsalas directamente —
 no lances excepciones genéricas de Java.
+
+---
+
+## Leer contratos API y eventos en Fase 3
+
+Estos artefactos no son la fuente para rediseñar el BC, pero sí sirven para detectar defectos del
+código generado antes de completar lógica de negocio.
+
+### OpenAPI
+
+Revisa que controllers, commands y queries respeten:
+- nombres de path/query params
+- forma del body request/response
+- status HTTP esperado
+- semántica de paginación y ordenamiento
+
+Si OpenAPI define `sort` y el código expone `sortBy/sortDirection`, repórtalo como inconsistencia
+del generador. No cambies contratos manualmente salvo instrucción explícita.
+
+### AsyncAPI
+
+Revisa que eventos publicados/consumidos usen el mismo canal contractual en:
+- `channel` de AsyncAPI o de `{bc-name}.yaml`
+- routing keys/topics generados
+- bindings de RabbitMQ/Kafka
+- listeners y outbox
+
+Fallback permitido si no existe canal explícito: `{producerBc}.{event-kebab-con-puntos}`.
 
 ---
 
