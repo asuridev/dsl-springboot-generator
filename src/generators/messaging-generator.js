@@ -10,6 +10,69 @@ const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
 // ─── AsyncAPI parsing (legacy — kept for backward compatibility) ──────────────
 
+function resolveRefName(ref) {
+  if (!ref || typeof ref !== 'string') return null;
+  const refParts = ref.split('/');
+  return refParts[refParts.length - 1] || null;
+}
+
+function asyncApiMessages(asyncApiDoc) {
+  if (!asyncApiDoc) return new Map();
+  if (asyncApiDoc.messages instanceof Map) return asyncApiDoc.messages;
+  if (asyncApiDoc.messages && typeof asyncApiDoc.messages === 'object') {
+    return new Map(Object.entries(asyncApiDoc.messages));
+  }
+  if (asyncApiDoc.components && asyncApiDoc.components.messages && typeof asyncApiDoc.components.messages === 'object') {
+    return new Map(Object.entries(asyncApiDoc.components.messages));
+  }
+  return new Map();
+}
+
+function asyncApiSchemas(asyncApiDoc) {
+  if (!asyncApiDoc) return {};
+  if (asyncApiDoc.schemas && typeof asyncApiDoc.schemas === 'object') return asyncApiDoc.schemas;
+  if (asyncApiDoc.components && asyncApiDoc.components.schemas && typeof asyncApiDoc.components.schemas === 'object') {
+    return asyncApiDoc.components.schemas;
+  }
+  return {};
+}
+
+function messageNameFromOperation(operation, messages) {
+  const message = operation && operation.message;
+  if (!message) return null;
+  if (message.$ref) {
+    const refName = resolveRefName(message.$ref);
+    const resolved = refName ? messages.get(refName) : null;
+    return (resolved && (resolved.name || refName)) || refName;
+  }
+  return message.name || null;
+}
+
+function normalizeAsyncApiChannels(asyncApiDoc) {
+  if (!asyncApiDoc || !asyncApiDoc.channels) return [];
+  if (Array.isArray(asyncApiDoc.channels)) return asyncApiDoc.channels;
+
+  const messages = asyncApiMessages(asyncApiDoc);
+  return Object.entries(asyncApiDoc.channels).flatMap(([channel, channelDef]) => {
+    const result = [];
+    if (channelDef && channelDef.publish) {
+      result.push({
+        channel,
+        action: 'send',
+        messageName: messageNameFromOperation(channelDef.publish, messages),
+      });
+    }
+    if (channelDef && channelDef.subscribe) {
+      result.push({
+        channel,
+        action: 'receive',
+        messageName: messageNameFromOperation(channelDef.subscribe, messages),
+      });
+    }
+    return result;
+  });
+}
+
 // ─── AsyncAPI payload resolver ────────────────────────────────────────────────
 
 /**
@@ -19,16 +82,18 @@ const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
  * Returns an array of { name, type } objects, or [] if not found.
  */
 function resolvePayloadFromAsyncApi(eventName, asyncApiDoc) {
-  if (!asyncApiDoc || !asyncApiDoc.messages) return [];
+  const messages = asyncApiMessages(asyncApiDoc);
+  if (messages.size === 0) return [];
 
   // Resolve the message schema — try exact name, then with 'Payload'/'Event' suffix, then prefix match
-  let msgSchema = asyncApiDoc.messages.get(eventName)
-    || asyncApiDoc.messages.get(`${eventName}Payload`)
-    || asyncApiDoc.messages.get(`${eventName}Event`);
+  let msgSchema = messages.get(eventName)
+    || messages.get(`${eventName}Payload`)
+    || messages.get(`${eventName}Event`)
+    || messages.get(`${eventName}Message`);
   if (!msgSchema) {
     // case-insensitive prefix match
     const lower = eventName.toLowerCase();
-    for (const [key, val] of asyncApiDoc.messages) {
+    for (const [key, val] of messages) {
       if (key.toLowerCase().startsWith(lower)) { msgSchema = val; break; }
     }
   }
@@ -37,9 +102,8 @@ function resolvePayloadFromAsyncApi(eventName, asyncApiDoc) {
   // Resolve the payload — may be inline or a $ref to components/schemas
   let payloadSchema = msgSchema.payload || null;
   if (payloadSchema && payloadSchema.$ref) {
-    const refParts = payloadSchema.$ref.split('/');
-    const schemaName = refParts[refParts.length - 1];
-    payloadSchema = (asyncApiDoc.schemas || {})[schemaName] || null;
+    const schemaName = resolveRefName(payloadSchema.$ref);
+    payloadSchema = asyncApiSchemas(asyncApiDoc)[schemaName] || null;
   }
   if (!payloadSchema || !payloadSchema.properties) return [];
 
@@ -177,7 +241,7 @@ function eventDotName(eventName) {
 }
 
 function resolveAsyncApiChannel(eventName, asyncApiDoc, action = 'send') {
-  const channels = asyncApiDoc?.channels || [];
+  const channels = normalizeAsyncApiChannels(asyncApiDoc);
   const normalized = String(eventName || '').toLowerCase();
   const candidates = new Set([
     eventName,
@@ -218,7 +282,7 @@ const CANONICAL_METADATA_FIELDS = new Set([
  *   records, and any payload field whose name collides with a canonical metadata
  *   field is filtered out (with a deprecation warning).
  */
-function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumNames = new Set(), voNames = new Set(), metadataEnabled = true) {
+function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumNames = new Set(), voNames = new Set(), metadataEnabled = true, eventDtoNames = new Set()) {
   const topicNameKebab = toRoutingKeyKebab(event.name);
   const topicNameCamel = toCamelCase(topicNameKebab);
   const integrationEventClassName = `${event.name}IntegrationEvent`;
@@ -246,7 +310,7 @@ function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumName
   }
 
   const eventFields = rawPayload.map((p) =>
-    Object.assign({ name: p.name, description: p.description || null }, javaTypeForEventField(p, packageName, moduleName, enumNames, voNames))
+    Object.assign({ name: p.name, description: p.description || null }, javaTypeForEventField(p, packageName, moduleName, enumNames, voNames, eventDtoNames))
   );
 
   // Phase 4 — scope + broker hints. Default scope is 'both' for backward compatibility.
@@ -287,14 +351,14 @@ function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumName
 /**
  * Generates {EventName}Event.java record in domain/events/.
  */
-async function generateDomainEvent(event, packageName, moduleName, eventsDir, enumNames = new Set(), voNames = new Set(), metadataEnabled = true) {
+async function generateDomainEvent(event, packageName, moduleName, eventsDir, enumNames = new Set(), voNames = new Set(), metadataEnabled = true, eventDtoNames = new Set()) {
   const imports = new Set();
   // Filter canonical metadata fields when metadata is enabled (already warned in buildEventContext).
   const rawPayload = metadataEnabled
     ? (event.payload || []).filter((p) => !CANONICAL_METADATA_FIELDS.has(p.name))
     : (event.payload || []);
   const fields = rawPayload.map((p) => {
-    const mapped = javaTypeForEventField(p, packageName, moduleName, enumNames, voNames);
+    const mapped = javaTypeForEventField(p, packageName, moduleName, enumNames, voNames, eventDtoNames);
     if (mapped.importHint) imports.add(mapped.importHint);
     if (mapped.innerImportHint) imports.add(mapped.innerImportHint);
     return { type: mapped.javaType, name: p.name, description: p.description || null };
@@ -319,6 +383,30 @@ async function generateDomainEvent(event, packageName, moduleName, eventsDir, en
       imports: [...imports].sort(),
     }
   );
+}
+
+async function generateDomainEventsLayer(bcYaml, config, outputDir) {
+  const packageName = config.packageName;
+  const moduleName = bcYaml.bc;
+  const publishedEvents = (bcYaml.domainEvents || {}).published || [];
+  if (publishedEvents.length === 0) return { eventCount: 0 };
+
+  const bcBase = path.join(
+    outputDir, 'src', 'main', 'java',
+    ...toPackagePath(packageName).split('/'),
+    moduleName
+  );
+  const domainEventsDir = path.join(bcBase, 'domain', 'events');
+  const enumNames = new Set((bcYaml.enums || []).map((e) => e.name));
+  const voNames = new Set((bcYaml.valueObjects || []).map((v) => v.name));
+  const eventDtoNames = new Set((bcYaml.eventDtos || []).map((d) => d.name));
+  const metadataEnabled = !(config.events && config.events.metadata && config.events.metadata.enabled === false);
+
+  for (const event of publishedEvents) {
+    await generateDomainEvent(event, packageName, moduleName, domainEventsDir, enumNames, voNames, metadataEnabled, eventDtoNames);
+  }
+
+  return { eventCount: publishedEvents.length };
 }
 
 /**
@@ -669,7 +757,7 @@ async function generateKafkaListener(consumedEvent, packageName, moduleName, lis
  * @param {string} outputDir
  * @returns {{ eventCount, integrationEventCount, listenerCount }}
  */
-async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, reliability = {}, sagas = []) {
+async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, reliability = {}, sagas = [], options = {}) {
   const packageName = config.packageName;
   const moduleName = bcYaml.bc;
   const outboxEnabled = !!reliability.outbox;
@@ -844,7 +932,7 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
   const metadataEnabled = !(config.events && config.events.metadata && config.events.metadata.enabled === false);
 
   const publishedEventCtxs = publishedEvents.map((e) =>
-    buildEventContext(e, packageName, moduleName, asyncApiDoc, enumNames, voNames, metadataEnabled)
+    buildEventContext(e, packageName, moduleName, asyncApiDoc, enumNames, voNames, metadataEnabled, eventDtoNames)
   );
 
   // Phase 4 (gap #13) — events with scope:internal must NOT generate IntegrationEvent,
@@ -856,9 +944,11 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
   let eventCount = 0;
   let integrationEventCount = 0;
 
-  for (const event of publishedEvents) {
-    await generateDomainEvent(event, packageName, moduleName, domainEventsDir, enumNames, voNames, metadataEnabled);
-    eventCount++;
+  if (!options.skipDomainEvents) {
+    for (const event of publishedEvents) {
+      await generateDomainEvent(event, packageName, moduleName, domainEventsDir, enumNames, voNames, metadataEnabled, eventDtoNames);
+      eventCount++;
+    }
   }
 
   for (const eventCtx of brokerEventCtxs) {
@@ -1091,6 +1181,7 @@ function buildKafkaTopology(allBcYamls) {
 
 module.exports = {
   generateMessagingLayer,
+  generateDomainEventsLayer,
   generateSharedBrokerConfig,
   generateSharedRabbitConfig,
   generateSharedKafkaConfig,

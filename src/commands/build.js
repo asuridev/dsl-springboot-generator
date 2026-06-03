@@ -26,7 +26,7 @@ const { generateProjectionUpdaters } = require('../generators/projection-updater
 const { generateSagaArtifacts } = require('../generators/saga-generator');
 const { generateErrorsCatalog } = require('../generators/errors-catalog-generator');
 const { generateControllerLayer } = require('../generators/controller-generator');
-const { generateMessagingLayer, generateSharedBrokerConfig, buildRabbitMQTopology, buildKafkaTopology } = require('../generators/messaging-generator');
+const { generateMessagingLayer, generateDomainEventsLayer, generateSharedBrokerConfig, buildRabbitMQTopology, buildKafkaTopology } = require('../generators/messaging-generator');
 const { readBcYaml } = require('../utils/bc-yaml-reader');
 const { readOpenApiYaml, readAsyncApiYaml, readInternalApiYaml } = require('../utils/arch-yaml-reader');
 const { validateIntegrationCoherence, reportDiagnostics } = require('../utils/integration-validator');
@@ -378,6 +378,7 @@ async function buildCommand(options = {}) {
       await generateEnums(bcYaml, resolvedConfig, outputDir);
       await generateValueObjects(bcYaml, resolvedConfig, outputDir);
       await generateEventDtos(bcYaml, resolvedConfig, outputDir);
+      await generateDomainEventsLayer(bcYaml, resolvedConfig, outputDir);
       await generateAggregates(bcYaml, resolvedConfig, outputDir);
     }
     domainSpinner.succeed(`Domain layer generated for ${allBcYamls.length} bounded context(s)`);
@@ -572,7 +573,7 @@ async function buildCommand(options = {}) {
       try {
         const asyncApiDoc = await readAsyncApiYaml(bcYaml.bc);
         const { integrationEventCount: iec, listenerCount: lc } =
-          await generateMessagingLayer(bcYaml, asyncApiDoc, resolvedConfig, outputDir, reliabilityFlags, system.sagas || []);
+          await generateMessagingLayer(bcYaml, asyncApiDoc, resolvedConfig, outputDir, reliabilityFlags, system.sagas || [], { skipDomainEvents: true });
         messagingCount += iec + lc;
       } catch (err) {
         const message = `Skipping messaging for ${bcYaml.bc}: ${err.message}`;

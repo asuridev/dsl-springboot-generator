@@ -365,10 +365,11 @@ function resolveChildNotFoundErrorClass(entity, method, bcYaml) {
 function domainErrorClassesInBody(body, bcYaml) {
   const declared = new Map((bcYaml.errors || []).map((e) => [e.errorType || deriveErrorTypeLocal(e.code), e]));
   const result = new Set();
-  const re = /new\s+([A-Z][A-Za-z0-9]*Error)\s*\(/g;
+  const re = /(?:new\s+([A-Z][A-Za-z0-9]*Error)\s*\(|\b([A-Z][A-Za-z0-9]*Error)::new\b)/g;
   let match;
   while ((match = re.exec(body || '')) !== null) {
-    if (declared.has(match[1])) result.add(match[1]);
+    const errorClass = match[1] || match[2];
+    if (declared.has(errorClass)) result.add(errorClass);
   }
   return [...result];
 }
