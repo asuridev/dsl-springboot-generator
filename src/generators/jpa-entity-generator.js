@@ -86,8 +86,11 @@ function expandMultiPropertyVoField(prop, voDef, bcYaml) {
     let javaType;
     try {
       javaType = mapType(voProp.type, voProp).javaType;
-    } catch (_) {
-      javaType = 'String';
+    } catch (e) {
+      throw new Error(
+        `jpa-entity: no se puede mapear el tipo "${voProp.type}" de la propiedad "${voProp.name}" ` +
+          `del value object "${voDef.name}" (usado por el campo "${prop.name}"): ${e.message}`
+      );
     }
     fields.push({
       name: fieldName,
@@ -174,8 +177,11 @@ function buildElementCollectionField(prop, aggregate, bcYaml) {
     const voProp = voProps[0];
     try {
       elementJavaType = mapType(voProp.type, voProp).javaType;
-    } catch (_) {
-      elementJavaType = 'String';
+    } catch (e) {
+      throw new Error(
+        `jpa-entity: no se puede mapear el tipo "${voProp.type}" del value object "${voDef.name}" ` +
+          `en la colección "${aggregate.name}.${prop.name}": ${e.message}`
+      );
     }
     if (voProp.type === 'Email') {
       colAttrs.push('length = 254');
@@ -189,8 +195,11 @@ function buildElementCollectionField(prop, aggregate, bcYaml) {
     } else {
       try {
         elementJavaType = mapType(innerType).javaType;
-      } catch (_) {
-        elementJavaType = 'String';
+      } catch (e) {
+        throw new Error(
+          `jpa-entity: no se puede mapear el tipo de elemento "${innerType}" ` +
+            `en la colección "${aggregate.name}.${prop.name}": ${e.message}`
+        );
       }
     }
     if (innerType === 'Email') {

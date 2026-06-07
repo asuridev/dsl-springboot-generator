@@ -1,0 +1,10 @@
+{
+  "packageName": "com.test",
+  "javaVersion": "21",
+  "springBootVersion": "3.4.5",
+  "database": "postgresql",
+  "broker": null,
+  "authProvider": "none",
+  "cacheProvider": null,
+  "systemName": "test-specs-search-text-system"
+}

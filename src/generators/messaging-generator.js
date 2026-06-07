@@ -349,34 +349,47 @@ function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumName
 // ─── Aggregate type resolver ─────────────────────────────────────────────────
 
 /**
- * Enriches event payload fields that declare `source: aggregate` without an explicit `type`
- * by looking up the matching property in the source aggregate.
- * This mirrors the resolution done in aggregate-generator.js:buildRaiseCallSingle.
+ * Enriches event payload fields that omit an explicit `type` by inferring it from
+ * their `source`:
+ *   - `source: aggregate`  → looks up the matching property in the source aggregate
+ *     (mirrors aggregate-generator.js:buildRaiseCallSingle).
+ *   - `source: timestamp`  → `DateTime`, consistent with the `Instant.now()` value
+ *     emitted on the assignment side (aggregate-generator.js:resolveExplicit).
+ * Without this, a typeless field falls through `javaTypeForEventField`/`mapType` and
+ * is emitted as a domain VO literally named `undefined` → broken import + non-compiling
+ * record component.
  */
 function resolveEventPayloadTypes(event, bcYaml) {
-  const hasUnresolved = (event.payload || []).some((p) => !p.type && p.source === 'aggregate');
-  if (!hasUnresolved) return event;
+  const needsAggregate = (event.payload || []).some((p) => !p.type && p.source === 'aggregate');
+  const needsTimestamp = (event.payload || []).some((p) => !p.type && p.source === 'timestamp');
+  if (!needsAggregate && !needsTimestamp) return event;
 
-  let sourceAggregate = null;
-  for (const agg of (bcYaml.aggregates || [])) {
-    if (agg.readModel) continue;
-    for (const method of (agg.domainMethods || [])) {
-      if ((method.emits || []).includes(event.name)) {
-        sourceAggregate = agg;
-        break;
+  let aggregateCamelId = null;
+  let aggregatePropByName = new Map();
+  if (needsAggregate) {
+    let sourceAggregate = null;
+    for (const agg of (bcYaml.aggregates || [])) {
+      if (agg.readModel) continue;
+      for (const method of (agg.domainMethods || [])) {
+        if ((method.emits || []).includes(event.name)) {
+          sourceAggregate = agg;
+          break;
+        }
       }
+      if (sourceAggregate) break;
     }
-    if (sourceAggregate) break;
+    if (sourceAggregate) {
+      aggregateCamelId = sourceAggregate.name.charAt(0).toLowerCase() + sourceAggregate.name.slice(1) + 'Id';
+      aggregatePropByName = new Map((sourceAggregate.properties || []).map((p) => [p.name, p]));
+    }
   }
-  if (!sourceAggregate) return event;
-
-  const aggregateCamelId = sourceAggregate.name.charAt(0).toLowerCase() + sourceAggregate.name.slice(1) + 'Id';
-  const aggregatePropByName = new Map((sourceAggregate.properties || []).map((p) => [p.name, p]));
 
   return {
     ...event,
     payload: (event.payload || []).map((p) => {
-      if (p.type || p.source !== 'aggregate') return p;
+      if (p.type) return p;
+      if (p.source === 'timestamp') return { ...p, type: 'DateTime' };
+      if (p.source !== 'aggregate') return p;
       const fieldName = p.field || p.name;
       if (fieldName === 'id' || fieldName === aggregateCamelId) return { ...p, type: 'Uuid' };
       const prop = aggregatePropByName.get(fieldName);

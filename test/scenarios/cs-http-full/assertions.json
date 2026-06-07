@@ -12,7 +12,7 @@
     "_comment": "Feign client. Verifica @FeignClient con nombre, URL, config, y ambas operaciones con sus verbos",
     "contains": [
       "@FeignClient",
-      "name = \"catalog-service\"",
+      "name = \"orders-catalog-service\"",
       "${integration.catalog.base-url}",
       "CatalogFeignConfig",
       "validateProductsAndPrices",

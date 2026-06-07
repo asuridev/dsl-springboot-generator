@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.*;
  * Mapped to domain models by {@link CatalogAclMapper}.
  */
 @FeignClient(
-    name = "catalog-service",
+    name = "search-catalog-service",
     url = "${integration.catalog.base-url}",
     configuration = CatalogFeignConfig.class
 )

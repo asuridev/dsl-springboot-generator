@@ -1,0 +1,5 @@
+{
+  "description": "GEN-001: an aggregate property referencing a type that is neither canonical nor declared (enum/VO/projection/eventDto/aggregate) must abort the build before generation under --strict, instead of degrading to a String column or emitting a broken import.",
+  "expectFailure": true,
+  "expectedErrorPattern": "GEN-001"
+}

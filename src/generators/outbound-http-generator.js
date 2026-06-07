@@ -600,7 +600,10 @@ async function generateOutboundHttpAdapters(bcYaml, config, outputDir, system = 
     const feignConfigClassName = `${targetBcPascal}FeignConfig`;
     const feignAdapterClassName = `${targetBcPascal}FeignAdapter`;
     const aclMapperClassName = `${targetBcPascal}AclMapper`;
-    const feignClientName = `${targetBc}-service`;
+    // Incluye el BC origen (moduleName) para garantizar unicidad del bean Feign
+    // cuando varios BCs consumen el mismo BC destino: dos `@FeignClient(name=...)`
+    // con el mismo nombre rompen el arranque de Spring ("bean name already defined").
+    const feignClientName = `${moduleName}-${targetBc}-service`;
     const baseUrlProperty = `integration.${targetBc}.base-url`;
 
     // Parse operations from the internal API

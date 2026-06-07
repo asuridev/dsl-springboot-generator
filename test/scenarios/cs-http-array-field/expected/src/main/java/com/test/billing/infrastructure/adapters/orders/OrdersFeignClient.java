@@ -9,7 +9,11 @@ import org.springframework.web.bind.annotation.*;
  * Returns infrastructure DTOs — never domain models directly.
  * Mapped to domain models by {@link OrdersAclMapper}.
  */
-@FeignClient(name = "orders-service", url = "${integration.orders.base-url}", configuration = OrdersFeignConfig.class)
+@FeignClient(
+    name = "billing-orders-service",
+    url = "${integration.orders.base-url}",
+    configuration = OrdersFeignConfig.class
+)
 public interface OrdersFeignClient {
     @GetMapping("/internal/orders/{orderId}")
     OrderDetailsResultDto getOrderDetails(@PathVariable("orderId") String orderId);

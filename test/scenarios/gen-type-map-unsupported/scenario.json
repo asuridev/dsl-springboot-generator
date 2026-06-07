@@ -1,0 +1,5 @@
+{
+  "description": "GEN-002: a Map[K,V] type reference is unsupported by the generator (no key-value mapping) and must abort the build before generation under --strict, instead of being passed through type-mapper as a spurious domain type with a broken import.",
+  "expectFailure": true,
+  "expectedErrorPattern": "GEN-002"
+}

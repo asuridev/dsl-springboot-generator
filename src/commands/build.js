@@ -32,6 +32,7 @@ const { deployToClaudeCode } = require('../utils/claude-code-deployer');
 const { readOpenApiYaml, readAsyncApiYaml, readInternalApiYaml } = require('../utils/arch-yaml-reader');
 const { validateIntegrationCoherence, reportDiagnostics } = require('../utils/integration-validator');
 const { validateOpenApiUseCases } = require('../utils/openapi-usecase-validator');
+const { validateTypeResolution } = require('../utils/type-resolution-validator');
 
 // ─── BC discovery ─────────────────────────────────────────────────────────────
 
@@ -294,6 +295,7 @@ async function buildCommand(options = {}) {
       if (openApiDoc) openApiByBc.set(bcYaml.bc, openApiDoc);
       if (internalApiDoc) internalApiByBc.set(bcYaml.bc, internalApiDoc);
       diagnostics.push(...validateOpenApiUseCases(bcYaml, openApiDoc, internalApiDoc));
+      diagnostics.push(...validateTypeResolution(bcYaml));
     }
     if (diagnostics.length === 0) {
       validationSpinner.succeed('Integration and HTTP contracts validated — no issues');

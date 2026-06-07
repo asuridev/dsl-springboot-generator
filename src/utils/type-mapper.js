@@ -233,6 +233,17 @@ function mapType(type, prop = {}) {
       };
 
     default: {
+      // Map[K,V] — no soportado: el generador no tiene un mapeo de colección
+      // clave-valor. Sin este guard, caería en el passthrough de domain type y
+      // produciría un import espurio (`...domain.valueobject.Map[K,V]`) que no
+      // compila. La validación GEN-002 lo detecta antes de generar; esto es la
+      // red de seguridad si mapType se invoca fuera de esa ruta.
+      if (/^Map\[(.+)\]$/.test(type)) {
+        throw new Error(
+          `Type "${type}" (Map[K,V]) is not supported by the generator. ` +
+            'Model a dedicated Value Object instead of a key-value map.'
+        );
+      }
       // Enum<X> → X (enum reference in YAML canonical form)
       const enumMatch = /^Enum<(.+)>$/.exec(type);
       if (enumMatch) {

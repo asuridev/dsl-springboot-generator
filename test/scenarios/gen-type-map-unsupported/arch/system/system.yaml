@@ -1,0 +1,25 @@
+# ─── Test scenario: specs-search-text ─────────────────────────────────────────
+# Covers:
+#   - [G8] Query UC with SearchText input generates {Aggregate}Specs.java
+#   - Specs class has a fully-implemented cb.like predicate per declared field
+#   - JpaRepositoryInterface extends JpaSpecificationExecutor<{Aggregate}Jpa>
+#   - JpaSpecificationExecutor import is added to repository interface
+#   - Warning is NOT triggered (fields[] is declared)
+# ──────────────────────────────────────────────────────────────────────────────
+system:
+  name: test-specs-search-text-system
+  description: Validates SearchText Specification builder and JpaSpecificationExecutor wiring.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products with full-text search queries.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: postgresql

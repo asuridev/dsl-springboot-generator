@@ -1,7 +1,9 @@
 package com.test.catalog.domain.events;
 
 import com.test.shared.domain.DomainEvent;
-import com.test.catalog.domain.valueobject.undefined;import com.test.shared.domain.EventMetadata;import java.util.UUID;
+import com.test.shared.domain.EventMetadata;
+import java.time.Instant;
+import java.util.UUID;
 
 /**
  * Domain event: ProductCreated.
@@ -12,12 +14,11 @@ import com.test.catalog.domain.valueobject.undefined;import com.test.shared.doma
  * derived_from: domainEvents.published.ProductCreated
  */
 public record ProductCreatedEvent(
-        EventMetadata metadata,
+    EventMetadata metadata,
 
-        UUID productId,
+    UUID productId,
 
-        String productName,
+    String productName,
 
-         issuedAt
-
+    Instant issuedAt
 ) implements DomainEvent {}
