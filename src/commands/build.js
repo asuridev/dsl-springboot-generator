@@ -28,6 +28,7 @@ const { generateErrorsCatalog } = require('../generators/errors-catalog-generato
 const { generateControllerLayer } = require('../generators/controller-generator');
 const { generateMessagingLayer, generateDomainEventsLayer, generateSharedBrokerConfig, buildRabbitMQTopology, buildKafkaTopology } = require('../generators/messaging-generator');
 const { readBcYaml } = require('../utils/bc-yaml-reader');
+const { deployToClaudeCode } = require('../utils/claude-code-deployer');
 const { readOpenApiYaml, readAsyncApiYaml, readInternalApiYaml } = require('../utils/arch-yaml-reader');
 const { validateIntegrationCoherence, reportDiagnostics } = require('../utils/integration-validator');
 const { validateOpenApiUseCases } = require('../utils/openapi-usecase-validator');
@@ -622,6 +623,9 @@ async function buildCommand(options = {}) {
       await fs.copy(agentsSrcDir, agentsDestDir, { overwrite: true });
       logger.success('Phase 3 agents deployed to .github/agents/');
     }
+
+    // ── Phase 3 Claude Code project deploy ───────────────────────────────────
+    await deployToClaudeCode(agentsSrcDir, skillsSrcDir, outputDir, logger);
 
     console.log('');
     logger.success('Build complete!');
