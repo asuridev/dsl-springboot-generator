@@ -1735,7 +1735,7 @@ async function generateRepositories(bcYaml, config, outputDir) {
           return { name: fieldName, type: prop ? prop.type : 'Uuid', required: true };
         });
       }
-      if (/^findBy[A-Z]/.test(normalized.name) && !normalized.returns) {
+      if (/^findBy[A-Z]/.test(normalized.name) && (!normalized.returns || normalized.returns === 'void')) {
         normalized.returns = `${aggregateName}?`;
       }
       return { ...normalized, derivedFrom: m.derivedFrom, defaultSort: m.defaultSort };
