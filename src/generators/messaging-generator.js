@@ -346,6 +346,45 @@ function buildEventContext(event, packageName, moduleName, asyncApiDoc, enumName
   };
 }
 
+// ─── Aggregate type resolver ─────────────────────────────────────────────────
+
+/**
+ * Enriches event payload fields that declare `source: aggregate` without an explicit `type`
+ * by looking up the matching property in the source aggregate.
+ * This mirrors the resolution done in aggregate-generator.js:buildRaiseCallSingle.
+ */
+function resolveEventPayloadTypes(event, bcYaml) {
+  const hasUnresolved = (event.payload || []).some((p) => !p.type && p.source === 'aggregate');
+  if (!hasUnresolved) return event;
+
+  let sourceAggregate = null;
+  for (const agg of (bcYaml.aggregates || [])) {
+    if (agg.readModel) continue;
+    for (const method of (agg.domainMethods || [])) {
+      if ((method.emits || []).includes(event.name)) {
+        sourceAggregate = agg;
+        break;
+      }
+    }
+    if (sourceAggregate) break;
+  }
+  if (!sourceAggregate) return event;
+
+  const aggregateCamelId = sourceAggregate.name.charAt(0).toLowerCase() + sourceAggregate.name.slice(1) + 'Id';
+  const aggregatePropByName = new Map((sourceAggregate.properties || []).map((p) => [p.name, p]));
+
+  return {
+    ...event,
+    payload: (event.payload || []).map((p) => {
+      if (p.type || p.source !== 'aggregate') return p;
+      const fieldName = p.field || p.name;
+      if (fieldName === 'id' || fieldName === aggregateCamelId) return { ...p, type: 'Uuid' };
+      const prop = aggregatePropByName.get(fieldName);
+      return prop ? { ...p, type: prop.type } : p;
+    }),
+  };
+}
+
 // ─── Individual file generators ──────────────────────────────────────────────
 
 /**
@@ -403,7 +442,8 @@ async function generateDomainEventsLayer(bcYaml, config, outputDir) {
   const metadataEnabled = !(config.events && config.events.metadata && config.events.metadata.enabled === false);
 
   for (const event of publishedEvents) {
-    await generateDomainEvent(event, packageName, moduleName, domainEventsDir, enumNames, voNames, metadataEnabled, eventDtoNames);
+    const resolvedEvent = resolveEventPayloadTypes(event, bcYaml);
+    await generateDomainEvent(resolvedEvent, packageName, moduleName, domainEventsDir, enumNames, voNames, metadataEnabled, eventDtoNames);
   }
 
   return { eventCount: publishedEvents.length };
@@ -932,7 +972,7 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
   const metadataEnabled = !(config.events && config.events.metadata && config.events.metadata.enabled === false);
 
   const publishedEventCtxs = publishedEvents.map((e) =>
-    buildEventContext(e, packageName, moduleName, asyncApiDoc, enumNames, voNames, metadataEnabled, eventDtoNames)
+    buildEventContext(resolveEventPayloadTypes(e, bcYaml), packageName, moduleName, asyncApiDoc, enumNames, voNames, metadataEnabled, eventDtoNames)
   );
 
   // Phase 4 (gap #13) — events with scope:internal must NOT generate IntegrationEvent,

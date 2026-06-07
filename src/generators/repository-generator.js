@@ -587,7 +587,7 @@ function classifyMethod(method) {
       return 'skip';
     }
   }
-  if (method.name === 'findById' || method.name === 'save') return 'skip';
+  if (method.name === 'findById' || method.name === 'save' || method.name === 'upsert') return 'skip';
   // 'delete(id)' is inherited from JpaRepository as deleteById — do not redeclare
   if (method.name === 'delete' && (method.params || []).length === 1) return 'skip';
   // R11: bulk operations are inherited verbatim from JpaRepository.
@@ -1723,6 +1723,20 @@ async function generateRepositories(bcYaml, config, outputDir) {
       if ((normalized.name === 'save' || normalized.name === 'upsert') && (!normalized.params || normalized.params.length === 0)) {
         const paramName = aggregateName.charAt(0).toLowerCase() + aggregateName.slice(1);
         normalized.params = [{ name: paramName, type: aggregateName, required: true }];
+      }
+      // Auto-infer params and return type for findByXxx shorthand (e.g. "name: findByAddressId"
+      // with no params declared). Mirrors the same convention as save/upsert above.
+      if (/^findBy[A-Z]/.test(normalized.name) && (!normalized.params || normalized.params.length === 0)) {
+        const tokens = normalized.name.replace(/^findBy/, '').split(/And|Or/).filter(Boolean);
+        const aggregatePropByName = new Map((aggregate.properties || []).map((p) => [p.name, p]));
+        normalized.params = tokens.map((token) => {
+          const fieldName = token.charAt(0).toLowerCase() + token.slice(1);
+          const prop = aggregatePropByName.get(fieldName);
+          return { name: fieldName, type: prop ? prop.type : 'Uuid', required: true };
+        });
+      }
+      if (/^findBy[A-Z]/.test(normalized.name) && !normalized.returns) {
+        normalized.returns = `${aggregateName}?`;
       }
       return { ...normalized, derivedFrom: m.derivedFrom, defaultSort: m.defaultSort };
     });

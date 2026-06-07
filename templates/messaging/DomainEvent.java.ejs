@@ -1,7 +1,8 @@
 package <%= packageName %>.<%= moduleName %>.domain.events;
 
 import <%= packageName %>.shared.domain.DomainEvent;
-<% imports.forEach(function(imp) { %>import <%= imp %>;<% }); %>
+<% imports.forEach(function(imp) { %>
+import <%= imp %>;<% }); %>
 
 /**
  * Domain event: <%= eventName %>.
