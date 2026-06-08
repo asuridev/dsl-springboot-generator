@@ -626,7 +626,7 @@ async function buildCommand(options = {}) {
       logger.success('Phase 3 agents deployed to .github/agents/');
     }
 
-    // ── Phase 3 Claude Code project deploy ───────────────────────────────────
+    // ── Phase 3 Claude Code project deploy (skills + slash commands) ─────────
     await deployToClaudeCode(agentsSrcDir, skillsSrcDir, outputDir, logger);
 
     console.log('');

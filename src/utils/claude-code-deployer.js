@@ -13,16 +13,6 @@ const TOOL_MAP = {
   // 'todo' is not a Claude Code tool — dropped
 };
 
-// Project-level Claude Code agents only accept the model *family* alias —
-// not a versioned model id. Valid values: sonnet, opus, haiku, inherit.
-const MODEL_PATTERNS = [
-  { pattern: /sonnet/i, id: 'sonnet' },
-  { pattern: /opus/i,   id: 'opus' },
-  { pattern: /haiku/i,  id: 'haiku' },
-];
-
-const DEFAULT_MODEL = 'inherit';
-
 function toKebabSlug(name) {
   return name
     .normalize('NFD')
@@ -30,14 +20,6 @@ function toKebabSlug(name) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-+|-+$/g, '');
-}
-
-function normalizeModel(raw) {
-  if (!raw) return DEFAULT_MODEL;
-  for (const { pattern, id } of MODEL_PATTERNS) {
-    if (pattern.test(raw)) return id;
-  }
-  return DEFAULT_MODEL;
 }
 
 function mapTools(toolsField) {
@@ -122,42 +104,49 @@ async function rewriteConventionRefsInDir(dir) {
   }
 }
 
-function buildClaudeCodeFrontmatter(fm) {
-  const slug = toKebabSlug(fm.name || 'agent');
-  const model = normalizeModel(fm.model);
+/**
+ * Builds Claude Code *slash command* frontmatter from a source agent's
+ * frontmatter. Commands differ from subagents:
+ *   - no `name:`  (the command name derives from the file name)
+ *   - no `model:` (commands run in the main thread, inheriting the session model)
+ *   - keep `description:` and `argument-hint:` (both supported by Claude Code)
+ *   - `tools:` → `allowed-tools:` (mapped Copilot → Claude Code names)
+ * `AskUserQuestion` is always added: these flows run in the main thread and
+ * declare human-in-the-loop behaviour ("detente y notifica al usuario"), so the
+ * command must be able to pause and ask the user.
+ */
+function buildCommandFrontmatter(fm) {
   const tools = mapTools(fm.tools);
+  if (!tools.includes('AskUserQuestion')) tools.push('AskUserQuestion');
   const description = fm.description || '';
 
   let yaml = '---\n';
-  yaml += `name: ${slug}\n`;
   yaml += `description: >\n  ${description.replace(/\n/g, '\n  ')}\n`;
-  if (model) yaml += `model: ${model}\n`;
-  if (tools.length > 0) {
-    yaml += 'tools:\n';
-    for (const t of tools) yaml += `  - ${t}\n`;
-  }
+  if (fm['argument-hint']) yaml += `argument-hint: ${fm['argument-hint']}\n`;
+  yaml += `allowed-tools: ${tools.join(', ')}\n`;
   yaml += '---\n';
   return yaml;
 }
 
 /**
- * Transforms a .agent.md file into Claude Code agent format and writes it
- * to destDir/<slug>.md.
+ * Transforms a .agent.md file into a Claude Code slash command and writes it
+ * to destDir/<slug>.md. Slash commands run in the main conversation thread,
+ * where AskUserQuestion can pause for user input and $ARGUMENTS carries the
+ * caller's request — which is why Claude Code responds better to them than to
+ * autonomous subagents for human-in-the-loop flows.
  */
-async function transformAndWriteAgent(srcFile, destDir) {
+async function transformAndWriteCommand(srcFile, destDir) {
   const content = await fs.readFile(srcFile, 'utf8');
   const { frontmatter, body } = parseFrontmatter(content);
 
   const slug = toKebabSlug(frontmatter.name || path.basename(srcFile, '.agent.md'));
-  const newFrontmatter = buildClaudeCodeFrontmatter(frontmatter);
+  const newFrontmatter = buildCommandFrontmatter(frontmatter);
 
-  let preamble = '';
-  if (frontmatter['argument-hint']) {
-    preamble = `<!-- argument-hint: ${frontmatter['argument-hint']} -->\n\n`;
-  }
+  // Inject the caller's request right after the frontmatter via $ARGUMENTS.
+  const argsBlock = '\n> **Petición:** $ARGUMENTS\n\n';
 
   const destFile = path.join(destDir, `${slug}.md`);
-  await fs.outputFile(destFile, newFrontmatter + preamble + rewriteForClaudeCode(body));
+  await fs.outputFile(destFile, newFrontmatter + argsBlock + rewriteForClaudeCode(body));
   return slug;
 }
 
@@ -192,21 +181,24 @@ async function deployToClaudeCode(agentsSrcDir, skillsSrcDir, outputDir, logger)
     }
   }
 
-  // ── Deploy agents ──────────────────────────────────────────────────────────
+  // ── Deploy agents as slash commands ─────────────────────────────────────────
+  // Claude Code responds better to slash commands than to subagents for these
+  // human-in-the-loop flows: commands run in the main thread (AskUserQuestion
+  // works) and receive the caller's request via $ARGUMENTS.
   if (await fs.pathExists(agentsSrcDir)) {
-    const agentsDestDir = path.join(claudeDir, 'agents');
+    const commandsDestDir = path.join(claudeDir, 'commands');
     try {
-      await fs.ensureDir(agentsDestDir);
+      await fs.ensureDir(commandsDestDir);
       const entries = await fs.readdir(agentsSrcDir);
       const agentFiles = entries.filter((f) => f.endsWith('.agent.md') || f.endsWith('.md'));
 
       for (const file of agentFiles) {
         const srcFile = path.join(agentsSrcDir, file);
-        const slug = await transformAndWriteAgent(srcFile, agentsDestDir);
-        logger.success(`Agent "${slug}" deployed to .claude/agents/${slug}.md`);
+        const slug = await transformAndWriteCommand(srcFile, commandsDestDir);
+        logger.success(`Command "${slug}" deployed to .claude/commands/${slug}.md`);
       }
     } catch (err) {
-      logger.warn(`Claude Code agents deploy failed: ${err.message}`);
+      logger.warn(`Claude Code commands deploy failed: ${err.message}`);
     }
   }
 }
