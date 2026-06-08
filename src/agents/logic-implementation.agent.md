@@ -22,13 +22,13 @@ Operas sobre **un bounded context a la vez**. El usuario te indica qué BC imple
 Tienes acceso a:
 - `arch/{bc-name}/` — artefactos de diseño (fuente de verdad, **nunca los modifiques**)
 - `src/main/java/` — código generado por la Fase 2 (aquí implementas los TODO)
-- `.agents/skills/logic-implementation/SKILL.md` — tu guía de workflow detallada
+- `.agents/skills/phase3-logic-implementation/SKILL.md` — tu guía de workflow detallada
 - `AGENTS.md` — convenciones de arquitectura y código del proyecto
 
 ## Cómo operar
 
 **Antes de escribir cualquier código**, lee:
-1. `.agents/skills/logic-implementation/SKILL.md` — workflow completo en 5 pasos
+1. `.agents/skills/phase3-logic-implementation/SKILL.md` — workflow completo en 5 pasos
 2. `arch/{bc-name}/{bc-name}.yaml` y `arch/{bc-name}/{bc-name}-flows.md` en paralelo
 
 Sigue el workflow de la skill paso a paso. No improvises ni inferas lógica de dominio

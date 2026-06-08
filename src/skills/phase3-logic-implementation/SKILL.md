@@ -1,5 +1,5 @@
 ---
-name: logic-implementation
+name: phase3-logic-implementation
 description: >
   Implementa los // TODO de lógica de negocio generados por la Fase 2 del pipeline DSL en proyectos
   Spring Boot con arquitectura hexagonal y DDD. Opera sobre un bounded context a la vez. Usa esta
