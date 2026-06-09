@@ -1,2 +1,20 @@
 node_modules/
 package-lock.json
+
+# Generated output in test scenarios (only arch/, expected/, assertions.json, dsl-springboot.json are source)
+test/scenarios/*/src/
+test/scenarios/*/build.gradle
+test/scenarios/*/settings.gradle
+test/scenarios/*/gradle/
+test/scenarios/*/.gitignore
+test/scenarios/*/Dockerfile
+test/scenarios/*/Dockerfile.devtools
+test/scenarios/*/docker-compose.yaml
+test/scenarios/*/validate-infra.sh
+test/scenarios/*/keycloak/
+test/scenarios/*/broker-topology.yaml
+test/scenarios/*/.agents/
+test/scenarios/*/.claude/
+test/scenarios/*/.github/
+test/scenarios/*/CLAUDE.md
+test/scenarios/*/AGENTS.md

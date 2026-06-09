@@ -1,0 +1,43 @@
+# <%= resolvedConfig.systemName || system.name %> — Contexto para Agentes de Fase 3
+
+> Generado automáticamente por `dsl-springboot build`. No editar este bloque manualmente.
+> **Fase 3**: implementar la lógica de negocio en los métodos marcados con `// TODO` en los handlers.
+
+## Stack Tecnológico
+
+| Componente     | Valor                                        |
+|----------------|----------------------------------------------|
+| Java           | <%= resolvedConfig.javaVersion %>            |
+| Spring Boot    | <%= resolvedConfig.springBootVersion %>      |
+| Group ID       | <%= resolvedConfig.packageName %>            |
+| Base de datos  | <%= resolvedConfig.database || 'postgresql' %> |
+| Message broker | <%= resolvedConfig.broker || 'ninguno' %>    |
+| Auth provider  | <%= resolvedConfig.authProvider || 'ninguno' %> |
+| Cache          | <%= resolvedConfig.cacheProvider || 'ninguno' %> |
+
+## Bounded Contexts
+<% (system.boundedContexts || []).forEach(function(bc) { %>
+- `<%= bc.name %>` (<%= bc.type || 'core' %>)<%
+  const bcYaml = allBcYamls.find(function(b) { return b.bc === bc.name; });
+  const scaffoldCount = bcYaml && Array.isArray(bcYaml.useCases)
+    ? bcYaml.useCases.filter(function(uc) { return uc.implementation === 'scaffold'; }).length
+    : 0;
+  if (scaffoldCount > 0) { %> — <%= scaffoldCount %> use case(s) pendiente(s)<% } %>
+<% }); %>
+
+## Infraestructura habilitada
+<% const rel = system.infrastructure && system.infrastructure.reliability; %>
+- Transactional Outbox: <%= (rel && rel.transactionalOutbox) ? 'habilitado' : 'deshabilitado' %>
+- Consumer Idempotency: <%= (rel && rel.consumerIdempotency) ? 'habilitado' : 'deshabilitado' %>
+<% if (system.sagas && system.sagas.length > 0) { %>
+- Sagas (coreografía): <%= system.sagas.map(function(s) { return s.name; }).join(', ') %>
+<% } %>
+
+## Qué hace la Fase 3
+
+Los handlers en `application/usecases/` marcados con `throw new UnsupportedOperationException("Not implemented yet")`
+deben ser completados con la lógica de negocio. Los flujos Given/When/Then están documentados en
+`arch/{bc-name}/{bc-name}-flows.md` para cada caso de uso.
+
+La arquitectura generada es hexagonal (puertos y adaptadores). El dominio es independiente de la
+infraestructura — los handlers solo deben coordinar objetos de dominio y repositorios inyectados.

@@ -28,6 +28,7 @@ const { generateErrorsCatalog } = require('../generators/errors-catalog-generato
 const { generateControllerLayer } = require('../generators/controller-generator');
 const { generateMessagingLayer, generateDomainEventsLayer, generateSharedBrokerConfig, buildRabbitMQTopology, buildKafkaTopology } = require('../generators/messaging-generator');
 const { readBcYaml } = require('../utils/bc-yaml-reader');
+const { updateContextFiles } = require('../generators/context-updater');
 const { deployToClaudeCode } = require('../utils/claude-code-deployer');
 const { readOpenApiYaml, readAsyncApiYaml, readInternalApiYaml } = require('../utils/arch-yaml-reader');
 const { validateIntegrationCoherence, reportDiagnostics } = require('../utils/integration-validator');
@@ -628,6 +629,11 @@ async function buildCommand(options = {}) {
 
     // ── Phase 3 Claude Code project deploy (skills + slash commands) ─────────
     await deployToClaudeCode(agentsSrcDir, skillsSrcDir, outputDir, logger);
+
+    // ── Phase 13: context files for Phase 3 agents ───────────────────────────
+    logger.info('Phase 13 — generating CLAUDE.md / AGENTS.md for Phase 3 agents…');
+    await updateContextFiles(outputDir, resolvedConfig, system, allBcYamls);
+    logger.success('CLAUDE.md and AGENTS.md written to output directory.');
 
     console.log('');
     logger.success('Build complete!');
