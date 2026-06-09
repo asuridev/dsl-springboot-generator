@@ -1,0 +1,19 @@
+<%
+const packages = ['bash', 'curl', 'jq', 'netcat-openbsd'];
+if (databaseType === 'postgresql') packages.push('postgresql-client');
+if (databaseType === 'mysql') packages.push('mysql-client');
+if (requestIdempotencyEnabled) packages.push('redis');
+if (broker === 'kafka') packages.push('kcat');
+const packageLines = packages.map((p, i) =>
+  '    ' + p + (i < packages.length - 1 ? ' \\' : '')
+).join('\n');
+-%>
+FROM alpine:3.20
+
+RUN apk add --no-cache \
+<%- packageLines %> \
+    && echo "devtools ready"
+
+WORKDIR /scripts
+
+CMD ["sleep", "infinity"]

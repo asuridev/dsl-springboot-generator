@@ -34,7 +34,38 @@ de escribir cualquier código.
 
 ---
 
-## Workflow principal — 5 pasos
+## Paso 0 — Verificar estado inicial del proyecto (obligatorio antes de cualquier implementación)
+
+Ejecuta este paso siempre, sin excepción. No toques ningún `// TODO` hasta que ambas verificaciones sean exitosas.
+
+### 0a — El proyecto compila
+
+```bash
+./gradlew compileJava
+```
+
+Si hay errores de compilación:
+1. Lee el error completo. Casi siempre son imports faltantes, clases renombradas o referencias rotas dejadas por el generador de Fase 2
+2. Corrígelos en los archivos afectados (`src/main/java/...`)
+3. Repite `./gradlew compileJava` hasta que compile sin errores
+4. **No avances al Paso A hasta que el proyecto compile limpio**
+
+### 0b — La infraestructura Docker está operativa
+
+```bash
+./validate-infra.sh
+```
+
+Si el script no existe aún, verifica que el proyecto fue generado con `dsl-springboot build`. Si existe:
+- Todos los checks deben ser `[PASS]`
+- Si alguno falla: ejecuta `docker compose up -d`, espera ~30 segundos y reintenta
+- Si sigue fallando: **detente y reporta al usuario el servicio que falla**. No procedas
+
+> Referencia completa de CLI: `references/infra-validation-guide.md`
+
+---
+
+## Workflow principal — pasos A–E
 
 ### Paso A — Identificar el BC y cargar los artefactos de diseño
 
@@ -198,6 +229,83 @@ public PagedResponse<CategoryResponseDto> handle(ListCategoriesQuery query) {
 
 ---
 
+## Paso F — Validar cada flujo implementado via contenedores
+
+Ejecuta este paso **después de implementar CADA UC**, antes de pasar al siguiente. El ciclo es: implementar → validar → corregir si falla → continuar solo cuando pasa.
+
+### F1 — Recompilar
+
+```bash
+./gradlew compileJava
+```
+
+Si falla → vuelve al Paso E, corrige los errores de compilación y repite.
+
+### F2 — Verificar que la aplicación levanta
+
+Si la app no está corriendo (o acabas de hacer un cambio), reiníciala:
+
+```bash
+# Si corre via docker compose
+docker compose restart app
+
+# Health check (esperar ~10s si se reinició)
+curl -sf http://localhost:8080/actuator/health
+```
+
+Si falla → lee los logs y corrige en código:
+
+```bash
+docker compose logs --tail=100 app
+```
+
+### F3 — Ejecutar el flujo del UC recién implementado
+
+1. Consulta el flujo en `arch/{bc-name}/{bc-name}-flows.md` (FL-{BC}-{N})
+2. Traduce cada paso del **Then** a comandos HTTP y CLI de contenedores
+3. Ejecuta los comandos en el orden del flujo
+
+Ejemplo completo para un UC `CreateProduct`:
+
+```bash
+# 1. POST — crear el recurso
+curl -s -X POST http://localhost:8080/products \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Widget","categoryId":"uuid-aqui","price":{"amount":100,"currency":"USD"}}' \
+  | jq .
+
+# 2. Verificar persistencia en DB
+docker exec {SYSTEM}-devtools psql -h postgres -U postgres -d {dbName} \
+  -c "SELECT id, name, status FROM catalog.products ORDER BY created_at DESC LIMIT 1"
+
+# 3. Verificar evento publicado (si el UC emite evento Kafka)
+docker exec {SYSTEM}-devtools kcat -b kafka:29092 -t catalog.product.created -o -1 -e \
+  | jq .
+
+# 4. Verificar clave de idempotencia (si el UC tiene idempotency)
+docker exec {SYSTEM}-devtools redis-cli -h cache GET "idempotency:{requestId}"
+```
+
+Donde `{SYSTEM}` es el valor de `systemName` en `dsl-springboot.json`.
+
+> Comandos completos para cada tecnología: `references/infra-validation-guide.md`
+
+### F4 — Si el flujo falla: fix loop
+
+1. Lee los logs: `docker compose logs --tail=100 app`
+2. Identifica la capa que falla:
+   - Lógica de dominio → handler, aggregate, domain service
+   - Persistencia → repositorio JPA, entidad JPA, Flyway migration
+   - Mensajería → producer, publisher, serialización del evento
+   - Respuesta HTTP → controller, mapper, exception advice
+3. Corrige el archivo afectado
+4. Vuelve a F1 (recompilar → reiniciar → re-ejecutar el flujo)
+5. Repite hasta `[PASS]`
+
+**Regla:** Solo avanza al siguiente UC cuando este flujo ejecuta end-to-end sin errores y los side effects (DB, cache, broker) son los esperados.
+
+---
+
 ## Reglas inviolables
 
 1. **No modificas `arch/`** — solo lees artefactos de diseño, nunca los alteras
@@ -233,4 +341,5 @@ No inferas, no completes por tu cuenta. Notifica con precisión qué falta y por
 | `references/bc-artifacts-guide.md` | Necesitas entender la estructura de `flows.md` o `{bc-name}.yaml` |
 | `references/domain-service-patterns.md` | Detectas lógica que cruza aggregates o es reusable |
 | `references/virtual-threads-in-handlers.md` | El handler tiene I/O independiente en paralelo |
+| `references/infra-validation-guide.md` | Necesitas un comando CLI exacto para DB, Kafka, Redis, RabbitMQ o Keycloak |
 | `AGENTS.md` (raíz del proyecto) | Necesitas confirmar una convención de código o arquitectura |

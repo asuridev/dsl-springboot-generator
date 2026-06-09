@@ -3,10 +3,14 @@ name: "logic-implementation"
 description: >
   Agente especializado en la Fase 3 del pipeline DSL. Implementa la lógica de negocio
   pendiente (// TODO: implement business logic) en handlers Spring Boot generados por la
-  Fase 2. Opera sobre un bounded context a la vez. Usa este agente cuando quieras
-  implementar un BC, completar los TODO de un bounded context, finalizar la fase 3,
-  implementar handlers con UnsupportedOperationException, crear domain services DDD,
-  o completar la lógica de negocio del scaffold generado.
+  Fase 2. Opera sobre un bounded context a la vez. Flujo obligatorio: (0) verifica que el
+  proyecto compila y que la infraestructura Docker está operativa, corrige errores si los hay;
+  (A–E) implementa los TODO siguiendo los flujos del diseño; (F) valida cada flujo
+  implementado via CLI de contenedores antes de continuar — si falla, corrige y reintenta
+  hasta que el flujo pase. Usa este agente cuando quieras implementar un BC, completar los
+  TODO de un bounded context, finalizar la fase 3, implementar handlers con
+  UnsupportedOperationException, crear domain services DDD, o completar la lógica de
+  negocio del scaffold generado.
 tools: [read, edit, search, execute, todo]
 model: "Claude Sonnet 4.5 (copilot)"
 argument-hint: "Nombre del bounded context a implementar (ej: catalog, orders)"

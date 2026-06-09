@@ -19,7 +19,9 @@
       "driverClass": "org.postgresql.Driver",
       "dialect": "org.hibernate.dialect.PostgreSQLDialect",
       "defaultPort": 5432,
-      "jdbcPrefix": "jdbc:postgresql"
+      "jdbcPrefix": "jdbc:postgresql",
+      "cliTool": "psql",
+      "cliValidateCmd": "psql -h postgres -U {user} -d {db} -c 'SELECT 1' -q -t"
     },
     {
       "id": "mysql",
@@ -28,7 +30,9 @@
       "driverClass": "com.mysql.cj.jdbc.Driver",
       "dialect": "org.hibernate.dialect.MySQLDialect",
       "defaultPort": 3306,
-      "jdbcPrefix": "jdbc:mysql"
+      "jdbcPrefix": "jdbc:mysql",
+      "cliTool": "mysql",
+      "cliValidateCmd": "mysql -h mysql -u {user} -p{pass} {db} -e 'SELECT 1'"
     },
     {
       "id": "h2",
@@ -37,7 +41,9 @@
       "driverClass": "org.h2.Driver",
       "dialect": "org.hibernate.dialect.H2Dialect",
       "defaultPort": null,
-      "jdbcPrefix": "jdbc:h2:mem"
+      "jdbcPrefix": "jdbc:h2:mem",
+      "cliTool": null,
+      "cliValidateCmd": null
     }
   ],
   "messageBrokers": [
@@ -45,13 +51,17 @@
       "id": "rabbitmq",
       "label": "RabbitMQ",
       "gradleDependency": "implementation 'org.springframework.boot:spring-boot-starter-amqp'",
-      "testDependency": "testImplementation 'org.springframework.amqp:spring-rabbit-test'"
+      "testDependency": "testImplementation 'org.springframework.amqp:spring-rabbit-test'",
+      "cliTool": "curl (management API)",
+      "cliValidateCmd": "curl -sf -u guest:guest http://rabbitmq:15672/api/healthchecks/node"
     },
     {
       "id": "kafka",
       "label": "Apache Kafka",
       "gradleDependency": "implementation 'org.springframework.kafka:spring-kafka'",
-      "testDependency": "testImplementation 'org.springframework.kafka:spring-kafka-test'"
+      "testDependency": "testImplementation 'org.springframework.kafka:spring-kafka-test'",
+      "cliTool": "kcat",
+      "cliValidateCmd": "kcat -b kafka:29092 -L"
     }
   ],
   "authProviders": [
@@ -89,13 +99,17 @@
       "id": "redis",
       "label": "Redis",
       "springDependency": "implementation 'org.springframework.boot:spring-boot-starter-data-redis'",
-      "port": 6379
+      "port": 6379,
+      "cliTool": "redis-cli",
+      "cliValidateCmd": "redis-cli -h cache PING"
     },
     {
       "id": "valkey",
       "label": "Valkey",
       "springDependency": "implementation 'org.springframework.boot:spring-boot-starter-data-redis'",
-      "port": 6379
+      "port": 6379,
+      "cliTool": "redis-cli",
+      "cliValidateCmd": "redis-cli -h cache PING"
     }
   ]
 }

@@ -1,0 +1,15 @@
+devtools:
+  build:
+    context: .
+    dockerfile: Dockerfile.devtools
+  image: <%= systemName %>-devtools
+  container_name: <%= systemName %>-devtools
+  command: sleep infinity
+  depends_on:
+<% if (databaseType === 'postgresql') { %>
+    - postgres
+<% } else if (databaseType === 'mysql') { %>
+    - mysql
+<% } %>
+  networks:
+    - <%= systemName %>-network

@@ -121,10 +121,30 @@ async function generateDockerFiles(resolvedConfig, outputDir, opts = {}) {
     Object.assign(composeObj.services, redisServices);
   }
 
-  // 3. Dump merged YAML and write to disk
+  // 3. Merge devtools service (always present when docker-compose is generated)
+  const devtoolsSrc = path.join(DOCKER_TEMPLATES_DIR, 'devtools-service.yaml.ejs');
+  const devtoolsContent = await renderTemplate(devtoolsSrc, ctx);
+  const devtoolsServices = yaml.load(devtoolsContent);
+  Object.assign(composeObj.services, devtoolsServices);
+
+  // 4. Dump merged YAML and write to disk
   const finalYaml = yaml.dump(composeObj, { indent: 2, lineWidth: -1, noRefs: true });
   await fs.outputFile(path.join(outputDir, 'docker-compose.yaml'), finalYaml, 'utf-8');
   logger.success('docker-compose.yaml generated');
+
+  // 5. Dockerfile.devtools (custom CLI toolbox for Fase 3 agent)
+  const devtoolsDockerfileSrc = path.join(DOCKER_TEMPLATES_DIR, 'Dockerfile.devtools.ejs');
+  const devtoolsDockerfileContent = await renderTemplate(devtoolsDockerfileSrc, ctx);
+  await fs.outputFile(path.join(outputDir, 'Dockerfile.devtools'), devtoolsDockerfileContent, 'utf-8');
+  logger.success('Dockerfile.devtools generated');
+
+  // 6. validate-infra.sh (infrastructure validation script for Fase 3 agent)
+  const validateSrc = path.join(DOCKER_TEMPLATES_DIR, 'validate-infra.sh.ejs');
+  const validateContent = await renderTemplate(validateSrc, ctx);
+  const validatePath = path.join(outputDir, 'validate-infra.sh');
+  await fs.outputFile(validatePath, validateContent.replace(/\r\n/g, '\n'), 'utf-8');
+  await fs.chmod(validatePath, 0o755);
+  logger.success('validate-infra.sh generated');
 }
 
 module.exports = { generateDockerFiles };
