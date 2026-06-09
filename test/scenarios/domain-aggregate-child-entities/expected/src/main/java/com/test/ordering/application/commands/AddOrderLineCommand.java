@@ -7,7 +7,7 @@ import java.util.List;
 
 // derived_from: useCases[UC-ORD-002]
 public record AddOrderLineCommand(
-    @NotBlank String orderId,
+    String orderId,
     @NotBlank String productId,
     @NotNull Integer quantity,
     List<String> tags

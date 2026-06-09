@@ -727,6 +727,10 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
 
     const rawType = input.type;
     const isOptional = input.required === false;
+    // Fields bound to @PathVariable are validated by HTTP routing, not the request body.
+    // Emitting @NotBlank/@NotNull on them causes 422 when Spring deserializes a body
+    // that doesn't contain the path segment.
+    const isPathField = input.source === 'path';
 
     // Detect List[MultiPropVO] — e.g. List[Topics] where Topics has >1 property
     const listInnerMatch = /^List\[(.+)\]$/.exec(rawType);
@@ -740,7 +744,7 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
       imports.add('java.util.List');
       imports.add('jakarta.validation.Valid');
       const annotations = [];
-      if (!isOptional) {
+      if (!isOptional && !isPathField) {
         imports.add(`${JAKARTA}.NotNull`);
         annotations.push('@NotNull');
       }
@@ -758,7 +762,7 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
       const requestType = `${rawType}Request`;
       imports.add('jakarta.validation.Valid');
       const annotations = [];
-      if (!isOptional) {
+      if (!isOptional && !isPathField) {
         imports.add(`${JAKARTA}.NotNull`);
         annotations.push('@NotNull');
       }
@@ -777,7 +781,7 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
       for (const imp of dslImports) imports.add(imp);
       const mergedAnnotations = mergeAnnotations(typeAnnotations, dslAnnotations);
 
-      const fieldRequired = !isOptional && voProp.required !== false;
+      const fieldRequired = !isOptional && !isPathField && voProp.required !== false;
       const requiredAnnotations = fieldRequired
         ? buildRequiredAnnotation(mapped.javaType, imports)
         : [];
@@ -792,8 +796,8 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
         : javaTypeForCommand(rawType, packageName, moduleName, imports, voNames, bcYaml);
       const propDef = propMap.get(input.name);
 
-      // 1. Required annotation (@NotBlank / @NotNull)
-      const requiredAnnotations = isOptional ? [] : buildRequiredAnnotation(javaType, imports);
+      // 1. Required annotation (@NotBlank / @NotNull) — omitted for path variable fields
+      const requiredAnnotations = (isOptional || isPathField) ? [] : buildRequiredAnnotation(javaType, imports);
 
       // 2. Type-based annotations (e.g. @Size(max=n) for String(n), @Email)
       const typeAnnotations = getTypeValidationAnnotations(rawType, imports);
