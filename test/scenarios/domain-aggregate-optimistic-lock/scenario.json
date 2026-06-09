@@ -1,0 +1,4 @@
+{
+  "description": "concurrencyControl: optimistic on an aggregate. Verifies the full version round-trip: @Version on the JPA entity, a Long version field + reconstruction-constructor param + getVersion() on the domain aggregate, and the mapper propagating it in toDomain() (jpa.getVersion()) and toJpa() (.version(domain.getVersion())). Without this round-trip Hibernate throws OptimisticLockException on the first update.",
+  "compileGeneratedJava": true
+}

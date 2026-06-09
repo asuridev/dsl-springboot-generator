@@ -1084,6 +1084,11 @@ function buildToDomainBody(aggregate, bcYaml) {
   if (aggregate.softDelete) {
     args.push('jpa.getDeletedAt()');
   }
+  // Optimistic locking: thread the @Version column back into the domain aggregate
+  // so the next toJpa()/save() carries the loaded version and Hibernate's guard works.
+  if (aggregate.concurrencyControl === 'optimistic') {
+    args.push('jpa.getVersion()');
+  }
 
   const argLines = args.map((a, i) => `${i > 0 ? '            ' : ''}${a}${i < args.length - 1 ? ',' : ''}`);
   return `return new ${name}(\n            ${argLines.join('\n').trimStart()}\n        );`;
@@ -1161,6 +1166,12 @@ function buildToJpaBody(aggregate, bcYaml) {
     } else {
       lines.push(`        .${fieldName}(domain.get${capitalize(fieldName)}().stream().map(this::to${entity.name}Jpa).collect(java.util.stream.Collectors.toCollection(java.util.ArrayList::new)))`);
     }
+  }
+
+  // Optimistic locking: propagate the loaded @Version so updates run the optimistic
+  // guard; null on a freshly-created aggregate → Hibernate assigns 0 on INSERT.
+  if (aggregate.concurrencyControl === 'optimistic') {
+    lines.push(`        .version(domain.getVersion())`);
   }
 
   lines.push(`        .build();`);

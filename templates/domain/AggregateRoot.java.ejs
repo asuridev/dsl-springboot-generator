@@ -35,9 +35,11 @@ public class <%= name %> {
 <% } %>
 <% if (hasSoftDelete) { %>    private Instant deletedAt;
 <% } %>
+<% if (hasVersion) { %>    private Long version;
+<% } %>
 
     // ─── Full constructor (reconstruction from persistence) ───────────────────
-    public <%= name %>(<% let _ri = 0; %>UUID id<% _ri++; %><% fields.forEach(field => { %>, <%- field.javaType %> <%= field.name %><% _ri++; %><% }); %><% childEntities.forEach(ce => { %>, <%- ce.javaType %> <%= ce.fieldName %><% _ri++; %><% }); %><% if (hasAudit) { %>, Instant createdAt, Instant updatedAt<% } %><% if (hasSoftDelete) { %>, Instant deletedAt<% } %>) {
+    public <%= name %>(<% let _ri = 0; %>UUID id<% _ri++; %><% fields.forEach(field => { %>, <%- field.javaType %> <%= field.name %><% _ri++; %><% }); %><% childEntities.forEach(ce => { %>, <%- ce.javaType %> <%= ce.fieldName %><% _ri++; %><% }); %><% if (hasAudit) { %>, Instant createdAt, Instant updatedAt<% } %><% if (hasSoftDelete) { %>, Instant deletedAt<% } %><% if (hasVersion) { %>, Long version<% } %>) {
         this.id = id;
 <% fields.forEach(field => { %>        this.<%= field.name %> = <% if (field.isList) { %>new ArrayList<>(<%= field.name %> != null ? <%= field.name %> : java.util.Collections.emptyList())<% } else { %><%= field.name %><% } %>;
 <% }); %>
@@ -47,6 +49,7 @@ public class <%= name %> {
         this.updatedAt = updatedAt;
 <% } %>
 <% if (hasSoftDelete) { %>        this.deletedAt = deletedAt;
+<% } %><% if (hasVersion) { %>        this.version = version;
 <% } %>    }
 <% if (staticFactory || creationParams.length > 0 || autoInits.length > 0) { %>
 
@@ -102,6 +105,11 @@ public class <%= name %> {
 
     public boolean isDeleted() {
         return this.deletedAt != null;
+    }
+<% } %>
+<% if (hasVersion) { %>
+    public Long getVersion() {
+        return version;
     }
 <% } %>
 <% if (businessMethods.length > 0) { %>

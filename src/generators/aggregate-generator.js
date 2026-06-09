@@ -1122,6 +1122,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
       description: aggregate.description || '',
       hasAudit: !!aggregate.auditable,
       hasSoftDelete: !!aggregate.softDelete,
+      hasVersion: aggregate.concurrencyControl === 'optimistic',
       hasDomainEvents: aggregatePublishedEvents.length > 0,
       hasChildEntities: childEntities.length > 0,
       imports,

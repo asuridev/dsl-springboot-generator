@@ -1,0 +1,8 @@
+package com.test.shared.domain;
+
+/**
+ * Marker interface for domain events.
+ * Implemented by all domain event records to enable type-safe dispatch
+ * via Spring's ApplicationEventPublisher.
+ */
+public interface DomainEvent {}

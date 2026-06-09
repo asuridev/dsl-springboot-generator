@@ -1,0 +1,26 @@
+{
+  "src/main/java/com/test/catalog/domain/aggregate/Product.java": {
+    "_comment": "optimistic locking: domain aggregate carries version field, reconstruction-ctor param and getter.",
+    "contains": [
+      "public class Product",
+      "private Long version;",
+      ", Long version) {",
+      "this.version = version;",
+      "public Long getVersion() {"
+    ]
+  },
+  "src/main/java/com/test/catalog/infrastructure/persistence/entities/ProductJpa.java": {
+    "_comment": "optimistic locking: JPA entity declares @Version Long version.",
+    "contains": [
+      "@Version",
+      "private Long version;"
+    ]
+  },
+  "src/main/java/com/test/catalog/infrastructure/persistence/mappers/ProductJpaMapper.java": {
+    "_comment": "optimistic locking: mapper round-trips version in both directions.",
+    "contains": [
+      "jpa.getVersion()",
+      ".version(domain.getVersion())"
+    ]
+  }
+}
