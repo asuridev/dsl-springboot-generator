@@ -9,6 +9,9 @@ description: >
   para lógica que cruza agregados o para operaciones concurrentes con hilos virtuales.
 ---
 
+> **Rutas de referencia:** Los archivos `references/` citados en este skill están en
+> `.agents/skills/phase3-logic-implementation/references/` desde la raíz del proyecto.
+
 # Phase 3 — Implementación de Lógica de Negocio
 
 Eres el agente de la **Fase 3** del pipeline DSL. Tu única responsabilidad es completar la lógica de
@@ -58,10 +61,19 @@ Si hay errores de compilación:
 
 Si el script no existe aún, verifica que el proyecto fue generado con `dsl-springboot build`. Si existe:
 - Todos los checks deben ser `[PASS]`
-- Si alguno falla: ejecuta `docker compose up -d`, espera ~30 segundos y reintenta
-- Si sigue fallando: **detente y reporta al usuario el servicio que falla**. No procedas
+- Si algún check falla con `[FAIL]`: el servicio está caído. Detecta el runtime y levanta:
+  ```bash
+  if command -v podman &>/dev/null; then COMPOSE="podman compose"
+  elif command -v docker &>/dev/null; then COMPOSE="docker compose"; fi
+  ${COMPOSE} up -d
+  ```
+  Espera ~30 segundos y reintenta `./validate-infra.sh`
+- Si el script lanza un error inesperado (variable no definida, `command not found`, endpoint
+  incorrecto para tu versión del servicio): **el script tiene un bug**, no la infraestructura.
+  Verifica cada servicio manualmente con los comandos de la guía antes de intentar levantar nada
+- Si sigue fallando tras reintentar: **detente y reporta al usuario el servicio que falla**
 
-> Referencia completa de CLI: `references/infra-validation-guide.md`
+> Referencia completa de CLI: `.agents/skills/phase3-logic-implementation/references/infra-validation-guide.md`
 
 ---
 
@@ -77,7 +89,7 @@ Si el script no existe aún, verifica que el proyecto fue generado con `dsl-spri
     - `arch/{bc-name}/{bc-name}-open-api.yaml` — solo para auditar binding/status/query params generados
     - `arch/{bc-name}/{bc-name}-internal-api.yaml` — si existe, solo para auditar contratos internos
     - `arch/{bc-name}/{bc-name}-async-api.yaml` — solo para auditar canales, routing keys y payloads
-3. Lee `references/bc-artifacts-guide.md` para saber qué extraer de cada archivo
+3. Lee `.agents/skills/phase3-logic-implementation/references/bc-artifacts-guide.md` para saber qué extraer de cada archivo
 
 > **Nunca leas `arch/review/`**. Si detectas que un artefacto necesario está ahí,
 > detente y notifica al usuario.
@@ -107,13 +119,13 @@ lógica de dominio pendiente en factory methods o business methods.
 Para cada handler TODO, determina:
 
 **¿Requiere domain service?**
-Lee `references/domain-service-patterns.md` para decidir. Señales de alerta:
+Lee `.agents/skills/phase3-logic-implementation/references/domain-service-patterns.md` para decidir. Señales de alerta:
 - La lógica cruza más de un aggregate (ej: verificar categoría antes de crear producto)
 - La misma lógica aparece en más de un handler (ej: slug generation en CreateCategory y CreateProduct)
 - El flujo Given/When/Then describe pasos que no pertenecen naturalmente a ningún aggregate
 
 **¿Requiere concurrencia con hilos virtuales?**
-Lee `references/virtual-threads-in-handlers.md` para decidir. Solo aplica cuando:
+Lee `.agents/skills/phase3-logic-implementation/references/virtual-threads-in-handlers.md` para decidir. Solo aplica cuando:
 - El handler realiza dos o más operaciones I/O **independientes** (sin dependencia entre ellas)
 - Ejemplos: batch query a BD + llamada HTTP externa, dos repositorios sin relación causal
 
@@ -153,6 +165,12 @@ Antes de editar cualquier handler o aggregate, construye una mini-checklist por 
     y listeners usen el mismo valor contractual. El fallback permitido es `{bc}.{event-kebab-con-puntos}`.
 - **Imports y compilación**: después de tocar aggregates, handlers, mappers o services, revisa que
     todas las clases de error, value objects, DTOs de proyección y excepciones usadas estén importadas.
+- **Optimistic locking**: si la JPA entity del aggregate tiene `@Version Long version`, verifica
+    que el aggregate de dominio también declare el campo `Long version` con getter, y que el mapper
+    lo propague en `toDomain()` y `toJpa()`. Sin ese round-trip, Hibernate lanzará
+    `OptimisticLockException` en el primer update de cualquier aggregate con
+    `concurrencyControl: optimistic`. Si el campo no existe en el dominio, repórtalo como defecto
+    del generador Fase 2 antes de proceder.
 
 Si la checklist revela una contradicción entre YAML, OpenAPI/AsyncAPI y flows.md, detente
 antes de implementar y reporta la inconsistencia exacta.
@@ -165,7 +183,7 @@ Antes de implementar los handlers, crea los domain services identificados en el 
 
 Ubicación: `src/main/java/{package}/{bc-name}/domain/services/`
 
-Sigue las instrucciones de `references/domain-service-patterns.md` para la estructura exacta.
+Sigue las instrucciones de `.agents/skills/phase3-logic-implementation/references/domain-service-patterns.md` para la estructura exacta.
 
 ---
 
@@ -243,23 +261,57 @@ Si falla → vuelve al Paso E, corrige los errores de compilación y repite.
 
 ### F2 — Verificar que la aplicación levanta
 
-Si la app no está corriendo (o acabas de hacer un cambio), reiníciala:
+Detecta el runtime disponible (una vez por sesión, reutiliza la variable en F4):
 
 ```bash
-# Si corre via docker compose
-docker compose restart app
+if command -v podman &>/dev/null; then RUNTIME=podman; COMPOSE="podman compose"
+elif command -v docker &>/dev/null; then RUNTIME=docker; COMPOSE="docker compose"
+fi
+```
+
+**Si la app corre via contenedor:**
+
+```bash
+${COMPOSE} restart app
 
 # Health check (esperar ~10s si se reinició)
-curl -sf http://localhost:8080/actuator/health
+curl -sf http://localhost:8080/actuator/health | jq .status
 ```
 
-Si falla → lee los logs y corrige en código:
-
+Si falla → lee los logs:
 ```bash
-docker compose logs --tail=100 app
+${COMPOSE} logs --tail=100 app
 ```
+
+**Si la app corre localmente con `./gradlew bootRun`:**
+
+Detén el proceso existente (Ctrl+C en la terminal correspondiente) y reinicia:
+```bash
+./gradlew bootRun
+```
+El perfil activo está en `src/main/resources/application.yml` bajo `spring.profiles.active`.
+Los logs aparecen directamente en la terminal donde corre `bootRun`; no hay comando equivalente
+a `${COMPOSE} logs`.
 
 ### F3 — Ejecutar el flujo del UC recién implementado
+
+**Si el proyecto usa Keycloak** (`authProvider: keycloak` en `CLAUDE.md` o `AGENTS.md`),
+obtén el token antes de ejecutar cualquier `curl`:
+
+```bash
+TOKEN=$(curl -s -X POST \
+  "http://localhost:8180/realms/{realm}/protocol/openid-connect/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "grant_type=client_credentials&client_id={clientId}&client_secret={clientSecret}" \
+  | jq -r .access_token)
+```
+
+Añade `-H "Authorization: Bearer ${TOKEN}"` a cada `curl` de validación.
+El `{realm}`, `{clientId}` y `{clientSecret}` están en la configuración del proyecto
+(normalmente `docker-compose.yml` o `keycloak/realm-export.json`).
+
+> Variantes (password grant, introspección, etc.):
+> `.agents/skills/phase3-logic-implementation/references/infra-validation-guide.md` → sección Keycloak
 
 1. Consulta el flujo en `arch/{bc-name}/{bc-name}-flows.md` (FL-{BC}-{N})
 2. Traduce cada paso del **Then** a comandos HTTP y CLI de contenedores
@@ -275,24 +327,24 @@ curl -s -X POST http://localhost:8080/products \
   | jq .
 
 # 2. Verificar persistencia en DB
-docker exec {SYSTEM}-devtools psql -h postgres -U postgres -d {dbName} \
+${RUNTIME} exec {SYSTEM}-devtools psql -h postgres -U postgres -d {dbName} \
   -c "SELECT id, name, status FROM catalog.products ORDER BY created_at DESC LIMIT 1"
 
 # 3. Verificar evento publicado (si el UC emite evento Kafka)
-docker exec {SYSTEM}-devtools kcat -b kafka:29092 -t catalog.product.created -o -1 -e \
+${RUNTIME} exec {SYSTEM}-devtools kcat -b kafka:29092 -t catalog.product.created -o -1 -e \
   | jq .
 
 # 4. Verificar clave de idempotencia (si el UC tiene idempotency)
-docker exec {SYSTEM}-devtools redis-cli -h cache GET "idempotency:{requestId}"
+${RUNTIME} exec {SYSTEM}-devtools redis-cli -h cache GET "idempotency:{requestId}"
 ```
 
 Donde `{SYSTEM}` es el valor de `systemName` en `dsl-springboot.json`.
 
-> Comandos completos para cada tecnología: `references/infra-validation-guide.md`
+> Comandos completos para cada tecnología: `.agents/skills/phase3-logic-implementation/references/infra-validation-guide.md`
 
 ### F4 — Si el flujo falla: fix loop
 
-1. Lee los logs: `docker compose logs --tail=100 app`
+1. Lee los logs: `${COMPOSE} logs --tail=100 app` (o revisa la terminal de `bootRun` si corre local)
 2. Identifica la capa que falla:
    - Lógica de dominio → handler, aggregate, domain service
    - Persistencia → repositorio JPA, entidad JPA, Flyway migration
@@ -338,8 +390,8 @@ No inferas, no completes por tu cuenta. Notifica con precisión qué falta y por
 
 | Archivo | Leer cuando... |
 |---|---|
-| `references/bc-artifacts-guide.md` | Necesitas entender la estructura de `flows.md` o `{bc-name}.yaml` |
-| `references/domain-service-patterns.md` | Detectas lógica que cruza aggregates o es reusable |
-| `references/virtual-threads-in-handlers.md` | El handler tiene I/O independiente en paralelo |
-| `references/infra-validation-guide.md` | Necesitas un comando CLI exacto para DB, Kafka, Redis, RabbitMQ o Keycloak |
+| `.agents/skills/phase3-logic-implementation/references/bc-artifacts-guide.md` | Necesitas entender la estructura de `flows.md` o `{bc-name}.yaml` |
+| `.agents/skills/phase3-logic-implementation/references/domain-service-patterns.md` | Detectas lógica que cruza aggregates o es reusable |
+| `.agents/skills/phase3-logic-implementation/references/virtual-threads-in-handlers.md` | El handler tiene I/O independiente en paralelo |
+| `.agents/skills/phase3-logic-implementation/references/infra-validation-guide.md` | Comandos CLI exactos para DB, Kafka, Redis, RabbitMQ, Keycloak o reinicio de app |
 | `AGENTS.md` (raíz del proyecto) | Necesitas confirmar una convención de código o arquitectura |
