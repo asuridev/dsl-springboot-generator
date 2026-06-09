@@ -201,6 +201,41 @@ async function deployToClaudeCode(agentsSrcDir, skillsSrcDir, outputDir, logger)
       logger.warn(`Claude Code commands deploy failed: ${err.message}`);
     }
   }
+
+  // ── Deploy settings.json ─────────────────────────────────────────────────────
+  try {
+    const settings = {
+      permissions: {
+        allow: [
+          // Gradle — compilar, testear, empaquetar, ejecutar
+          'Bash(./gradlew build)',
+          'Bash(./gradlew compileJava)',
+          'Bash(./gradlew test)',
+          'Bash(./gradlew clean)',
+          'Bash(./gradlew bootRun)',
+          'Bash(./gradlew bootJar)',
+          'PowerShell(.\\gradlew.bat build)',
+          'PowerShell(.\\gradlew.bat compileJava)',
+          'PowerShell(.\\gradlew.bat test)',
+          'PowerShell(.\\gradlew.bat clean)',
+          'PowerShell(.\\gradlew.bat bootRun)',
+          'PowerShell(.\\gradlew.bat bootJar)',
+          // Java — ejecutar JAR construido y verificar versión del JDK
+          'Bash(java -jar *)',
+          'Bash(java --version)',
+          'Bash(java -version)',
+          'PowerShell(java -jar *)',
+          'PowerShell(java --version)',
+          'PowerShell(java -version)',
+        ],
+      },
+    };
+    const settingsPath = path.join(claudeDir, 'settings.json');
+    await fs.writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
+    logger.success('Claude Code settings deployed to .claude/settings.json');
+  } catch (err) {
+    logger.warn(`Claude Code settings deploy failed: ${err.message}`);
+  }
 }
 
 module.exports = { deployToClaudeCode };
