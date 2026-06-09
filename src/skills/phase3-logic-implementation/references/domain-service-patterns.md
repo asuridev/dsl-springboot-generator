@@ -52,6 +52,17 @@ esa validación va en el handler o en un domain service, no dentro del aggregate
 
 ---
 
+## Límite duro — los repositorios coordinados son SIEMPRE del mismo BC
+
+Un domain service coordina aggregates **del mismo bounded context**. Los repositorios que recibe
+(Patrón 2) son puertos de salida **de su propio BC**. **Nunca** inyectes el repositorio de otro BC
+en un domain service ni en un handler: eso acopla dos contextos y rompe la arquitectura
+hexagonal/DDD. Para datos de otro BC, usa la `integration:` declarada (adapter HTTP/ACL o evento
+async), no su capa de persistencia. Si la lógica parece exigir el repositorio de otro BC y no hay
+integración declarada, **detente y notifica al usuario** — no inyectes el repositorio cruzado.
+
+---
+
 ## Estructura en el proyecto generado
 
 ### Ubicación
