@@ -27,7 +27,7 @@
 
 ## Infraestructura habilitada
 <% const rel = system.infrastructure && system.infrastructure.reliability; %>
-- Transactional Outbox: <%= (rel && rel.transactionalOutbox) ? 'habilitado' : 'deshabilitado' %>
+- Transactional Outbox: <%= (rel && rel.outbox) ? 'habilitado' : 'deshabilitado' %>
 - Consumer Idempotency: <%= (rel && rel.consumerIdempotency) ? 'habilitado' : 'deshabilitado' %>
 <% if (system.sagas && system.sagas.length > 0) { %>
 - Sagas (coreografía): <%= system.sagas.map(function(s) { return s.name; }).join(', ') %>
