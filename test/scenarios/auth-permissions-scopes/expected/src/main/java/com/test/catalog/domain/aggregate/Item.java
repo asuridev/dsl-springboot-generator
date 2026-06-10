@@ -28,8 +28,10 @@ public class Item {
     }
 
     // ─── Creation constructor (new Item) ───────────────────────────────
-    private Item(String name, String status) {
-        this.id = UUID.randomUUID();
+    // Identity is assigned at the application edge (controller) and propagated
+    // here via the command/factory — not generated inside the domain.
+    private Item(UUID id, String name, String status) {
+        this.id = id;
         this.name = name;
         this.status = status;
     }
@@ -37,8 +39,8 @@ public class Item {
     // ─── Static factory ───────────────────────────────────────────────────────
 
     /** derived_from: UC-CAT-002 CreateItem */
-    public static Item create() {
-        Item instance = new Item(null /* TODO: compute name */, null /* TODO: compute status */);
+    public static Item create(UUID id) {
+        Item instance = new Item(id, null /* TODO: compute name */, null /* TODO: compute status */);
         return instance;
     }
 

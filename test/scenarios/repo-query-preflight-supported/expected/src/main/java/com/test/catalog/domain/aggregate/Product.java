@@ -23,14 +23,6 @@ public class Product {
         this.status = status;
     }
 
-    // ─── Creation constructor (new Product) ───────────────────────────────
-    private Product(String name, UUID categoryId, ProductStatus status) {
-        this.id = UUID.randomUUID();
-        this.name = name;
-        this.categoryId = categoryId;
-        this.status = status;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

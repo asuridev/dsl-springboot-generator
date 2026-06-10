@@ -38,12 +38,6 @@ public class Order {
         this.customerId = customerId;
     }
 
-    // ─── Creation constructor (new Order) ───────────────────────────────
-    private Order(UUID customerId) {
-        this.id = UUID.randomUUID();
-        this.customerId = customerId;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

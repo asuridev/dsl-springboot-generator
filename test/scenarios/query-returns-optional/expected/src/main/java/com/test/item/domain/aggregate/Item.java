@@ -21,13 +21,6 @@ public class Item {
         this.price = price;
     }
 
-    // ─── Creation constructor (new Item) ───────────────────────────────
-    private Item(String name, BigDecimal price) {
-        this.id = UUID.randomUUID();
-        this.name = name;
-        this.price = price;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

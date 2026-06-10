@@ -21,13 +21,6 @@ public class Product {
         this.status = status;
     }
 
-    // ─── Creation constructor (new Product) ───────────────────────────────
-    private Product(String name, ProductStatus status) {
-        this.id = UUID.randomUUID();
-        this.name = name;
-        this.status = status;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

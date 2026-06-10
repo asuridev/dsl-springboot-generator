@@ -39,17 +39,11 @@ public class Product {
         this.name = name;
     }
 
-    // ─── Creation constructor (new Product) ───────────────────────────────
-    private Product(String name) {
-        this.id = UUID.randomUUID();
-        this.name = name;
-    }
-
     // ─── Static factory ───────────────────────────────────────────────────────
 
     /** derived_from: UC-PRD-001 CreateProduct */
-    public static Product create(String name) {
-        Product instance = new Product(name);
+    public static Product create(UUID id, String name) {
+        Product instance = new Product(id, name);
         instance.raise(
             new ProductCreatedEvent(
                 EventMetadata.now("ProductCreated", 1, "catalog"),

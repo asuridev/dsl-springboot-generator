@@ -21,13 +21,6 @@ public class Cart {
         this.status = status;
     }
 
-    // ─── Creation constructor (new Cart) ───────────────────────────────
-    private Cart(UUID customerId, CartStatus status) {
-        this.id = UUID.randomUUID();
-        this.customerId = customerId;
-        this.status = status;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

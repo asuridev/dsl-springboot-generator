@@ -1,11 +1,11 @@
 {
   "src/main/java/com/test/catalog/domain/aggregate/Tag.java": {
-    "_comment": "No-props aggregate: private creation constructor must be generated for the static factory to call (GAP-AGG-004).",
+    "_comment": "No-props aggregate: early-identity create. The id is generated at the controller and flows in via the factory/creation constructor (GAP-AGG-004). Tag is auditable, so the creation constructor (id only) does not collide with the full reconstruction constructor and is retained.",
     "contains": [
       "public class Tag",
-      "public static Tag create()",
-      "private Tag()",
-      "this.id = UUID.randomUUID()"
+      "public static Tag create(UUID id)",
+      "private Tag(UUID id)",
+      "this.id = id;"
     ]
   }
 }

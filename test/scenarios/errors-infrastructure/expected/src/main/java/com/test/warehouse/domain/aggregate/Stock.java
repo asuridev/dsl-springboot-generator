@@ -20,13 +20,6 @@ public class Stock {
         this.quantity = quantity;
     }
 
-    // ─── Creation constructor (new Stock) ───────────────────────────────
-    private Stock(String sku, Integer quantity) {
-        this.id = UUID.randomUUID();
-        this.sku = sku;
-        this.quantity = quantity;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

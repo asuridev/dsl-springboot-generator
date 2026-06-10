@@ -28,8 +28,10 @@ public class Category {
     }
 
     // ─── Creation constructor (new Category) ───────────────────────────────
-    private Category(String name, UUID parentId) {
-        this.id = UUID.randomUUID();
+    // Identity is assigned at the application edge (controller) and propagated
+    // here via the command/factory — not generated inside the domain.
+    private Category(UUID id, String name, UUID parentId) {
+        this.id = id;
         this.name = name;
         this.parentId = parentId;
     }

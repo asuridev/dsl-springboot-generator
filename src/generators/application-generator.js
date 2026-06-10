@@ -1275,10 +1275,14 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
 
   // Domain method invocation
   if (isCreate) {
+    // Early-identity: the aggregate id is generated at the controller and travels
+    // in the command as its first component. Pass it as the first factory/ctor
+    // argument so the domain receives identity instead of generating it.
+    const createArgs = [`command.id()`, ...callArgs];
     const hasStaticFactory = dm && dm.returns === agg.name;
     const factoryCall = hasStaticFactory
-      ? `${agg.name}.create(${callArgs.join(', ')})`
-      : `new ${agg.name}(${callArgs.join(', ')})`;
+      ? `${agg.name}.create(${createArgs.join(', ')})`
+      : `new ${agg.name}(${createArgs.join(', ')})`;
     lines.push(`        ${agg.name} ${aggVarName} = ${factoryCall};`);
   } else {
     // When the UC method is "delete" on a softDelete aggregate, invoke softDelete() in the domain
@@ -1971,6 +1975,14 @@ async function generateApplicationMapper(agg, moduleName, packageName, bcDir, vo
 async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames = new Set(), bcYaml = null, eventDtoNames = new Set()) {
   const ucClassName = toPascalCase(uc.name);
   const { fields, imports, voRequestsNeeded } = buildCommandFields(uc, agg, packageName, moduleName, voNames, bcYaml, eventDtoNames);
+  // Early-identity: create commands carry the aggregate id as their first
+  // component. The id is generated at the application edge (controller) and
+  // never deserialized from the client body — @JsonIgnore keeps it out of the
+  // request contract while still flowing through to the handler/factory.
+  if (uc.method === 'create') {
+    fields.unshift({ type: 'UUID', name: 'id', annotations: ['@com.fasterxml.jackson.annotation.JsonIgnore'] });
+    if (!imports.includes('java.util.UUID')) imports.push('java.util.UUID');
+  }
   // [G4] command return type: when uc.returns is declared, the record implements
   // ReturningCommand<R> instead of Command. Reuses query return-type resolution
   // (Page[X], List[X], <AggName>Response → <AggName>ResponseDto, bare DTO).
@@ -2013,7 +2025,7 @@ async function generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap
       useCaseName: ucClassName,
       useCaseId: uc.id,
       description: uc.description || '',
-      imports: cmdImports,
+      imports: [...new Set(cmdImports)],
       fields,
       returnType,
     }

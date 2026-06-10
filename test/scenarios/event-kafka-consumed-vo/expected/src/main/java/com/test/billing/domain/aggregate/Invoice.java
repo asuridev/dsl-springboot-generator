@@ -22,13 +22,6 @@ public class Invoice {
         this.totalAmount = totalAmount;
     }
 
-    // ─── Creation constructor (new Invoice) ───────────────────────────────
-    private Invoice(UUID orderId, Money totalAmount) {
-        this.id = UUID.randomUUID();
-        this.orderId = orderId;
-        this.totalAmount = totalAmount;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

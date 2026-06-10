@@ -19,12 +19,6 @@ public class Notification {
         this.shipmentId = shipmentId;
     }
 
-    // ─── Creation constructor (new Notification) ───────────────────────────────
-    private Notification(UUID shipmentId) {
-        this.id = UUID.randomUUID();
-        this.shipmentId = shipmentId;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

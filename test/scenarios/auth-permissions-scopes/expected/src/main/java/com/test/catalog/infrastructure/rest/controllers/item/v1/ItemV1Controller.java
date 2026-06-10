@@ -9,8 +9,11 @@ import com.test.shared.infrastructure.configurations.useCaseConfig.UseCaseMediat
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import java.net.URI;
+import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
@@ -42,12 +45,13 @@ public class ItemV1Controller {
      * Create a catalog item
      */
     @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary = "Create a catalog item")
     @PreAuthorize("hasAnyAuthority('SCOPE_catalog:write')")
-    public void createItem(@Valid @RequestBody CreateItemCommand command) {
+    public ResponseEntity<Void> createItem(@Valid @RequestBody CreateItemCommand command) {
         log.info("createItem");
-        useCaseMediator.dispatch(command);
+        UUID id = UUID.randomUUID();
+        useCaseMediator.dispatch(new CreateItemCommand(id, command.name()));
+        return ResponseEntity.created(URI.create("/api/v1/items/" + id)).build();
     }
 
     /**

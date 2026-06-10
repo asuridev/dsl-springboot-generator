@@ -18,12 +18,6 @@ public class Payment {
         this.status = status;
     }
 
-    // ─── Creation constructor (new Payment) ───────────────────────────────
-    private Payment(String status) {
-        this.id = UUID.randomUUID();
-        this.status = status;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

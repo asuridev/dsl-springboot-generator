@@ -24,16 +24,18 @@ public class Product {
     }
 
     // ─── Creation constructor (new Product) ───────────────────────────────
-    private Product(String name) {
-        this.id = UUID.randomUUID();
+    // Identity is assigned at the application edge (controller) and propagated
+    // here via the command/factory — not generated inside the domain.
+    private Product(UUID id, String name) {
+        this.id = id;
         this.name = name;
     }
 
     // ─── Static factory ───────────────────────────────────────────────────────
 
     /** derived_from: UC-PRD-001 CreateProduct */
-    public static Product create(String name) {
-        Product instance = new Product(name);
+    public static Product create(UUID id, String name) {
+        Product instance = new Product(id, name);
         return instance;
     }
 

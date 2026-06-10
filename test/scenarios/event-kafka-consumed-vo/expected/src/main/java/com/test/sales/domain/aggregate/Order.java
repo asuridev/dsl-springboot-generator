@@ -42,13 +42,6 @@ public class Order {
         this.status = status;
     }
 
-    // ─── Creation constructor (new Order) ───────────────────────────────
-    private Order(Money totalAmount, OrderStatus status) {
-        this.id = UUID.randomUUID();
-        this.totalAmount = totalAmount;
-        this.status = status;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

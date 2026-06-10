@@ -19,12 +19,6 @@ public class Payment {
         this.amount = amount;
     }
 
-    // ─── Creation constructor (new Payment) ───────────────────────────────
-    private Payment(BigDecimal amount) {
-        this.id = UUID.randomUUID();
-        this.amount = amount;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

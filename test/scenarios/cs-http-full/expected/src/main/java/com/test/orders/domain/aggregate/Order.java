@@ -18,12 +18,6 @@ public class Order {
         this.status = status;
     }
 
-    // ─── Creation constructor (new Order) ───────────────────────────────
-    private Order(String status) {
-        this.id = UUID.randomUUID();
-        this.status = status;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

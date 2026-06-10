@@ -33,16 +33,18 @@ public class Order {
     }
 
     // ─── Creation constructor (new Order) ───────────────────────────────
-    private Order(UUID customerId) {
-        this.id = UUID.randomUUID();
+    // Identity is assigned at the application edge (controller) and propagated
+    // here via the command/factory — not generated inside the domain.
+    private Order(UUID id, UUID customerId) {
+        this.id = id;
         this.customerId = customerId;
     }
 
     // ─── Static factory ───────────────────────────────────────────────────────
 
     /** derived_from: UC-ORD-001 CreateOrder */
-    public static Order create(UUID customerId) {
-        Order instance = new Order(customerId);
+    public static Order create(UUID id, UUID customerId) {
+        Order instance = new Order(id, customerId);
         return instance;
     }
 

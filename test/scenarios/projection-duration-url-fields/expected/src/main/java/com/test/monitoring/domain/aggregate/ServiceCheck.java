@@ -39,12 +39,6 @@ public class ServiceCheck {
         this.serviceName = serviceName;
     }
 
-    // ─── Creation constructor (new ServiceCheck) ───────────────────────────────
-    private ServiceCheck(String serviceName) {
-        this.id = UUID.randomUUID();
-        this.serviceName = serviceName;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

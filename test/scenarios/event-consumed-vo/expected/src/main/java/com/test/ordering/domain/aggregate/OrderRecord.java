@@ -22,13 +22,6 @@ public class OrderRecord {
         this.status = status;
     }
 
-    // ─── Creation constructor (new OrderRecord) ───────────────────────────────
-    private OrderRecord(UUID buyerId, String status) {
-        this.id = UUID.randomUUID();
-        this.buyerId = buyerId;
-        this.status = status;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

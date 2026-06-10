@@ -41,13 +41,6 @@ public class StockItem {
         this.quantity = quantity;
     }
 
-    // ─── Creation constructor (new StockItem) ───────────────────────────────
-    private StockItem(UUID orderId, Integer quantity) {
-        this.id = UUID.randomUUID();
-        this.orderId = orderId;
-        this.quantity = quantity;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

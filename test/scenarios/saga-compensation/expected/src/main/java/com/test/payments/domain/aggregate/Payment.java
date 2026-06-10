@@ -39,12 +39,6 @@ public class Payment {
         this.orderId = orderId;
     }
 
-    // ─── Creation constructor (new Payment) ───────────────────────────────
-    private Payment(UUID orderId) {
-        this.id = UUID.randomUUID();
-        this.orderId = orderId;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

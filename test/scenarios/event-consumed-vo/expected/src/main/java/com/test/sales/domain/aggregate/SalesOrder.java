@@ -40,13 +40,6 @@ public class SalesOrder {
         this.status = status;
     }
 
-    // ─── Creation constructor (new SalesOrder) ───────────────────────────────
-    private SalesOrder(UUID buyerId, String status) {
-        this.id = UUID.randomUUID();
-        this.buyerId = buyerId;
-        this.status = status;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

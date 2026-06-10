@@ -18,12 +18,6 @@ public class Product {
         this.name = name;
     }
 
-    // ─── Creation constructor (new Product) ───────────────────────────────
-    private Product(String name) {
-        this.id = UUID.randomUUID();
-        this.name = name;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

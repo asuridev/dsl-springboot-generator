@@ -21,13 +21,6 @@ public class Invoice {
         this.amount = amount;
     }
 
-    // ─── Creation constructor (new Invoice) ───────────────────────────────
-    private Invoice(String number, BigDecimal amount) {
-        this.id = UUID.randomUUID();
-        this.number = number;
-        this.amount = amount;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

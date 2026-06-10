@@ -153,7 +153,8 @@ Los artefactos YAML declaran **qué** y **para qué**. El generador decide **có
 | El YAML declara | El generador genera |
 |---|---|
 | `auditable: true` | columnas `created_at`/`updated_at`, anotaciones JPA, extend `FullAuditableEntity` |
-| `readOnly: true` + `defaultValue: generated` | UUID v4 en factory, sin setter, sin parámetro en constructor de creación |
+| `readOnly: true` + `defaultValue: generated` (campo `id`) | **identidad temprana**: el `id` se genera en el controller, viaja en el command (primer componente, `@JsonIgnore`) y entra al dominio por la factory/constructor; la entidad JPA usa identidad asignada (sin `@GeneratedValue`) |
+| `method: create` (UC síncrono HTTP) | controller genera `UUID id`, construye el command con él, responde `201 Created` + `Location: {basePath}/{id}`; el handler invoca `Aggregate.create(command.id(), …)` |
 | `derived_from: {field}` | lógica derivada en el método de negocio correspondiente |
 | `source: auth-context` | inyección desde `SecurityContext` en el handler |
 | `hidden: true` | campo excluido de DTOs de respuesta, sin getter en DTO |

@@ -1019,9 +1019,13 @@ async function generateAggregates(bcYaml, config, outputDir) {
           if (uc.implementation === 'scaffold' && (uc.rules || []).length > 0) {
             scaffoldRulesComment = `// TODO: implement business logic — ver ${bc}-flows.md${buildDomainMethodRulesComment(uc.rules, aggregate)}`;
           }
+          // Early-identity: the aggregate id is generated at the application
+          // edge (controller) and flows in through the command. The factory and
+          // the creation constructor receive it as their first parameter instead
+          // of generating it internally.
           staticFactory = {
-            params: factoryParams,
-            ctorCallArgs,
+            params: [{ name: 'id', javaType: 'UUID' }, ...factoryParams],
+            ctorCallArgs: ctorCallArgs ? `id, ${ctorCallArgs}` : 'id',
             raiseCall: raiseCall || null,
             derivedFrom: `${uc.id} ${uc.name}`,
             scaffoldRulesComment,
@@ -1114,6 +1118,14 @@ async function generateAggregates(bcYaml, config, outputDir) {
     // (scaffold); checks are not auto-injected there.
     const creationChecks = [];
     const validationImports = new Set();
+    // factoryCreationChecks: the subset of creation checks that the static
+    // factory can run when the creation constructor is elided (collision case).
+    // Only fields present in the factory's parameter list are in scope there —
+    // creation params resolved to `null /* TODO */` cannot be validated yet.
+    const factoryParamFieldNames = staticFactory
+      ? new Set(staticFactory.params.map((p) => p.name))
+      : new Set();
+    const factoryCreationChecks = [];
     for (const cp of creationParams) {
       const propDef = (aggregate.properties || []).find((p) => p.name === cp.name);
       if (!propDef) continue;
@@ -1121,6 +1133,10 @@ async function generateAggregates(bcYaml, config, outputDir) {
       if (lines.length > 0) {
         creationChecks.push(...lines);
         creationChecks.push('');
+        if (factoryParamFieldNames.has(cp.name)) {
+          factoryCreationChecks.push(...lines);
+          factoryCreationChecks.push('');
+        }
       }
       extraImps.forEach((i) => validationImports.add(i));
     }
@@ -1130,6 +1146,21 @@ async function generateAggregates(bcYaml, config, outputDir) {
     });
 
     // ── 7. Render aggregate root ───────────────────────────────────────────────
+    // Early-identity: the creation constructor now takes `id` as its first
+    // parameter, just like the full reconstruction constructor. For "simple"
+    // aggregates (no audit/softDelete/version/child entities and no field
+    // excluded from creation) the two constructors would have an identical
+    // signature — a duplicate-constructor compile error. In that case we skip
+    // the dedicated creation constructor and let the static factory build the
+    // aggregate through the public full constructor, running creation-time
+    // validations in the factory body instead.
+    const creationCtorCollides =
+      !aggregate.auditable &&
+      !aggregate.softDelete &&
+      aggregate.concurrencyControl !== 'optimistic' &&
+      childEntities.length === 0 &&
+      creationParams.length === scalarFields.length;
+
     const context = {
       packageName: config.packageName,
       bc,
@@ -1146,6 +1177,8 @@ async function generateAggregates(bcYaml, config, outputDir) {
       creationParams,
       autoInits,
       creationChecks,
+      factoryCreationChecks,
+      creationCtorCollides,
       staticFactory,
       businessMethods,
     };

@@ -39,12 +39,6 @@ public class Slot {
         this.slotDate = slotDate;
     }
 
-    // ─── Creation constructor (new Slot) ───────────────────────────────
-    private Slot(LocalDate slotDate) {
-        this.id = UUID.randomUUID();
-        this.slotDate = slotDate;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

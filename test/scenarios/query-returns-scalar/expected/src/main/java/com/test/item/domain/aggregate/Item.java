@@ -25,8 +25,10 @@ public class Item {
     }
 
     // ─── Creation constructor (new Item) ───────────────────────────────
-    private Item(String name, BigDecimal price) {
-        this.id = UUID.randomUUID();
+    // Identity is assigned at the application edge (controller) and propagated
+    // here via the command/factory — not generated inside the domain.
+    private Item(UUID id, String name, BigDecimal price) {
+        this.id = id;
         this.name = name;
         this.price = price;
     }

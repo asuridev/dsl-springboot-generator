@@ -18,12 +18,6 @@ public class Subscription {
         this.plan = plan;
     }
 
-    // ─── Creation constructor (new Subscription) ───────────────────────────────
-    private Subscription(String plan) {
-        this.id = UUID.randomUUID();
-        this.plan = plan;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

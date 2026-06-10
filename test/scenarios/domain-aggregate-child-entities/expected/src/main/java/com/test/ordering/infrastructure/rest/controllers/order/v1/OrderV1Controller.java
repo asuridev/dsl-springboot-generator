@@ -7,9 +7,11 @@ import com.test.shared.infrastructure.configurations.useCaseConfig.UseCaseMediat
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import java.net.URI;
 import java.util.UUID;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -28,11 +30,12 @@ public class OrderV1Controller {
      * createOrder
      */
     @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
     @Operation(summary = "createOrder")
-    public UUID createOrder(@Valid @RequestBody CreateOrderCommand command) {
+    public ResponseEntity<UUID> createOrder(@Valid @RequestBody CreateOrderCommand command) {
         log.info("createOrder");
-        return useCaseMediator.dispatch(command);
+        UUID id = UUID.randomUUID();
+        UUID result = useCaseMediator.dispatch(new CreateOrderCommand(id, command.customerId()));
+        return ResponseEntity.created(URI.create("/api/v1/orders/" + id)).body(result);
     }
 
     /**

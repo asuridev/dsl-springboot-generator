@@ -41,13 +41,6 @@ public class Product {
         this.price = price;
     }
 
-    // ─── Creation constructor (new Product) ───────────────────────────────
-    private Product(String name, BigDecimal price) {
-        this.id = UUID.randomUUID();
-        this.name = name;
-        this.price = price;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

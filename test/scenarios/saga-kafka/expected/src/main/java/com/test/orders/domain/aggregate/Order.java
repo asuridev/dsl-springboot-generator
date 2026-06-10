@@ -41,13 +41,6 @@ public class Order {
         this.totalAmount = totalAmount;
     }
 
-    // ─── Creation constructor (new Order) ───────────────────────────────
-    private Order(UUID customerId, BigDecimal totalAmount) {
-        this.id = UUID.randomUUID();
-        this.customerId = customerId;
-        this.totalAmount = totalAmount;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

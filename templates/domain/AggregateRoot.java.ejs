@@ -51,12 +51,14 @@ public class <%= name %> {
 <% if (hasSoftDelete) { %>        this.deletedAt = deletedAt;
 <% } %><% if (hasVersion) { %>        this.version = version;
 <% } %>    }
-<% if (staticFactory || creationParams.length > 0 || autoInits.length > 0) { %>
+<% if ((staticFactory || creationParams.length > 0 || autoInits.length > 0) && !creationCtorCollides) { %>
 
     // ─── Creation constructor (new <%= name %>) ───────────────────────────────
-    private <%= name %>(<% creationParams.forEach((p, idx) => { %><%- p.javaType %> <%= p.name %><%= idx < creationParams.length - 1 ? ', ' : '' %><% }); %>) {
+    // Identity is assigned at the application edge (controller) and propagated
+    // here via the command/factory — not generated inside the domain.
+    private <%= name %>(UUID id<% creationParams.forEach((p) => { %>, <%- p.javaType %> <%= p.name %><% }); %>) {
 <% (creationChecks || []).forEach(line => { %>        <%- line %>
-<% }); %>        this.id = UUID.randomUUID();
+<% }); %>        this.id = id;
 <% creationParams.forEach(p => { %>        this.<%= p.name %> = <% if (p.isList) { %>new ArrayList<>(<%= p.name %> != null ? <%= p.name %> : java.util.Collections.emptyList())<% } else { %><%= p.name %><% } %>;
 <% }); %>
 <% autoInits.forEach(ai => { %>        this.<%= ai.name %> = <%- ai.value %>;
@@ -69,7 +71,8 @@ public class <%= name %> {
     /** derived_from: <%= staticFactory.derivedFrom %> */
     public static <%= name %> create(<% staticFactory.params.forEach((p, idx) => { %><%- p.javaType %> <%= p.name %><%= idx < staticFactory.params.length - 1 ? ', ' : '' %><% }); %>) {
 <% if (staticFactory.scaffoldRulesComment) { %>        <%- staticFactory.scaffoldRulesComment %>
-<% } %>        <%= name %> instance = new <%= name %>(<%= staticFactory.ctorCallArgs %>);<% if (staticFactory.raiseCall) { %>        instance.<%- staticFactory.raiseCall %>
+<% } %><% if (creationCtorCollides) { (factoryCreationChecks || []).forEach(line => { %>        <%- line %>
+<% }); } %>        <%= name %> instance = new <%= name %>(<%= staticFactory.ctorCallArgs %>);<% if (staticFactory.raiseCall) { %>        instance.<%- staticFactory.raiseCall %>
 <% } %>        return instance;
     }
 <% } %>

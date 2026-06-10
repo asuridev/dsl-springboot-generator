@@ -25,15 +25,6 @@ public class Product {
         this.secretNote = secretNote;
     }
 
-    // ─── Creation constructor (new Product) ───────────────────────────────
-    private Product(UUID ownerId, String name, ProductStatus status, String secretNote) {
-        this.id = UUID.randomUUID();
-        this.ownerId = ownerId;
-        this.name = name;
-        this.status = status;
-        this.secretNote = secretNote;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

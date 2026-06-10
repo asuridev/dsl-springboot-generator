@@ -20,13 +20,6 @@ public class InventoryItem {
         this.stock = stock;
     }
 
-    // ─── Creation constructor (new InventoryItem) ───────────────────────────────
-    private InventoryItem(UUID productId, Integer stock) {
-        this.id = UUID.randomUUID();
-        this.productId = productId;
-        this.stock = stock;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

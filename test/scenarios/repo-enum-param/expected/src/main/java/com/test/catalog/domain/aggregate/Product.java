@@ -21,13 +21,6 @@ public class Product {
         this.category = category;
     }
 
-    // ─── Creation constructor (new Product) ───────────────────────────────
-    private Product(String name, Category category) {
-        this.id = UUID.randomUUID();
-        this.name = name;
-        this.category = category;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

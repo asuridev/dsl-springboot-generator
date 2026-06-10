@@ -18,12 +18,6 @@ public class Order {
         this.reference = reference;
     }
 
-    // ─── Creation constructor (new Order) ───────────────────────────────
-    private Order(String reference) {
-        this.id = UUID.randomUUID();
-        this.reference = reference;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

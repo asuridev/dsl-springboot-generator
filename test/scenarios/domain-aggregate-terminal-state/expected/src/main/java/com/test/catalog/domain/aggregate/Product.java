@@ -24,8 +24,10 @@ public class Product {
     }
 
     // ─── Creation constructor (new Product) ───────────────────────────────
-    private Product(String name) {
-        this.id = UUID.randomUUID();
+    // Identity is assigned at the application edge (controller) and propagated
+    // here via the command/factory — not generated inside the domain.
+    private Product(UUID id, String name) {
+        this.id = id;
         this.name = name;
 
         this.status = ProductStatus.DRAFT;

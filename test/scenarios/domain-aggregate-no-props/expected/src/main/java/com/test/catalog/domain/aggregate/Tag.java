@@ -24,15 +24,17 @@ public class Tag {
     }
 
     // ─── Creation constructor (new Tag) ───────────────────────────────
-    private Tag() {
-        this.id = UUID.randomUUID();
+    // Identity is assigned at the application edge (controller) and propagated
+    // here via the command/factory — not generated inside the domain.
+    private Tag(UUID id) {
+        this.id = id;
     }
 
     // ─── Static factory ───────────────────────────────────────────────────────
 
     /** derived_from: UC-TAG-001 CreateTag */
-    public static Tag create() {
-        Tag instance = new Tag();
+    public static Tag create(UUID id) {
+        Tag instance = new Tag(id);
         return instance;
     }
 

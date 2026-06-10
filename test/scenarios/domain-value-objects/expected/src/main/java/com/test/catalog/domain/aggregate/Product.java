@@ -24,14 +24,6 @@ public class Product {
         this.slug = slug;
     }
 
-    // ─── Creation constructor (new Product) ───────────────────────────────
-    private Product(String name, Money price, Slug slug) {
-        this.id = UUID.randomUUID();
-        this.name = name;
-        this.price = price;
-        this.slug = slug;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

@@ -20,13 +20,6 @@ public class Item {
         this.quantity = quantity;
     }
 
-    // ─── Creation constructor (new Item) ───────────────────────────────
-    private Item(String sku, Integer quantity) {
-        this.id = UUID.randomUUID();
-        this.sku = sku;
-        this.quantity = quantity;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

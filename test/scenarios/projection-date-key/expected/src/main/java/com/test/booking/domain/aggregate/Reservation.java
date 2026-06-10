@@ -19,12 +19,6 @@ public class Reservation {
         this.date = date;
     }
 
-    // ─── Creation constructor (new Reservation) ───────────────────────────────
-    private Reservation(LocalDate date) {
-        this.id = UUID.randomUUID();
-        this.date = date;
-    }
-
     // ─── Getters ──────────────────────────────────────────────────────────────
 
     public UUID getId() {

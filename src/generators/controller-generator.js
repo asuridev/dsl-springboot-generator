@@ -363,7 +363,7 @@ function buildPreAuthorizeExpr(uc) {
 
 // ─── Build controller operation ───────────────────────────────────────────────
 
-function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = null, publicOpsMap = null) {
+function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = null, publicOpsMap = null, serverBaseUrl = '') {
   const { httpMethod, fullPath, pathParams, queryParams, hasRequestBody, primaryResponseCode, summary } = openApiOp;
 
   // Relative path within this controller (strip common prefix)
@@ -375,6 +375,9 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
 
   const isQuery = uc.type === 'query';
   const isScaffold = uc.implementation === 'scaffold';
+  // Early-identity: create commands have their aggregate id generated here, in
+  // the controller, before dispatch (see buildMethodStrings / dispatchCall below).
+  const isCreate = !isQuery && uc.method === 'create';
 
   // Paged / list query detection — use uc.returns directly
   const paged = isQuery && isPagedQuery(uc, agg, repoMethods);
@@ -528,6 +531,18 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
     dispatchCall = 'command';
   }
 
+  // Early-identity create: the controller generates the aggregate id (local
+  // `id`, see buildMethodStrings) and constructs the command with it as the
+  // first argument. Body fields are taken from the bound `command`; the id is
+  // never read from the request body (@JsonIgnore on the command component).
+  const isAsyncCreate = isCreate && (isAsyncJobTracking || isAsyncFireForget);
+  const isSyncCreate = isCreate && !isAsyncCreate;
+  let createInnerReturn = null;
+  if (isCreate) {
+    const createArgs = ['id', ...allCmdFields.map((f) => fieldExpr(f, true))];
+    dispatchCall = `new ${ucClassName}Command(${createArgs.join(', ')})`;
+  }
+
   // Build OpenAPI query params that are NOT path vars and NOT paging
   const controllerQueryParams = isQuery
     ? buildQueryParamAnnotations(queryFieldsList, queryParams, inputMap, uc).filter(
@@ -582,6 +597,18 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
     if (statusOp && statusOp.fullPath) asyncStatusPath = statusOp.fullPath;
   }
 
+  // Sync create returns 201 Created + Location via ResponseEntity; wrap any
+  // declared command return type (R) as the body, else ResponseEntity<Void>.
+  let effectiveReturnType = returnType;
+  if (isSyncCreate) {
+    if (uc.returns) {
+      createInnerReturn = returnType;
+      effectiveReturnType = `ResponseEntity<${returnType}>`;
+    } else {
+      effectiveReturnType = 'ResponseEntity<Void>';
+    }
+  }
+
   return {
     httpAnnotation: METHOD_ANNOTATION[httpMethod] || 'PostMapping',
     mappingPath,
@@ -590,8 +617,13 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
     summary,
     isCommand: !isQuery,
     isScaffold,
-    returnType,
+    returnType: effectiveReturnType,
     rawReturns: uc.returns,
+    // Early-identity create metadata consumed by buildMethodStrings.
+    isCreate,
+    isSyncCreate,
+    createInnerReturn,
+    locationBasePath: serverBaseUrl + fullPath,
     pathVarNames,
     queryParamsList: controllerQueryParams,
     headerParamsList,
@@ -985,10 +1017,25 @@ function buildMethodStrings(op) {
   } else if (op.isAsyncFireForget) {
     // [G10] Fire-and-forget — handler returns void, controller responds 202.
     dispatchLine = `useCaseMediator.dispatch(${op.dispatchCall});`;
+  } else if (op.isSyncCreate) {
+    // Early-identity create — 201 Created + Location pointing at the new resource.
+    const loc = `URI.create("${op.locationBasePath}/" + id)`;
+    if (op.createInnerReturn) {
+      dispatchLine =
+        `${op.createInnerReturn} result = useCaseMediator.dispatch(${op.dispatchCall});\n` +
+        `        return ResponseEntity.created(${loc}).body(result);`;
+    } else {
+      dispatchLine =
+        `useCaseMediator.dispatch(${op.dispatchCall});\n` +
+        `        return ResponseEntity.created(${loc}).build();`;
+    }
   } else {
     dispatchLine = `${returnKeyword}useCaseMediator.dispatch(${op.dispatchCall});`;
   }
-  const preamble = [authContextLocals, sortableGuard, ...multipartGuards].filter(Boolean).join('\n        ');
+  // Early-identity create: generate the aggregate id before dispatch. Both sync
+  // (201 + Location) and async (202) creates reference this local in dispatchCall.
+  const idLocal = op.isCreate ? 'UUID id = UUID.randomUUID();' : '';
+  const preamble = [idLocal, authContextLocals, sortableGuard, ...multipartGuards].filter(Boolean).join('\n        ');
   const dispatchStatement = preamble
     ? `${preamble}\n        ${dispatchLine}`
     : dispatchLine;
@@ -1149,6 +1196,31 @@ function buildControllerImports(operations, packageName, moduleName, bcYaml = nu
     imports.add(`${packageName}.shared.infrastructure.web.Idempotent`);
   }
 
+  // Early-identity create: the generated `id` local needs java.util.UUID; sync
+  // creates additionally return ResponseEntity.created(URI...) for 201 + Location.
+  if (operations.some((op) => op.isCreate)) {
+    imports.add('java.util.UUID');
+  }
+  if (operations.some((op) => op.isSyncCreate)) {
+    imports.add('org.springframework.http.ResponseEntity');
+    imports.add('java.net.URI');
+  }
+  // Body DTO import for create operations that return a value (201 + body).
+  for (const op of operations) {
+    if (!op.isSyncCreate || !op.createInnerReturn) continue;
+    const canonicalReturn = resolveCanonicalReturnType(op.rawReturns);
+    if (canonicalReturn) {
+      if (canonicalReturn.importHint) imports.add(canonicalReturn.importHint);
+    } else if (op.createInnerReturn.startsWith('PagedResponse<')) {
+      imports.add(`${packageName}.shared.application.dtos.PagedResponse`);
+    } else if (op.createInnerReturn.startsWith('List<')) {
+      imports.add('java.util.List');
+      imports.add(`${packageName}.${moduleName}.application.dtos.${op.createInnerReturn.replace(/^List<(.+)>$/, '$1')}`);
+    } else {
+      imports.add(`${packageName}.${moduleName}.application.dtos.${op.createInnerReturn}`);
+    }
+  }
+
   // [G8] Range[T] — when any query param is a split range part, import the shared
   // Range record and the inner type's hint (e.g. java.math.BigDecimal).
   for (const op of operations) {
@@ -1247,7 +1319,7 @@ async function generateControllerLayer(bcYaml, openApiDoc, internalApiDoc, confi
     const operations = rawOperations.map(({ uc, openApiOp, isInternal }) => {
       const op = isInternal
         ? buildInternalOperation(uc, openApiOp, commonPrefix, agg, repoMethods, bcYaml)
-        : buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml, publicOpsMap);
+        : buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml, publicOpsMap, serverBaseUrl);
       const strings = buildMethodStrings(op);
       return { ...op, ...strings };
     });
