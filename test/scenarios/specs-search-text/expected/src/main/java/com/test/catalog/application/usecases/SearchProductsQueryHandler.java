@@ -2,6 +2,7 @@ package com.test.catalog.application.usecases;
 
 import com.test.catalog.application.dtos.ProductResponseDto;
 import com.test.catalog.application.queries.SearchProductsQuery;
+import com.test.catalog.domain.repository.ProductRepository;
 import com.test.shared.application.dtos.PagedResponse;
 import com.test.shared.domain.annotations.ApplicationComponent;
 import com.test.shared.domain.annotations.LogExceptions;
@@ -13,6 +14,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class SearchProductsQueryHandler
     implements QueryHandler<SearchProductsQuery, PagedResponse<ProductResponseDto>>
 {
+
+    private final ProductRepository productRepository;
+
+    public SearchProductsQueryHandler(ProductRepository productRepository) {
+        this.productRepository = productRepository;
+    }
 
     @Override
     @Transactional(readOnly = true)

@@ -1,0 +1,4 @@
+{
+  "description": "Phase 3 rec #1B: a statePrecondition domainRule whose enforcement method is declared via repositories[Other].methods[].derivedFrom == rule.id. The command handler must inject the traced repository (ProductRepository) in addition to its primary repository (CategoryRepository), while the guard body stays a TODO.",
+  "allowNoExpected": true
+}

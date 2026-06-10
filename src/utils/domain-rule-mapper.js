@@ -32,6 +32,37 @@ function emptyResult() {
 }
 
 /**
+ * Build the repository dependency descriptor for an aggregate.
+ */
+function repoDescriptor(aggregateName, packageName, moduleName) {
+  const repoType = `${aggregateName}Repository`;
+  return {
+    repoName: repoType,
+    repoFieldName: `${toCamelCase(aggregateName)}Repository`,
+    importPath: `${packageName}.${moduleName}.domain.repository.${repoType}`,
+  };
+}
+
+/**
+ * Follow the explicit YAML trace `rule.id → repository.method.derivedFrom`.
+ * Scans every repository's `methods[]` and `queryMethods[]` for a method whose
+ * `derivedFrom` equals the rule id, and returns the owning aggregate + method
+ * name. Deterministic: it only reads what the YAML already declares.
+ */
+function findRepoMethodByDerivedFrom(ruleId, bcYaml) {
+  for (const repo of (bcYaml?.repositories || [])) {
+    const methods = [...(repo.methods || []), ...(repo.queryMethods || [])];
+    const m = methods.find((mm) => mm.derivedFrom === ruleId);
+    if (m) return { aggregate: repo.aggregate, methodName: m.name || '<method>' };
+  }
+  return null;
+}
+
+function isSameBcAggregate(aggregateName, bcYaml) {
+  return (bcYaml?.aggregates || []).some((a) => a.name === aggregateName);
+}
+
+/**
  * deleteGuard — guards a delete UC against the existence of dependents in
  * another aggregate.
  *
@@ -103,6 +134,12 @@ function mapCrossAggregateConstraint(rule, ctx) {
 
   if (!rule.targetAggregate || !rule.field || !rule.expectedStatus) {
     // Enriched TODO (Phase 3, Gap E1): nominate the Java error class.
+    // Note: bc-yaml-reader enforces that targetAggregate/field/expectedStatus are
+    // declared together, so this branch is only reached when ALL are absent —
+    // there is no targetAggregate to derive a repo from. When the hints ARE
+    // present, the full branch below already injects the target repository, so
+    // there is no missing-injection gap to fill here (Phase 3 rec #1A is a no-op
+    // under the current schema).
     const errorEntry = errorMap[rule.errorCode];
     const errorType = errorEntry ? errorEntry.errorType : rule.errorCode;
     out.lines.push(`        // TODO domainRule(${rule.id}, crossAggregateConstraint): ${rule.description?.trim() || ''}`);
@@ -264,12 +301,31 @@ function mapUniqueness(rule, ctx) {
  */
 function mapStatePrecondition(rule, ctx) {
   const out = emptyResult();
-  const { errorMap, aggVarName } = ctx;
+  const { errorMap, aggVarName, bcYaml, packageName, moduleName } = ctx;
   const errorEntry = errorMap[rule.errorCode];
   const errorType = errorEntry ? errorEntry.errorType : rule.errorCode;
+
+  // [Phase 3 #1B] The invariant itself is too domain-specific to express in YAML
+  // (it stays a TODO), but the YAML already declares which repository method
+  // enforces this rule via `repository.method.derivedFrom == rule.id`. Follow
+  // that explicit trace to inject the owning repository — pure wiring, so the
+  // Phase 3 implementer has the dependency in scope to complete the guard.
+  const traced = findRepoMethodByDerivedFrom(rule.id, bcYaml);
   out.lines.push(`        // TODO domainRule(${rule.id}, statePrecondition): ${rule.description?.trim() || ''}`);
-  out.lines.push(`        //      Enforce the precondition on ${aggVarName} before invoking the domain method:`);
-  out.lines.push(`        //      if (!(<invariant on ${aggVarName}>)) throw new ${errorType}();`);
+  if (traced && isSameBcAggregate(traced.aggregate, bcYaml)) {
+    const repoFieldName = `${toCamelCase(traced.aggregate)}Repository`;
+    // `viaMethod` lets the scaffold-handler guide name the enforcement method in
+    // its step text; the command-handler template ignores the extra field.
+    out.extraRepos.push({
+      ...repoDescriptor(traced.aggregate, packageName, moduleName),
+      viaMethod: traced.methodName,
+    });
+    out.lines.push(`        //      Use ${repoFieldName}.${traced.methodName}(...) (derivedFrom ${rule.id}) to enforce the precondition before invoking the domain method:`);
+    out.lines.push(`        //      if (!(<invariant>)) throw new ${errorType}();`);
+  } else {
+    out.lines.push(`        //      Enforce the precondition on ${aggVarName} before invoking the domain method:`);
+    out.lines.push(`        //      if (!(<invariant on ${aggVarName}>)) throw new ${errorType}();`);
+  }
   return out;
 }
 

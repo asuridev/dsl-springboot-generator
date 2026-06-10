@@ -1,0 +1,21 @@
+system:
+  name: test-stateprecondition-injection-system
+  description: Test system for statePrecondition handler repository injection (Phase 3 rec #1B).
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages categories and products.
+    aggregates:
+      - name: Category
+        root: Category
+        entities: []
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

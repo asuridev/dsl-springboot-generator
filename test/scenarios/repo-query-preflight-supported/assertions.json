@@ -1,4 +1,12 @@
 {
+  "src/main/java/com/test/catalog/application/usecases/SearchProductsQueryHandler.java": {
+    "_comment": "Phase 3 #1C: a scaffold query handler whose aggregate has a repository must inject the primary repository (ProductRepository), even though the body is still a TODO.",
+    "contains": [
+      "private final ProductRepository productRepository;",
+      "import com.test.catalog.domain.repository.ProductRepository;",
+      "public SearchProductsQueryHandler(ProductRepository productRepository)"
+    ]
+  },
   "src/main/java/com/test/catalog/infrastructure/persistence/repositories/ProductJpaRepository.java": {
     "contains": [
       "SELECT p FROM ProductJpa p WHERE p.status = 'ACTIVE'",

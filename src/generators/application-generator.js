@@ -1391,7 +1391,14 @@ function buildScaffoldHandlerGuide(uc, agg, errorMap, packageName, moduleName, b
     } else if (rule.type === 'sideEffect') {
       step(`domainRule(${rule.id}, sideEffect): ${desc}`);
     } else {
-      step(`domainRule(${rule.id}, ${rule.type}): ${desc || 'enforce before invoking the domain method'}`);
+      // [Phase 3 #1B] When the rule was resolved to an enforcement method via a
+      // repository.method.derivedFrom trace, name it so the Phase 3 implementer
+      // knows which injected repository call enforces the rule.
+      const via = (result.extraRepos || []).filter((r) => r.viaMethod);
+      const viaTxt = via.length
+        ? ` — enforce via ${via.map((r) => `${r.repoFieldName}.${r.viaMethod}(...)`).join(', ')}`
+        : '';
+      step(`domainRule(${rule.id}, ${rule.type}): ${desc || 'enforce before invoking the domain method'}${viaTxt}`);
     }
   }
 
@@ -2486,6 +2493,13 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
   const isCustomNonProjection = !isAggResponseDto && !isDerivableProjection;
   const effectiveImpl = (isSubEntityQuery(uc, agg) || isCustomNonProjection) ? 'scaffold' : (uc.implementation || 'scaffold');
   const injectDependencies = effectiveImpl !== 'scaffold';
+  // [Phase 3 #1C] A query handler should always receive its primary repository —
+  // but only when that aggregate actually has a generated repository. Cross-source
+  // / read-model queries whose data comes from an HTTP adapter (no local
+  // domain.repository package) must NOT inject a non-existent repo, or the
+  // generated handler fails to compile. The full path keeps its prior behavior.
+  const hasOwnRepository = (bcYaml?.repositories || []).some((r) => r.aggregate === agg.name);
+  const injectRepository = injectDependencies || hasOwnRepository;
 
   let body = '';
   let extraImports = [];
@@ -2573,6 +2587,10 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
       repoFieldName,
       mapperName,
       mapperFieldName,
+      // [Phase 3 #1C] Inject the primary repository (derivable from uc.aggregate)
+      // whenever the aggregate has one — including scaffold queries — while the
+      // mapper stays gated on a non-scaffold implementation.
+      injectRepository,
       injectDependencies,
       returnType,
       implementation: effectiveImpl,

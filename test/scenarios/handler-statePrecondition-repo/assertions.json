@@ -1,0 +1,13 @@
+{
+  "src/main/java/com/test/catalog/application/usecases/ArchiveCategoryCommandHandler.java": {
+    "_comment": "Phase 3 #1B: handler injects its primary repo (CategoryRepository) AND the repo traced via CAT-RULE-001 derivedFrom (ProductRepository). The statePrecondition guard body stays a TODO that names the traced method.",
+    "contains": [
+      "private final CategoryRepository categoryRepository;",
+      "private final ProductRepository productRepository;",
+      "import com.test.catalog.domain.repository.CategoryRepository;",
+      "import com.test.catalog.domain.repository.ProductRepository;",
+      "domainRule(CAT-RULE-001, statePrecondition)",
+      "enforce via productRepository.countByCategoryId(...)"
+    ]
+  }
+}

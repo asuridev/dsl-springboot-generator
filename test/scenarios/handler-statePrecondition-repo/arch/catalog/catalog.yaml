@@ -1,0 +1,102 @@
+bc: catalog
+version: "1.0.0"
+
+enums:
+  - name: CategoryStatus
+    description: Lifecycle states of a Category.
+    values:
+      - value: ACTIVE
+      - value: ARCHIVED
+
+aggregates:
+  - name: Category
+    root: Category
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+      - name: status
+        type: CategoryStatus
+        readOnly: true
+        defaultValue: ACTIVE
+    domainRules:
+      # [Phase 3 #1B] statePrecondition whose enforcement method is traced via
+      # repositories[Product].methods[countByCategoryId].derivedFrom == CAT-RULE-001.
+      # The generator must inject ProductRepository into the ArchiveCategory handler.
+      - id: CAT-RULE-001
+        type: statePrecondition
+        description: A category with active products cannot be archived.
+        errorCode: CATEGORY_HAS_ACTIVE_PRODUCTS
+    domainMethods:
+      - name: archive
+        params: []
+        returns: void
+
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+      - name: categoryId
+        type: Uuid
+        required: true
+
+useCases:
+  - id: UC-CAT-010
+    name: ArchiveCategory
+    type: command
+    aggregate: Category
+    trigger:
+      kind: http
+      operationId: archiveCategory
+    method: archive
+    input:
+      - name: categoryId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    notFoundError: CATEGORY_NOT_FOUND
+    rules:
+      - CAT-RULE-001
+    implementation: scaffold
+
+errors:
+  - code: CATEGORY_NOT_FOUND
+    httpStatus: 404
+    description: Category not found.
+  - code: CATEGORY_HAS_ACTIVE_PRODUCTS
+    httpStatus: 409
+    description: Category still has active products and cannot be archived.
+
+repositories:
+  - aggregate: Category
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Category?"
+      - name: save
+        signature: "save(Category): Category"
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: save
+        signature: "save(Product): Product"
+      - name: countByCategoryId
+        params:
+          - name: categoryId
+            type: Uuid
+            required: true
+        returns: Long
+        derivedFrom: CAT-RULE-001

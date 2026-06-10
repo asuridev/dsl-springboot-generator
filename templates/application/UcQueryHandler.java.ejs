@@ -1,8 +1,10 @@
 package <%= packageName %>.<%= moduleName %>.application.usecases;
 
 import <%= packageName %>.<%= moduleName %>.application.queries.<%= useCaseName %>Query;
-<% if (injectDependencies) { %>
+<% if (injectRepository) { %>
 import <%= packageName %>.<%= moduleName %>.domain.repository.<%= repoName %>;
+<% } %>
+<% if (injectDependencies) { %>
 import <%= packageName %>.<%= moduleName %>.application.mappers.<%= mapperName %>;
 <% } %>
 import <%= packageName %>.shared.domain.annotations.ApplicationComponent;
@@ -23,14 +25,14 @@ import org.springframework.transaction.annotation.Transactional;
 <% } %>@ApplicationComponent
 public class <%= useCaseName %>QueryHandler implements QueryHandler<<%= useCaseName %>Query, <%- returnType %>> {
 
-<% if (injectDependencies) { %>
-    private final <%= repoName %> <%= repoFieldName %>;
-    private final <%= mapperName %> <%= mapperFieldName %>;
-
-    public <%= useCaseName %>QueryHandler(<%= repoName %> <%= repoFieldName %>, <%= mapperName %> <%= mapperFieldName %>) {
-        this.<%= repoFieldName %> = <%= repoFieldName %>;
-        this.<%= mapperFieldName %> = <%= mapperFieldName %>;
-    }
+<% if (injectRepository || injectDependencies) { %>
+<% if (injectRepository) { %>    private final <%= repoName %> <%= repoFieldName %>;
+<% } %><% if (injectDependencies) { %>    private final <%= mapperName %> <%= mapperFieldName %>;
+<% } %>
+    public <%= useCaseName %>QueryHandler(<% if (injectRepository) { %><%= repoName %> <%= repoFieldName %><% if (injectDependencies) { %>, <% } %><% } %><% if (injectDependencies) { %><%= mapperName %> <%= mapperFieldName %><% } %>) {
+<% if (injectRepository) { %>        this.<%= repoFieldName %> = <%= repoFieldName %>;
+<% } %><% if (injectDependencies) { %>        this.<%= mapperFieldName %> = <%= mapperFieldName %>;
+<% } %>    }
 <% } %>
 
     @Override

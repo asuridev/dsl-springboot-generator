@@ -2,6 +2,7 @@ package com.test.catalog.application.usecases;
 
 import com.test.catalog.application.dtos.ProductResponseDto;
 import com.test.catalog.application.queries.FindProductsByCategoryQuery;
+import com.test.catalog.domain.repository.ProductRepository;
 import com.test.shared.domain.annotations.ApplicationComponent;
 import com.test.shared.domain.annotations.LogExceptions;
 import com.test.shared.domain.interfaces.QueryHandler;
@@ -13,6 +14,12 @@ import org.springframework.transaction.annotation.Transactional;
 public class FindProductsByCategoryQueryHandler
     implements QueryHandler<FindProductsByCategoryQuery, List<ProductResponseDto>>
 {
+
+    private final ProductRepository productRepository;
+
+    public FindProductsByCategoryQueryHandler(ProductRepository productRepository) {
+        this.productRepository = productRepository;
+    }
 
     @Override
     @Transactional(readOnly = true)
