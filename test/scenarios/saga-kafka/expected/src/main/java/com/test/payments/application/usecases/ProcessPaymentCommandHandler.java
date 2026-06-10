@@ -14,6 +14,8 @@ public class ProcessPaymentCommandHandler implements CommandHandler<ProcessPayme
     @Transactional
     @LogExceptions
     public void handle(ProcessPaymentCommand command) {
+        // 1. payment.process(...)
+
         // TODO: implement business logic — ver payments-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

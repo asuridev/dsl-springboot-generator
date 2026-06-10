@@ -14,6 +14,8 @@ public class PlaceOrderCommandHandler implements CommandHandler<PlaceOrderComman
     @Transactional
     @LogExceptions
     public void handle(PlaceOrderCommand command) {
+        // 1. order.place(...)
+
         // TODO: implement business logic — ver orders-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

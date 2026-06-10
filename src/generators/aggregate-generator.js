@@ -27,6 +27,45 @@ function deriveErrorTypeLocal(code) {
     .join('') + 'Error';
 }
 
+// [Phase 3 #3] Rules that require repository access are enforced in the handler,
+// not the aggregate. They must NOT be advertised as "Validate" on a domain
+// method (the method cannot enforce them — see domain-rule-mapper.js). Rules that
+// only read the aggregate's own state (terminalState, statePrecondition) and any
+// unknown type stay on the domain method.
+const HANDLER_ENFORCED_RULE_TYPES = new Set([
+  'uniqueness',
+  'crossAggregateConstraint',
+  'deleteGuard',
+]);
+
+// ─── Helper: classify a UC's domainRule IDs by where they are enforced ────────
+function classifyRulesForDomainMethod(ruleIds, aggregate) {
+  const ruleById = new Map((aggregate.domainRules || []).map((r) => [r.id, r]));
+  const domainMethodRules = []; // terminalState / statePrecondition / unknown → method
+  const handlerRules = [];      // uniqueness / crossAggregateConstraint / deleteGuard → handler
+  const sideEffectRules = [];   // sideEffect → required side effects
+  for (const id of (ruleIds || [])) {
+    const r = ruleById.get(id);
+    if (r && r.type === 'sideEffect') sideEffectRules.push(id);
+    else if (r && HANDLER_ENFORCED_RULE_TYPES.has(r.type)) handlerRules.push(id);
+    else domainMethodRules.push(id);
+  }
+  return { domainMethodRules, handlerRules, sideEffectRules };
+}
+
+// Build the comment suffix appended after a scaffold/audit header line. Lists the
+// rules the domain method enforces, notes those deferred to the handler, and the
+// required side effects. Each line is pre-indented with 8 spaces.
+function buildDomainMethodRulesComment(ruleIds, aggregate) {
+  const { domainMethodRules, handlerRules, sideEffectRules } =
+    classifyRulesForDomainMethod(ruleIds, aggregate);
+  let c = '';
+  if (domainMethodRules.length > 0) c += `\n        // Validate: ${domainMethodRules.join(', ')}`;
+  if (handlerRules.length > 0) c += `\n        // Note: ${handlerRules.join(', ')} (uniqueness/crossAggregate/deleteGuard) are checked in the handler before this method`;
+  if (sideEffectRules.length > 0) c += `\n        // Side effects: ${sideEffectRules.join(', ')}`;
+  return c;
+}
+
 // ─── Helper: resolve Java type for a param name ───────────────────────────────
 function resolveParamType(paramName, aggregateProps, childEntities, typeHint, bcYaml) {
   // 1. Explicit typeHint declared in YAML always wins — prevents aggregate property
@@ -377,20 +416,10 @@ function domainErrorClassesInBody(body, bcYaml) {
 // ─── Helper: compute the body string for a business method ───────────────────
 function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents, eventConfig = null, terminalStateErrorClass = null, bcYaml = null) {
   const rules = uc.rules || [];
-  // Split rule IDs into validation-style vs side-effect-style based on the
-  // aggregate's domainRules catalog (S13). Side effects are scaffolded as a
-  // distinct comment block to make the implementation hint explicit for Phase 3.
-  const ruleById = new Map((aggregate.domainRules || []).map((r) => [r.id, r]));
-  const validateRules = [];
-  const sideEffectRules = [];
-  for (const id of rules) {
-    const r = ruleById.get(id);
-    if (r && r.type === 'sideEffect') sideEffectRules.push(id);
-    else validateRules.push(id);
-  }
-  let rulesComment = '';
-  if (validateRules.length > 0) rulesComment += `\n        // Validate: ${validateRules.join(', ')}`;
-  if (sideEffectRules.length > 0) rulesComment += `\n        // Side effects: ${sideEffectRules.join(', ')}`;
+  // [Phase 3 #3] Classify rule IDs by where they are enforced (domain method vs
+  // handler vs side effect) so the scaffold comment never advertises a rule the
+  // aggregate cannot enforce (e.g. uniqueness / crossAggregateConstraint).
+  const rulesComment = buildDomainMethodRulesComment(rules, aggregate);
   const scaffoldBody = `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}\n        throw new UnsupportedOperationException("Not implemented yet");`;
 
   const { name: methodName, params } = sig;
@@ -409,7 +438,11 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
     if (params.length === 0) {
       const transition = detectStateTransition(uc.id, aggregate, bcEnums);
       if (transition) {
-        let body = `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}\n`;
+        // [Phase 3 #4] The state transition (and event raise) below IS the
+        // generated logic — emit an audit header, not a misleading "implement
+        // business logic" TODO. Rule hints (handler-enforced / side effects)
+        // are still surfaced via rulesComment.
+        let body = `// derived_from: ${uc.id} ${uc.name}${rulesComment}\n`;
         const transitionLine = `this.${transition.statusField} = this.${transition.statusField}.transitionTo(${transition.enumType}.${transition.targetValue});`;
         // [Phase 3, Gap E1.d] terminalState rule with `errorCode` → wrap the
         // generic InvalidStateTransitionException into the declared domain
@@ -427,7 +460,8 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
     }
     const raiseCall = buildRaiseCall(sig.emits, publishedEvents, aggregate, params, eventConfig, bcEnums);
     if (raiseCall) {
-      return `// TODO: implement business logic — ver ${bcName}-flows.md${rulesComment}\n        ${raiseCall}`;
+      // [Phase 3 #4] The event raise below IS real logic — audit header, not a TODO.
+      return `// derived_from: ${uc.id} ${uc.name}${rulesComment}\n        ${raiseCall}`;
     }
     return scaffoldBody;
   }
@@ -978,22 +1012,12 @@ async function generateAggregates(bcYaml, config, outputDir) {
               .replace(/^\/\/[^\n]*\n\s*/, '')   // remove comment line + leading whitespace
               .replace(/\bthis\./g, 'instance.'); // this. → instance. (args inside the event ctor)
           }
-          // Split rule IDs into validate vs sideEffect so the scaffold comment
-          // distinguishes invariant checks from required side effects (S13).
-          const ruleByIdF = new Map((aggregate.domainRules || []).map((r) => [r.id, r]));
-          const validateRulesF = [];
-          const sideEffectRulesF = [];
-          for (const id of (uc.rules || [])) {
-            const r = ruleByIdF.get(id);
-            if (r && r.type === 'sideEffect') sideEffectRulesF.push(id);
-            else validateRulesF.push(id);
-          }
+          // [Phase 3 #3] Classify rule IDs by enforcement site so the scaffold
+          // comment distinguishes invariant checks, handler-enforced rules, and
+          // required side effects.
           let scaffoldRulesComment = null;
           if (uc.implementation === 'scaffold' && (uc.rules || []).length > 0) {
-            let c = `// TODO: implement business logic — ver ${bc}-flows.md`;
-            if (validateRulesF.length > 0) c += `\n        // Validate: ${validateRulesF.join(', ')}`;
-            if (sideEffectRulesF.length > 0) c += `\n        // Side effects: ${sideEffectRulesF.join(', ')}`;
-            scaffoldRulesComment = c;
+            scaffoldRulesComment = `// TODO: implement business logic — ver ${bc}-flows.md${buildDomainMethodRulesComment(uc.rules, aggregate)}`;
           }
           staticFactory = {
             params: factoryParams,
@@ -1048,20 +1072,11 @@ async function generateAggregates(bcYaml, config, outputDir) {
     // ── Auto-inject softDelete() when aggregate has softDelete: true but no UC covers it
     if (aggregate.softDelete && !seenMethods.has('softDelete')) {
       const deleteRules = softDeleteUc ? (softDeleteUc.rules || []) : [];
-      // S13 split: deleteGuard / uniqueness rules → Validate; sideEffect rules → Side effects.
-      const ruleByIdSD = new Map((aggregate.domainRules || []).map((r) => [r.id, r]));
-      const validateRulesSD = [];
-      const sideEffectRulesSD = [];
-      for (const id of deleteRules) {
-        const r = ruleByIdSD.get(id);
-        if (r && r.type === 'sideEffect') sideEffectRulesSD.push(id);
-        else validateRulesSD.push(id);
-      }
+      // [Phase 3 #3] deleteGuard rules are enforced in the handler — classify so
+      // they are noted, not advertised as "Validate" on softDelete().
       let softDeleteBody;
       if (deleteRules.length > 0) {
-        let c = `// TODO: implement business logic — ver ${bc}-flows.md`;
-        if (validateRulesSD.length > 0) c += `\n        // Validate: ${validateRulesSD.join(', ')}`;
-        if (sideEffectRulesSD.length > 0) c += `\n        // Side effects: ${sideEffectRulesSD.join(', ')}`;
+        const c = `// TODO: implement business logic — ver ${bc}-flows.md${buildDomainMethodRulesComment(deleteRules, aggregate)}`;
         softDeleteBody = `${c}\n        this.deletedAt = Instant.now();`;
       } else {
         softDeleteBody = 'this.deletedAt = Instant.now();';

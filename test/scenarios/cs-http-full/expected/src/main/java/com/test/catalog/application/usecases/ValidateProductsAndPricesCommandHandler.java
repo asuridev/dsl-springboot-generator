@@ -14,6 +14,8 @@ public class ValidateProductsAndPricesCommandHandler implements CommandHandler<V
     @Transactional
     @LogExceptions
     public void handle(ValidateProductsAndPricesCommand command) {
+        // 1. product.validate(...)
+
         // TODO: implement business logic — ver catalog-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

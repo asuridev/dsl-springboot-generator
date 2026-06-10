@@ -49,7 +49,7 @@ public class Product {
 
     /** derived_from: UC-PRD-001 ActivateProduct */
     public void activate() {
-        // TODO: implement business logic — ver catalog-flows.md
+        // derived_from: UC-PRD-001 ActivateProduct
         try {
             this.status = this.status.transitionTo(ProductStatus.ACTIVE);
         } catch (InvalidStateTransitionException ex) {
@@ -59,7 +59,7 @@ public class Product {
 
     /** derived_from: UC-PRD-002 DiscontinueProduct */
     public void discontinue() {
-        // TODO: implement business logic — ver catalog-flows.md
+        // derived_from: UC-PRD-002 DiscontinueProduct
         try {
             this.status = this.status.transitionTo(ProductStatus.DISCONTINUED);
         } catch (InvalidStateTransitionException ex) {

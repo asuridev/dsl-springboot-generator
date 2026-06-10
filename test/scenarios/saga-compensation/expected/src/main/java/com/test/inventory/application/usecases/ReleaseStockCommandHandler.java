@@ -14,6 +14,8 @@ public class ReleaseStockCommandHandler implements CommandHandler<ReleaseStockCo
     @Transactional
     @LogExceptions
     public void handle(ReleaseStockCommand command) {
+        // 1. stockItem.release(...)
+
         // TODO: implement business logic — ver inventory-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

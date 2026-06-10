@@ -14,6 +14,8 @@ public class ProcessPlacedOrderCommandHandler implements CommandHandler<ProcessP
     @Transactional
     @LogExceptions
     public void handle(ProcessPlacedOrderCommand command) {
+        // 1. orderRecord.process(...)
+
         // TODO: implement business logic — ver ordering-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

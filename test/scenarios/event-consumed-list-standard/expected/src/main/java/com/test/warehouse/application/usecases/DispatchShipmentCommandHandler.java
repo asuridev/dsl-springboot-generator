@@ -14,6 +14,8 @@ public class DispatchShipmentCommandHandler implements CommandHandler<DispatchSh
     @Transactional
     @LogExceptions
     public void handle(DispatchShipmentCommand command) {
+        // 1. shipment.dispatch(...)
+
         // TODO: implement business logic — ver warehouse-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

@@ -14,6 +14,8 @@ public class ArchiveItemCommandHandler implements CommandHandler<ArchiveItemComm
     @Transactional
     @LogExceptions
     public void handle(ArchiveItemCommand command) {
+        // 1. item.archive(...)
+
         // TODO: implement business logic — ver catalog-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

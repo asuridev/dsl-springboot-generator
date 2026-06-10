@@ -1,6 +1,7 @@
 package com.test.catalog.application.usecases;
 
 import com.test.catalog.application.commands.CreateProductCommand;
+import com.test.catalog.domain.repository.ProductRepository;
 import com.test.shared.domain.annotations.ApplicationComponent;
 import com.test.shared.domain.annotations.LogExceptions;
 import com.test.shared.domain.interfaces.ReturningCommandHandler;
@@ -11,10 +12,19 @@ import org.springframework.transaction.annotation.Transactional;
 @ApplicationComponent
 public class CreateProductCommandHandler implements ReturningCommandHandler<CreateProductCommand, UUID> {
 
+    private final ProductRepository productRepository;
+
+    public CreateProductCommandHandler(ProductRepository productRepository) {
+        this.productRepository = productRepository;
+    }
+
     @Override
     @Transactional
     @LogExceptions
     public UUID handle(CreateProductCommand command) {
+        // 1. Build the Product aggregate (Product.create(...) / new Product(...))
+        // 2. productRepository.save(product)
+
         // TODO: implement business logic — ver catalog-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

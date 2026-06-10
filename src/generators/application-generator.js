@@ -1313,6 +1313,107 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
   return { body: lines.join('\n'), extraImports: [...extraImports].sort(), extraRepos };
 }
 
+/**
+ * [Phase 3 #2 + #8] Build a guided scaffold body for a command handler whose UC
+ * is `implementation: scaffold`.
+ *
+ * Returns:
+ *   - stepsBlock: numbered `// N. ...` comments (8-space indented) reflecting the
+ *     execution order the implementer must follow — load → lookups → FK checks →
+ *     domain rules → domain method → save. Rendered before the TODO + throw.
+ *   - extraRepos: cross-aggregate repositories required by the UC's domainRules
+ *     (deleteGuard / crossAggregateConstraint), so the handler constructor is
+ *     wired correctly even though the body is not implemented yet.
+ *
+ * No executable Java (and therefore no extra imports) is emitted: the repository
+ * imports are added by the template's fkRepos loop, and the own-aggregate repo by
+ * `injectRepository`.
+ */
+function buildScaffoldHandlerGuide(uc, agg, errorMap, packageName, moduleName, bcYaml) {
+  const steps = [];
+  const extraRepos = [];
+  const seenRepo = new Set();
+  const aggVarName = toCamelCase(agg.name);
+  const repoFieldName = `${aggVarName}Repository`;
+  const isCreate = uc.method === 'create';
+  const hasOwnRepository = (bcYaml?.repositories || []).some((r) => r.aggregate === agg.name);
+  let n = 1;
+  const step = (text) => steps.push(`        // ${n++}. ${text}`);
+
+  // 1. Load or build the aggregate (repository-dependent steps require a repo)
+  const loadAggInput = (uc.input || []).find((i) => i.loadAggregate === true);
+  const primaryNotFound = resolvePrimaryNotFoundError(uc);
+  const aggLoaded = !isCreate && loadAggInput && primaryNotFound && hasOwnRepository;
+  if (isCreate) {
+    step(`Build the ${agg.name} aggregate (${agg.name}.create(...) / new ${agg.name}(...))`);
+  } else if (aggLoaded) {
+    const errEntry = errorMap[primaryNotFound];
+    const errType = errEntry ? errEntry.errorType : primaryNotFound;
+    step(`Load ${agg.name} via ${repoFieldName}.findById(...) (throws ${errType})`);
+  } else if (uc.method && hasOwnRepository) {
+    step(`Load the ${agg.name} (e.g. by unique key) for .${uc.method}(...)`);
+  }
+
+  // 2. Additional lookups
+  for (const lk of additionalLookups(uc)) {
+    const errEntry = errorMap[lk.errorCode];
+    const errType = errEntry ? errEntry.errorType : lk.errorCode;
+    step(`Lookup "${lk.param}" (throws ${errType})`);
+  }
+
+  // 3. FK validations
+  for (const fk of (uc.fkValidations || [])) {
+    const fkAgg = fk.aggregate || fk.references;
+    if (!fkAgg) continue;
+    const fkErr = fk.error || fk.notFoundError;
+    const fkErrEntry = fkErr ? errorMap[fkErr] : null;
+    const fkErrType = fkErrEntry ? fkErrEntry.errorType : (fkErr || 'NotFound');
+    step(`FK validation: ${fkAgg} exists for "${fk.param || fk.field}" (throws ${fkErrType})`);
+  }
+
+  // 4. Domain rules — run the rule-mapper to collect cross-aggregate repos and
+  //    to surface each rule at its correct enforcement site.
+  const aggregateDef = (bcYaml?.aggregates || []).find((a) => a.name === agg.name);
+  const ucRuleIds = new Set(uc.rules || []);
+  for (const rule of (aggregateDef?.domainRules || [])) {
+    if (!ucRuleIds.has(rule.id)) continue;
+    const result = mapRule(rule, {
+      uc, agg, aggVarName, errorMap, packageName, moduleName, bcYaml, isCreate,
+    });
+    for (const r of (result.extraRepos || [])) {
+      if (seenRepo.has(r.repoFieldName)) continue;
+      seenRepo.add(r.repoFieldName);
+      extraRepos.push(r);
+    }
+    const desc = rule.description ? rule.description.trim() : '';
+    if (rule.type === 'terminalState') {
+      step(`domainRule(${rule.id}, terminalState): enforced by ${aggVarName}.${uc.method || 'method'}()`);
+    } else if (rule.type === 'sideEffect') {
+      step(`domainRule(${rule.id}, sideEffect): ${desc}`);
+    } else {
+      step(`domainRule(${rule.id}, ${rule.type}): ${desc || 'enforce before invoking the domain method'}`);
+    }
+  }
+
+  // 5. Domain method invocation
+  if (!isCreate && uc.method) {
+    const effectiveMethod = uc.method === 'delete' && agg.softDelete === true ? 'softDelete' : uc.method;
+    if (uc.method === 'delete' && !agg.softDelete && hasOwnRepository) {
+      step(`${repoFieldName}.delete(${aggVarName}.getId())`);
+    } else {
+      step(`${aggVarName}.${effectiveMethod}(...)`);
+    }
+  }
+
+  // 6. Save (skip for physical delete, already covered above; requires a repo)
+  const isPhysicalDelete = uc.method === 'delete' && !agg.softDelete;
+  if (hasOwnRepository && !isPhysicalDelete && (isCreate || aggLoaded)) {
+    step(`${repoFieldName}.save(${aggVarName})`);
+  }
+
+  return { stepsBlock: steps.join('\n'), extraRepos };
+}
+
 // ─── Query handler body ───────────────────────────────────────────────────────
 
 function buildQueryHandlerBody(uc, agg, repoMethods, errorMap, packageName, moduleName, projection = null, bcYaml = null) {
@@ -1954,18 +2055,29 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
 
   let body = '';
   let extraImports = [];
+  let scaffoldSteps = '';
+
+  // Merge domain-rule-mapper's extra repos into fkRepos, dedupe by repoFieldName.
+  const mergeExtraRepos = (extra) => {
+    const seen = new Set(fkRepos.map((r) => r.repoFieldName));
+    for (const r of (extra || [])) {
+      if (seen.has(r.repoFieldName)) continue;
+      seen.add(r.repoFieldName);
+      fkRepos.push(r);
+    }
+  };
 
   if (uc.implementation === 'full') {
     const result = buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcYaml);
     body = result.body;
     extraImports = result.extraImports;
-    // Merge domain-rule-mapper's extra repos into fkRepos, dedupe by repoFieldName.
-    const seen = new Set(fkRepos.map((r) => r.repoFieldName));
-    for (const r of (result.extraRepos || [])) {
-      if (seen.has(r.repoFieldName)) continue;
-      seen.add(r.repoFieldName);
-      fkRepos.push(r);
-    }
+    mergeExtraRepos(result.extraRepos);
+  } else if (!uc.async) {
+    // [Phase 3 #2 + #8] Scaffold command handler — emit a numbered step guide and
+    // wire the constructor with the cross-aggregate repos its rules will need.
+    const guide = buildScaffoldHandlerGuide(uc, agg, errorMap, packageName, moduleName, bcYaml);
+    scaffoldSteps = guide.stepsBlock;
+    mergeExtraRepos(guide.extraRepos);
   }
 
   // [G4] command return type: when uc.returns is declared, the handler
@@ -2072,9 +2184,21 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
       mapperName: '',
       mapperFieldName: '',
       authContextFields,
-      injectRepository: uc.implementation === 'full' && !uc.async,
+      // [Phase 3 #2] Scaffold command handlers that operate on their aggregate
+      // need its repository injected (to load and/or save). Only inject when a
+      // repository is actually declared for the aggregate — some aggregates
+      // (e.g. event-driven ones) have none. `full` keeps its prior behaviour;
+      // async handlers manage their own persistence (AsyncJobRepository).
+      injectRepository: !uc.async && (
+        uc.implementation === 'full'
+        || (
+          (bcYaml?.repositories || []).some((r) => r.aggregate === agg.name)
+          && (!!uc.method || (uc.input || []).some((i) => i.loadAggregate === true))
+        )
+      ),
       implementation: (uc.async ? 'full' : (uc.implementation || 'scaffold')),
       body,
+      scaffoldSteps,
       imports: extraImports,
       returnType,
       // [G20] declarative cross-field validations — enriched with errorClass/throwable (Phase 3, Gap E9)

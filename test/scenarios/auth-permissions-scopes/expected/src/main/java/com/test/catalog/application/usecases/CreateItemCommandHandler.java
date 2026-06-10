@@ -14,6 +14,8 @@ public class CreateItemCommandHandler implements CommandHandler<CreateItemComman
     @Transactional
     @LogExceptions
     public void handle(CreateItemCommand command) {
+        // 1. Build the Item aggregate (Item.create(...) / new Item(...))
+
         // TODO: implement business logic — ver catalog-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

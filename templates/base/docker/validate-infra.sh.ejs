@@ -39,7 +39,7 @@ echo "============================================"
 <% if (databaseType === 'postgresql') { -%>
 check "PostgreSQL connectivity" \
   ${RUNTIME} exec "${SYSTEM}-devtools" \
-  psql -h postgres -U "${DB_USER}" -d "${DB_NAME}" -c "SELECT 1" -q -t
+  bash -c "PGPASSWORD=${DB_PASS} psql -h postgres -U ${DB_USER} -d ${DB_NAME} -c 'SELECT 1' -q -t"
 
 <% } else if (databaseType === 'mysql') { -%>
 check "MySQL connectivity" \
@@ -64,8 +64,8 @@ check "Redis/Valkey PING" \
 
 <% } -%>
 <% if (authProvider === 'keycloak') { -%>
-check "Keycloak health" \
-  curl -sf "http://localhost:8180/health/ready"
+check "Keycloak realm endpoint" \
+  curl -sf "http://localhost:8180/realms/master"
 
 <% } -%>
 echo "============================================"

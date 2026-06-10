@@ -14,6 +14,8 @@ public class UpdateItemCommandHandler implements CommandHandler<UpdateItemComman
     @Transactional
     @LogExceptions
     public void handle(UpdateItemCommand command) {
+        // 1. item.update(...)
+
         // TODO: implement business logic — ver catalog-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

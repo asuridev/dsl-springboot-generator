@@ -14,6 +14,8 @@ public class CreateInvoiceFromOrderCommandHandler implements CommandHandler<Crea
     @Transactional
     @LogExceptions
     public void handle(CreateInvoiceFromOrderCommand command) {
+        // 1. invoice.process(...)
+
         // TODO: implement business logic — ver billing-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

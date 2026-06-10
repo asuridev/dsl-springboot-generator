@@ -14,6 +14,8 @@ public class RegisterProductInCatalogCommandHandler implements CommandHandler<Re
     @Transactional
     @LogExceptions
     public void handle(RegisterProductInCatalogCommand command) {
+        // 1. inventoryItem.register(...)
+
         // TODO: implement business logic — ver inventory-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

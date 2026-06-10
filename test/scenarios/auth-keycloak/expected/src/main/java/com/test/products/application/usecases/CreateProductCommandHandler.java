@@ -14,6 +14,8 @@ public class CreateProductCommandHandler implements CommandHandler<CreateProduct
     @Transactional
     @LogExceptions
     public void handle(CreateProductCommand command) {
+        // 1. Build the Product aggregate (Product.create(...) / new Product(...))
+
         // TODO: implement business logic — ver products-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

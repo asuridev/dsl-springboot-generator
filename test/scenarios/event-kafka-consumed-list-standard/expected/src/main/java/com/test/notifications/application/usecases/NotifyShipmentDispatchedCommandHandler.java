@@ -14,6 +14,8 @@ public class NotifyShipmentDispatchedCommandHandler implements CommandHandler<No
     @Transactional
     @LogExceptions
     public void handle(NotifyShipmentDispatchedCommand command) {
+        // 1. notification.notify(...)
+
         // TODO: implement business logic — ver notifications-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

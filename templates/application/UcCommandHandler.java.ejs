@@ -90,7 +90,9 @@ public class <%= useCaseName %>CommandHandler implements <% if (returnType) { %>
 <% }); %><% } %><% if (implementation === 'scaffold') { %>
 <% if (authContextFields && authContextFields.length > 0) { %>
 <% authContextFields.forEach(function(f) { %>        // TODO (authContext): inject <%- f.javaType %> <%- f.name %> from SecurityContextHolder.getContext().getAuthentication()
-<% }); %><% } %>
+<% }); %><% } %><% if (scaffoldSteps && scaffoldSteps.trim()) { %>
+<%- scaffoldSteps %>
+<% } %>
         // TODO: implement business logic — ver <%= moduleName %>-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
 <% } else { %>

@@ -14,6 +14,8 @@ public class ReserveStockCommandHandler implements CommandHandler<ReserveStockCo
     @Transactional
     @LogExceptions
     public void handle(ReserveStockCommand command) {
+        // 1. stockItem.reserve(...)
+
         // TODO: implement business logic — ver inventory-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
     }

@@ -46,13 +46,13 @@ public class Product {
 
     /** derived_from: UC-PRD-001 ActivateProduct */
     public void activate() {
-        // TODO: implement business logic — ver catalog-flows.md
+        // derived_from: UC-PRD-001 ActivateProduct
         this.status = this.status.transitionTo(ProductStatus.ACTIVE);
     }
 
     /** derived_from: UC-PRD-002 DiscontinueProduct */
     public void discontinue() {
-        // TODO: implement business logic — ver catalog-flows.md
+        // derived_from: UC-PRD-002 DiscontinueProduct
         this.status = this.status.transitionTo(ProductStatus.DISCONTINUED);
     }
 
