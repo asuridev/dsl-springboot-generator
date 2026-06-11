@@ -20,6 +20,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseBody;
@@ -87,6 +88,17 @@ public class HandlerExceptions {
     @ResponseBody
     public ErrorResponse onMalformedRequest(Exception ex) {
         return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", "Malformed request");
+    }
+
+    @ResponseStatus(HttpStatus.METHOD_NOT_ALLOWED)
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    @ResponseBody
+    public ErrorResponse onMethodNotAllowed(HttpRequestMethodNotSupportedException ex) {
+        return new ErrorResponse(
+            HttpStatus.METHOD_NOT_ALLOWED.value(),
+            "Method Not Allowed",
+            "HTTP method not supported"
+        );
     }
 
     @ResponseStatus(HttpStatus.CONFLICT)

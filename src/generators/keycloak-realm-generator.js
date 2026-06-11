@@ -28,6 +28,12 @@ function collectAuthData(allBcYamls) {
   const actorRolesMap = new Map();
   const actorClientRolesMap = new Map();
 
+  // Realm roles must be emitted WITHOUT the ROLE_ prefix: the controller strips it
+  // for @PreAuthorize (hasAnyRole('ADMIN')) and JwtAuthConverter re-adds it
+  // ("ROLE_" + role). Emitting ROLE_ADMIN here would make Keycloak put ROLE_ADMIN in
+  // the token → converter yields ROLE_ROLE_ADMIN → never matches → 403 everywhere.
+  const stripRolePrefix = (r) => r.replace(/^ROLE_/, '');
+
   for (const bcYaml of allBcYamls) {
     const useCases = (bcYaml && bcYaml.useCases) || [];
     for (const uc of useCases) {
@@ -38,7 +44,8 @@ function collectAuthData(allBcYamls) {
 
       if (authz) {
         // Realm roles
-        for (const role of (authz.rolesAnyOf || [])) {
+        for (const rawRole of (authz.rolesAnyOf || [])) {
+          const role = stripRolePrefix(rawRole);
           realmRolesSet.add(role);
           if (actor) {
             if (!actorRolesMap.has(actor)) actorRolesMap.set(actor, new Set());

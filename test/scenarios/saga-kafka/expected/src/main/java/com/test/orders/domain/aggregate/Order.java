@@ -1,12 +1,6 @@
 package com.test.orders.domain.aggregate;
 
-import com.test.orders.domain.events.OrderPlacedEvent;
-import com.test.shared.domain.DomainEvent;
-import com.test.shared.domain.EventMetadata;
 import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
 import java.util.UUID;
 
 /**
@@ -14,20 +8,6 @@ import java.util.UUID;
  * Pure domain class (no Lombok, no public setters).
  */
 public class Order {
-
-    // ─── Domain Events ────────────────────────────────────────────────────────
-
-    private final List<DomainEvent> _domainEvents = new ArrayList<>();
-
-    protected void raise(DomainEvent event) {
-        _domainEvents.add(event);
-    }
-
-    public List<DomainEvent> pullDomainEvents() {
-        List<DomainEvent> events = Collections.unmodifiableList(new ArrayList<>(_domainEvents));
-        _domainEvents.clear();
-        return events;
-    }
 
     // ─── Fields ───────────────────────────────────────────────────────────────
     private final UUID id;

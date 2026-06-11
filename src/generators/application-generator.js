@@ -1719,6 +1719,7 @@ function buildFkDependencies(uc, packageName, moduleName, mainAggregateName, bcY
   const fkRepos = [];
   const fkPorts = [];
   const seenPorts = new Set();
+  const seenRepos = new Set();
 
   // BCs handled by outbound-http-generator already emit a unified ServicePort —
   // do NOT generate a separate ServicePort.java.ejs file for them.
@@ -1730,9 +1731,12 @@ function buildFkDependencies(uc, packageName, moduleName, mainAggregateName, bcY
     if (!fkAggregate) continue; // skip malformed fkValidation entries
     if (fkAggregate === mainAggregateName) continue;
     if (hasLocalReadModel(fk, bcYaml)) {
+      const repoFieldName = `${toCamelCase(fkAggregate)}Repository`;
+      if (seenRepos.has(repoFieldName)) continue; // same aggregate referenced by >1 fkValidation
+      seenRepos.add(repoFieldName);
       fkRepos.push({
         repoName: `${fkAggregate}Repository`,
-        repoFieldName: `${toCamelCase(fkAggregate)}Repository`,
+        repoFieldName,
       });
     } else {
       // Cross-BC without LRM → service port in application/ports/
@@ -2077,8 +2081,10 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
   let scaffoldSteps = '';
 
   // Merge domain-rule-mapper's extra repos into fkRepos, dedupe by repoFieldName.
+  // Seed with the aggregate's own repo (repoFieldName) so an extraRepo pointing at the
+  // primary repository is not injected twice (primary field + duplicate fkRepos entry).
   const mergeExtraRepos = (extra) => {
-    const seen = new Set(fkRepos.map((r) => r.repoFieldName));
+    const seen = new Set([repoFieldName, ...fkRepos.map((r) => r.repoFieldName)]);
     for (const r of (extra || [])) {
       if (seen.has(r.repoFieldName)) continue;
       seen.add(r.repoFieldName);

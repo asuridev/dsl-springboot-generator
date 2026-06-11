@@ -79,3 +79,25 @@ dependencies {
 tasks.named('test') {
     useJUnitPlatform()
 }
+<% if (Number(javaVersion) >= 17) { %>
+// Lombok is an annotation processor that reaches into the JDK compiler internals
+// (com.sun.tools.javac.*). Since JDK 16 the module system blocks that reflective
+// access by default, which silently breaks code generation (@Getter/@Builder/@Slf4j
+// vanish → "cannot find symbol"). Fork the compiler with the canonical Lombok opens.
+tasks.withType(JavaCompile).configureEach {
+    options.fork = true
+    options.forkOptions.jvmArgs += [
+        '--add-opens', 'jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED',
+        '--add-opens', 'jdk.compiler/com.sun.tools.javac.code=ALL-UNNAMED',
+        '--add-opens', 'jdk.compiler/com.sun.tools.javac.comp=ALL-UNNAMED',
+        '--add-opens', 'jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED',
+        '--add-opens', 'jdk.compiler/com.sun.tools.javac.main=ALL-UNNAMED',
+        '--add-opens', 'jdk.compiler/com.sun.tools.javac.model=ALL-UNNAMED',
+        '--add-opens', 'jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED',
+        '--add-opens', 'jdk.compiler/com.sun.tools.javac.processing=ALL-UNNAMED',
+        '--add-opens', 'jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED',
+        '--add-opens', 'jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED',
+        '--add-opens', 'jdk.compiler/com.sun.tools.javac.jvm=ALL-UNNAMED'
+    ]
+}
+<% } %>

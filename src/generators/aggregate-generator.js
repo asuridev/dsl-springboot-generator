@@ -1094,8 +1094,26 @@ async function generateAggregates(bcYaml, config, outputDir) {
       });
     }
 
+    // [Phase 3 #7] Restrict published-event imports to events this aggregate actually
+    // raises. Events with an explicit `aggregate` attribution honor it; un-attributed
+    // events are matched by whether a `new <Name>Event(` construction appears in any
+    // generated method body or the static factory. This prevents importing another
+    // aggregate's events (e.g. ProductActivatedEvent leaking into Category).
+    const raisedEventNames = new Set();
+    const scanForEvents = (text) => {
+      if (!text) return;
+      for (const e of aggregatePublishedEvents) {
+        if (text.includes(`new ${e.name}Event(`)) raisedEventNames.add(e.name);
+      }
+    };
+    businessMethods.forEach((m) => scanForEvents(m.body));
+    if (staticFactory) scanForEvents(staticFactory.raiseCall);
+    const ownedPublishedEvents = aggregatePublishedEvents.filter((e) =>
+      e.aggregate ? e.aggregate === aggregate.name : raisedEventNames.has(e.name)
+    );
+
     // ── 6. Build imports (after businessMethods so param types are included) ──
-    const imports = buildImports(aggregate, bcYaml, config, businessMethods, aggregatePublishedEvents, staticFactory);
+    const imports = buildImports(aggregate, bcYaml, config, businessMethods, ownedPublishedEvents, staticFactory);
 
     // [Phase 3, Gap E1.d] Imports required by terminalState try/catch wrapper.
     if (terminalStateErrorClass) {
@@ -1169,7 +1187,7 @@ async function generateAggregates(bcYaml, config, outputDir) {
       hasAudit: !!aggregate.auditable,
       hasSoftDelete: !!aggregate.softDelete,
       hasVersion: aggregate.concurrencyControl === 'optimistic',
-      hasDomainEvents: aggregatePublishedEvents.length > 0,
+      hasDomainEvents: ownedPublishedEvents.length > 0,
       hasChildEntities: childEntities.length > 0,
       imports,
       fields: scalarFields,
