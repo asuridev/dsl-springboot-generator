@@ -416,6 +416,14 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
     { packageName, applicationClassName, systemName, outboxEnabled, schedulingEnabled }
   );
 
+  // ── ApplicationTests.java (src/test) ─────────────────────────────────────
+  const javaTestDir = path.join(outputDir, 'src', 'test', 'java', packagePath);
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'base', 'test', 'ApplicationTests.java.ejs'),
+    path.join(javaTestDir, `${applicationClassName}Tests.java`),
+    { packageName, applicationClassName }
+  );
+
   // ── application.yaml (base — profile-agnostic) ──────────────────────────
 
   const dbName = artifactId.replace(/-/g, '_');

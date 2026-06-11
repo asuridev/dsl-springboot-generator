@@ -1,0 +1,14 @@
+package <%= packageName %>;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.modulith.core.ApplicationModules;
+import org.springframework.modulith.docs.Documenter;
+
+class <%= applicationClassName %>Tests {
+
+    @Test
+    void contextLoads() {
+        ApplicationModules modules = ApplicationModules.of(<%= applicationClassName %>.class).verify();
+        new Documenter(modules).writeDocumentation();
+    }
+}
