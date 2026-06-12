@@ -16,6 +16,8 @@ import org.springframework.stereotype.Repository;
  */
 @Repository
 public interface ProductJpaRepository extends JpaRepository<ProductJpa, UUID> {
-    @Query("SELECT p FROM ProductJpa p WHERE (:name IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', :name, '%')))")
+    @Query(
+        "SELECT p FROM ProductJpa p WHERE (:name IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', CAST(:name AS string), '%')))"
+    )
     Slice<ProductJpa> browseProducts(@Param("name") String name);
 }

@@ -23,6 +23,27 @@ function isMoneyType(type) {
   return type === 'Money';
 }
 
+function isUrlType(type) {
+  return type === 'Url';
+}
+
+/**
+ * Mapper fragments for a Url property: the domain holds java.net.URI, the JPA
+ * column is a String (see jpa-entity-generator.jpaFieldJavaType). These bridge
+ * the two so Hibernate stores text instead of a binary-serialized URI.
+ */
+function urlToDomainExpr(prop) {
+  const getter = `jpa.get${capitalize(prop.name)}()`;
+  // Optional Url → null-safe; required → unconditional (URI.create(null) would NPE).
+  return prop.required === false
+    ? `${getter} != null ? java.net.URI.create(${getter}) : null`
+    : `java.net.URI.create(${getter})`;
+}
+function urlToJpaExpr(prop) {
+  const getter = `domain.get${capitalize(prop.name)}()`;
+  return `${getter} != null ? ${getter}.toString() : null`;
+}
+
 function isVoType(type, bcYaml) {
   if (type === 'Money') return false;
   return (bcYaml.valueObjects || []).some((vo) => vo.name === type);
@@ -263,17 +284,22 @@ function buildParamPredicate(param, alias) {
       return fields.map((f) => `${a}.${f} >= :${pn}`).join(' OR ');
     case 'LTE':
       return fields.map((f) => `${a}.${f} <= :${pn}`).join(' OR ');
+    // The LIKE parameter is wrapped in CAST(:p AS string) so PostgreSQL can infer
+    // a type for the bind even when the value is null (optional filters). Without
+    // the cast, a null param inside CONCAT defaults to bytea and Hibernate's
+    // LOWER(...) fails ("function lower(bytea) does not exist"). The cast is a
+    // no-op for non-null strings. Field-side casting stays in jpqlLikeFieldExpression.
     case 'LIKE_CONTAINS':
       return fields
-        .map((f) => `LOWER(${jpqlLikeFieldExpression(param, a, f)}) LIKE LOWER(CONCAT('%', :${pn}, '%'))`)
+        .map((f) => `LOWER(${jpqlLikeFieldExpression(param, a, f)}) LIKE LOWER(CONCAT('%', CAST(:${pn} AS string), '%'))`)
         .join(' OR ');
     case 'LIKE_STARTS':
       return fields
-        .map((f) => `LOWER(${jpqlLikeFieldExpression(param, a, f)}) LIKE LOWER(CONCAT(:${pn}, '%'))`)
+        .map((f) => `LOWER(${jpqlLikeFieldExpression(param, a, f)}) LIKE LOWER(CONCAT(CAST(:${pn} AS string), '%'))`)
         .join(' OR ');
     case 'LIKE_ENDS':
       return fields
-        .map((f) => `LOWER(${jpqlLikeFieldExpression(param, a, f)}) LIKE LOWER(CONCAT('%', :${pn}))`)
+        .map((f) => `LOWER(${jpqlLikeFieldExpression(param, a, f)}) LIKE LOWER(CONCAT('%', CAST(:${pn} AS string)))`)
         .join(' OR ');
     case 'IN': {
       // For IN we expect a single field, derived either from filterOn or by
@@ -565,7 +591,9 @@ function buildSearchQuery(methodName, jpaEntityName, aggregate) {
     }
   }
 
-  const conditions = fieldNames.map((f) => `LOWER(${a}.${f}) LIKE LOWER(CONCAT('%', :query, '%'))`);
+  // CAST(:query AS string) — see buildParamPredicate: gives PostgreSQL a type for
+  // the bind so a null param inside CONCAT does not collapse to bytea.
+  const conditions = fieldNames.map((f) => `LOWER(${a}.${f}) LIKE LOWER(CONCAT('%', CAST(:query AS string), '%'))`);
   return `SELECT ${a} FROM ${jpaEntityName} ${a} WHERE ${conditions.join(' OR ')}`;
 }
 
@@ -1059,6 +1087,8 @@ function buildToDomainBody(aggregate, bcYaml) {
         // List[Scalar] or List[SinglePropVO]: JPA type matches domain type — pass through
         args.push(`jpa.get${capitalize(prop.name)}()`);
       }
+    } else if (isUrlType(prop.type)) {
+      args.push(urlToDomainExpr(prop));
     } else {
       args.push(`jpa.get${capitalize(prop.name)}()`);
     }
@@ -1150,6 +1180,8 @@ function buildToJpaBody(aggregate, bcYaml) {
         // List[Scalar] or List[SinglePropVO]: pass through directly
         lines.push(`        .${prop.name}(domain.get${capitalize(prop.name)}())`);
       }
+    } else if (isUrlType(prop.type)) {
+      lines.push(`        .${prop.name}(${urlToJpaExpr(prop)})`);
     } else {
       lines.push(`        .${prop.name}(domain.get${capitalize(prop.name)}())`);
     }
@@ -1226,6 +1258,8 @@ function buildChildToDomainBody(entity, bcYaml) {
           args.push(`jpa.get${capitalize(prop.name)}()`);
         }
       }
+    } else if (isUrlType(prop.type)) {
+      args.push(urlToDomainExpr(prop));
     } else {
       args.push(`jpa.get${capitalize(prop.name)}()`);
     }
@@ -1274,6 +1308,8 @@ function buildChildToJpaBody(entity, bcYaml) {
           lines.push(`        .${prop.name}(domain.get${capitalize(prop.name)}())`);
         }
       }
+    } else if (isUrlType(prop.type)) {
+      lines.push(`        .${prop.name}(${urlToJpaExpr(prop)})`);
     } else {
       lines.push(`        .${prop.name}(domain.get${capitalize(prop.name)}())`);
     }

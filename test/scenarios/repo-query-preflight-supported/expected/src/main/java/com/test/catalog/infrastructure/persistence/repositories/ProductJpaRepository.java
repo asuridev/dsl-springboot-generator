@@ -20,13 +20,13 @@ import org.springframework.stereotype.Repository;
 public interface ProductJpaRepository extends JpaRepository<ProductJpa, UUID> {
     // derived_from: openapi:searchProducts
     @Query(
-        "SELECT p FROM ProductJpa p WHERE p.status = 'ACTIVE' AND (:categoryId IS NULL OR p.categoryId = :categoryId) AND (:search IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', :search, '%')))"
+        "SELECT p FROM ProductJpa p WHERE p.status = 'ACTIVE' AND (:categoryId IS NULL OR p.categoryId = :categoryId) AND (:search IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', CAST(:search AS string), '%')))"
     )
     Page<ProductJpa> searchActive(@Param("categoryId") UUID categoryId, @Param("search") String search, Pageable page);
 
     // derived_from: openapi:adminSearchProducts
     @Query(
-        "SELECT p FROM ProductJpa p WHERE (:categoryId IS NULL OR p.categoryId = :categoryId) AND (:status IS NULL OR p.status = :status) AND (:search IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', :search, '%')))"
+        "SELECT p FROM ProductJpa p WHERE (:categoryId IS NULL OR p.categoryId = :categoryId) AND (:status IS NULL OR p.status = :status) AND (:search IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', CAST(:search AS string), '%')))"
     )
     Page<ProductJpa> searchAll(
         @Param("categoryId") UUID categoryId,

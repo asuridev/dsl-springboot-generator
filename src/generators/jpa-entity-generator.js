@@ -25,6 +25,21 @@ function isMoneyType(type) {
   return type === 'Money';
 }
 
+function isUrlType(type) {
+  return type === 'Url';
+}
+
+/**
+ * Java type for a property as stored in a JPA entity. Identical to mapType().javaType
+ * except Url → String: JPA persists URLs as a TEXT column and the JpaMapper converts
+ * URI ↔ String. Keeping URI here would make Hibernate serialize the URI as binary
+ * (bytea) into the TEXT column. The domain model keeps URI for type-safety.
+ */
+function jpaFieldJavaType(type, prop) {
+  if (isUrlType(type)) return 'String';
+  return mapType(type, prop).javaType;
+}
+
 function isValueObjectType(type, bcYaml) {
   return (bcYaml.valueObjects || []).some((vo) => vo.name === type);
 }
@@ -85,7 +100,7 @@ function expandMultiPropertyVoField(prop, voDef, bcYaml) {
     const fieldName = `${prefix}${capitalize(voProp.name)}`;
     let javaType;
     try {
-      javaType = mapType(voProp.type, voProp).javaType;
+      javaType = jpaFieldJavaType(voProp.type, voProp);
     } catch (e) {
       throw new Error(
         `jpa-entity: no se puede mapear el tipo "${voProp.type}" de la propiedad "${voProp.name}" ` +
@@ -176,7 +191,7 @@ function buildElementCollectionField(prop, aggregate, bcYaml) {
     // Single-property VO: collapse to its primitive type
     const voProp = voProps[0];
     try {
-      elementJavaType = mapType(voProp.type, voProp).javaType;
+      elementJavaType = jpaFieldJavaType(voProp.type, voProp);
     } catch (e) {
       throw new Error(
         `jpa-entity: no se puede mapear el tipo "${voProp.type}" del value object "${voDef.name}" ` +
@@ -194,7 +209,7 @@ function buildElementCollectionField(prop, aggregate, bcYaml) {
       elementJavaType = innerType;
     } else {
       try {
-        elementJavaType = mapType(innerType).javaType;
+        elementJavaType = jpaFieldJavaType(innerType);
       } catch (e) {
         throw new Error(
           `jpa-entity: no se puede mapear el tipo de elemento "${innerType}" ` +
@@ -278,7 +293,7 @@ function buildJpaFields(properties, aggregate, bcYaml) {
     if (voDef && (voDef.properties || []).length === 1) {
       let javaType;
       try {
-        javaType = mapType(voDef.properties[0].type, voDef.properties[0]).javaType;
+        javaType = jpaFieldJavaType(voDef.properties[0].type, voDef.properties[0]);
       } catch (_) {
         javaType = 'String';
       }
@@ -296,7 +311,7 @@ function buildJpaFields(properties, aggregate, bcYaml) {
     } else {
       let javaType;
       try {
-        javaType = mapType(prop.type, prop).javaType;
+        javaType = jpaFieldJavaType(prop.type, prop);
       } catch (_) {
         javaType = 'String'; // fallback
       }
@@ -405,7 +420,9 @@ function buildJpaEntityImports(aggregate, bcYaml, config) {
     }
   }
 
-  return [...imports].sort();
+  // Url is persisted as String in JPA entities → java.net.URI is never needed here,
+  // even if a Url-typed property's mapType() importHint suggested it.
+  return [...imports].filter((i) => i !== 'java.net.URI').sort();
 }
 
 /**
@@ -433,7 +450,7 @@ function buildJpaChildFields(entity, bcYaml) {
     if (voDef && (voDef.properties || []).length === 1) {
       let javaType;
       try {
-        javaType = mapType(voDef.properties[0].type, voDef.properties[0]).javaType;
+        javaType = jpaFieldJavaType(voDef.properties[0].type, voDef.properties[0]);
       } catch (_) {
         javaType = 'String';
       }
@@ -447,7 +464,7 @@ function buildJpaChildFields(entity, bcYaml) {
     } else {
       let javaType;
       try {
-        javaType = mapType(prop.type, prop).javaType;
+        javaType = jpaFieldJavaType(prop.type, prop);
       } catch (_) {
         javaType = 'String';
       }
@@ -535,7 +552,9 @@ function buildJpaChildEntityImports(entity, bcYaml, config) {
     } catch (_) { /* ignore */ }
   }
 
-  return [...imports].sort();
+  // Url is persisted as String in JPA entities → java.net.URI is never needed here,
+  // even if a Url-typed property's mapType() importHint suggested it.
+  return [...imports].filter((i) => i !== 'java.net.URI').sort();
 }
 
 /**
@@ -686,12 +705,17 @@ function buildEmbeddableContext(voName, voDef, bcYaml, config) {
 
   for (const prop of (voDef.properties || [])) {
     let javaType;
-    try {
-      const mapped = mapType(prop.type, prop);
-      javaType = mapped.javaType;
-      if (mapped.importHint) imports.add(mapped.importHint);
-    } catch (_) {
+    if (isUrlType(prop.type)) {
+      // Url persisted as String (TEXT column); no java.net.URI import in JPA.
       javaType = 'String';
+    } else {
+      try {
+        const mapped = mapType(prop.type, prop);
+        javaType = mapped.javaType;
+        if (mapped.importHint) imports.add(mapped.importHint);
+      } catch (_) {
+        javaType = 'String';
+      }
     }
     if (isEnumType(prop.type, bcYaml)) {
       imports.add(`${config.packageName}.${bc}.domain.enums.${prop.type}`);
