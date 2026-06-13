@@ -11,5 +11,8 @@ devtools:
 <% } else if (databaseType === 'mysql') { %>
     - mysql
 <% } %>
+<% if (objectStoragePresent) { %>
+    - minio
+<% } %>
   networks:
     - <%= systemName %>-network

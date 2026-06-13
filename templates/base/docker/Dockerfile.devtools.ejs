@@ -13,6 +13,12 @@ FROM alpine:3.20
 RUN apk add --no-cache \
 <%- packageLines %> \
     && echo "devtools ready"
+<% if (objectStoragePresent) { -%>
+
+# MinIO client (mc) — for Fase 3 infra validation against the object store.
+RUN curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc \
+    && chmod +x /usr/local/bin/mc
+<% } -%>
 
 WORKDIR /scripts
 

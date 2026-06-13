@@ -1,0 +1,43 @@
+package <%= packageName %>.<%= bc %>.application.ports;
+
+import java.net.URI;
+
+import org.springframework.core.io.Resource;
+import org.springframework.web.multipart.MultipartFile;
+
+import <%= packageName %>.shared.domain.valueobject.StoredObject;
+
+/**
+ * Output port for the "<%= storeName %>" object store.
+ *
+ * derived_from: objectStorage:<%= storeName %>
+ *
+ * Provider-agnostic contract for binary persistence. The infrastructure adapter
+ * (S3-compatible / MinIO) implements it. visibility=<%= visibility %>, urlAccess=<%= urlAccess %>.
+ */
+public interface <%= portName %> {
+
+    /**
+     * Uploads the given multipart file and returns its {@link StoredObject} descriptor.
+     * For public-url stores the returned {@code url} is the stable public URL; for
+     * signed-url stores {@code url} is {@code null} (sign on read via {@link #signUrl}).
+     */
+    StoredObject put(MultipartFile file);
+
+    /**
+     * Returns a time-limited signed URL granting read access to the object with the
+     * given storage key.<% if (urlAccess === 'signed-url') { %> TTL: <%= signedUrlTtl || 'PT15M' %>.<% } %>
+     */
+    URI signUrl(String storageKey);
+
+    /**
+     * Streams the object with the given storage key as a binary {@link Resource}
+     * (proxy download — the bucket is never exposed to the client).
+     */
+    Resource get(String storageKey);
+
+    /**
+     * Permanently deletes the object with the given storage key.
+     */
+    void delete(String storageKey);
+}

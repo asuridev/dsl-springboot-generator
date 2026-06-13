@@ -1,0 +1,131 @@
+{
+  "src/main/java/com/test/shared/domain/valueobject/StoredObject.java": {
+    "_comment": "Canonical shared composite VO (BC-less, lives in shared.domain.valueobject). Immutable record with the 4 canonical fields; url is a URI.",
+    "contains": [
+      "package com.test.shared.domain.valueobject",
+      "import java.net.URI",
+      "public record StoredObject(String storageKey, URI url, String contentType, Long sizeBytes)"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/ports/ProductMediaStoragePort.java": {
+    "_comment": "Provider-agnostic output port in the owning BC (catalog). Four storage operations; derived_from traceability.",
+    "contains": [
+      "package com.test.catalog.application.ports",
+      "public interface ProductMediaStoragePort",
+      "derived_from: objectStorage:product-media",
+      "StoredObject put(MultipartFile file)",
+      "URI signUrl(String storageKey)",
+      "Resource get(String storageKey)",
+      "void delete(String storageKey)"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/adapters/storage/ProductMediaMinioStorageAdapter.java": {
+    "_comment": "MinIO (AWS SDK v2) adapter implementing the port. public-url store → persists a stable url; injects S3Client + S3Presigner; reads bucket/base-url from storage.* config.",
+    "contains": [
+      "package com.test.catalog.infrastructure.adapters.storage",
+      "public class ProductMediaMinioStorageAdapter implements ProductMediaStoragePort",
+      "import software.amazon.awssdk.services.s3.S3Client",
+      "import software.amazon.awssdk.services.s3.presigner.S3Presigner",
+      "@Value(\"${storage.buckets.product-media.bucket}\")",
+      "@Value(\"${storage.buckets.product-media.base-url}\")",
+      "public StoredObject put(MultipartFile file)",
+      "s3Client.putObject("
+    ],
+    "notContains": [
+      "return new StoredObject(storageKey, null,"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/persistence/entities/ProductImageJpa.java": {
+    "_comment": "StoredObject expands into 4 flat columns (uniform: url always persisted, nullable). storageKey/sizeBytes inherit the property's required=true.",
+    "contains": [
+      "private String mediaStorageKey",
+      "private String mediaUrl",
+      "private String mediaContentType",
+      "private Long mediaSizeBytes",
+      "name = \"media_storage_key\"",
+      "name = \"media_url\"",
+      "columnDefinition = \"TEXT\""
+    ],
+    "notContains": [
+      "private StoredObject media",
+      "@Embeddable"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/persistence/mappers/ProductJpaMapper.java": {
+    "_comment": "Mapper reconstructs StoredObject from the 4 columns and flattens it back; url ↔ URI conversion is null-safe.",
+    "contains": [
+      "import com.test.shared.domain.valueobject.StoredObject",
+      "new StoredObject(",
+      "jpa.getMediaUrl() != null ? java.net.URI.create(jpa.getMediaUrl()) : null",
+      ".mediaStorageKey(domain.getMedia() != null ? domain.getMedia().storageKey() : null)",
+      "domain.getMedia().url().toString()"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/usecases/AddProductImageCommandHandler.java": {
+    "_comment": "storageCalls.put wiring: the storage port is injected and the put() call is emitted (as a deterministic preamble) BEFORE the scaffold TODO; result bound to the bindsTo local.",
+    "contains": [
+      "import com.test.catalog.application.ports.ProductMediaStoragePort",
+      "private final ProductMediaStoragePort productMediaStoragePort",
+      "// storage put → product-media (derived_from: storageCalls[product-media:put])",
+      "StoredObject media = productMediaStoragePort.put(command.file())",
+      "throw new UnsupportedOperationException(\"Not implemented yet\")"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/usecases/RemoveProductImageCommandHandler.java": {
+    "_comment": "storageCalls.delete wiring: the storage port is injected and a delete() call is emitted; storageKey resolution left as a TODO (no input provided).",
+    "contains": [
+      "private final ProductMediaStoragePort productMediaStoragePort",
+      "// storage delete → product-media (derived_from: storageCalls[product-media:delete])",
+      "productMediaStoragePort.delete("
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/commands/AddProductImageCommand.java": {
+    "_comment": "Multipart File input travels through the command as a Spring MultipartFile.",
+    "contains": [
+      "import org.springframework.web.multipart.MultipartFile",
+      "MultipartFile file"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/infrastructure/rest/controllers/product/v1/ProductV1Controller.java": {
+    "_comment": "Multipart endpoint: @RequestPart MultipartFile + consumes=multipart/form-data using the value= form (positional value + named attribute would not compile), with size/content-type guards.",
+    "contains": [
+      "@PostMapping(value = \"/{productId}/images\", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)",
+      "@RequestPart(value = \"file\") MultipartFile file",
+      "file: file exceeds max size 10MB",
+      "image/png"
+    ],
+    "notContains": [
+      "@PostMapping(\"/{productId}/images\", consumes"
+    ]
+  },
+
+  "src/main/resources/parameters/local/storage.yaml": {
+    "_comment": "Per-env storage config: shared S3-compatible endpoint/credentials (env placeholders only) + per-store bucket and public base-url.",
+    "contains": [
+      "storage:",
+      "endpoint: ${STORAGE_ENDPOINT:http://localhost:9000}",
+      "access-key: ${MINIO_ROOT_USER:minioadmin}",
+      "product-media:",
+      "bucket: ${STORAGE_PRODUCT_MEDIA_BUCKET:product-media}",
+      "base-url: ${STORAGE_PUBLIC_URL:http://localhost:9000}"
+    ],
+    "notContains": [
+      "secret-key: minioadmin\n"
+    ]
+  },
+
+  "src/main/resources/application-local.yaml": {
+    "_comment": "The storage param file is actually imported by the app config.",
+    "contains": [
+      "classpath:parameters/local/storage.yaml"
+    ]
+  }
+}

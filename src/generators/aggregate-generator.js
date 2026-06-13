@@ -755,6 +755,21 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
     }
   }
 
+  // StoredObject (shared canonical VO, object storage) — referenced by a property,
+  // a business-method param/return, or the static factory. Lives in shared.* so it
+  // is not caught by the per-BC isValueObjectType checks above.
+  const mentionsSO = (t) => typeof t === 'string' && /\bStoredObject\b/.test(t);
+  const factoryParams = staticFactory ? (staticFactory.params || []) : [];
+  const refsStoredObject =
+    (aggregate.properties || []).some((p) => mentionsSO(p.type)) ||
+    (businessMethods || []).some((m) =>
+      (m.params || []).some((p) => mentionsSO(p.javaType)) || mentionsSO(m.returnType)
+    ) ||
+    factoryParams.some((p) => mentionsSO(p.javaType));
+  if (refsStoredObject) {
+    imports.add(`import ${pkg}.shared.domain.valueobject.StoredObject;`);
+  }
+
   return [...imports].sort();
 }
 
@@ -807,6 +822,11 @@ function buildChildEntityImports(entity, bcYaml, config) {
         // skip unknown
       }
     }
+  }
+
+  // StoredObject (shared canonical VO, object storage) — not a per-BC VO.
+  if ((entity.properties || []).some((p) => typeof p.type === 'string' && /\bStoredObject\b/.test(p.type))) {
+    imports.add(`import ${pkg}.shared.domain.valueobject.StoredObject;`);
   }
 
   return [...imports].sort();

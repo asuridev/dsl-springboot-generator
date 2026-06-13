@@ -25,8 +25,57 @@ function isMoneyType(type) {
   return type === 'Money';
 }
 
+function isStoredObjectType(type) {
+  return type === 'StoredObject';
+}
+
 function isUrlType(type) {
   return type === 'Url';
+}
+
+/**
+ * Expand a StoredObject property into its persistence columns:
+ *   {name}StorageKey, {name}Url, {name}ContentType, {name}SizeBytes.
+ *
+ * The expansion is uniform across visibility/urlAccess modes (same treatment as
+ * Money): {name}Url is a nullable TEXT column. For public-url stores it holds the
+ * stable URL; for signed-url stores it stays null (the URL is signed on read and
+ * surfaced in the response DTO, never persisted). Keeping the shape uniform lets
+ * the JPA mapper reconstruct StoredObject without per-store knowledge.
+ *
+ * Returns an array of field descriptors: [{name, javaType, columnAnnotation}].
+ */
+function expandStoredObjectField(prop) {
+  const nullable = prop.required !== true;
+  const nullableClause = nullable ? '' : ', nullable = false';
+
+  const keyName = `${prop.name}StorageKey`;
+  const urlName = `${prop.name}Url`;
+  const ctName = `${prop.name}ContentType`;
+  const sizeName = `${prop.name}SizeBytes`;
+
+  return [
+    {
+      name: keyName,
+      javaType: 'String',
+      columnAnnotation: `@Column(name = "${toSnakeCase(keyName)}", columnDefinition = "TEXT"${nullableClause})`,
+    },
+    {
+      name: urlName,
+      javaType: 'String',
+      columnAnnotation: `@Column(name = "${toSnakeCase(urlName)}", columnDefinition = "TEXT")`,
+    },
+    {
+      name: ctName,
+      javaType: 'String',
+      columnAnnotation: `@Column(name = "${toSnakeCase(ctName)}", length = 255)`,
+    },
+    {
+      name: sizeName,
+      javaType: 'Long',
+      columnAnnotation: `@Column(name = "${toSnakeCase(sizeName)}"${nullableClause})`,
+    },
+  ];
 }
 
 /**
@@ -270,6 +319,16 @@ function buildJpaFields(properties, aggregate, bcYaml) {
     // serialized via Jackson. The column is still persisted; only its serialization is suppressed.
     const jsonIgnorePrefix = prop.hidden ? '@com.fasterxml.jackson.annotation.JsonIgnore\n    ' : '';
 
+    // Expand StoredObject VO to its persistence columns
+    if (isStoredObjectType(prop.type)) {
+      const storedFields = expandStoredObjectField(prop);
+      if (jsonIgnorePrefix) {
+        for (const f of storedFields) f.columnAnnotation = jsonIgnorePrefix + f.columnAnnotation;
+      }
+      fields.push(...storedFields);
+      continue;
+    }
+
     // Expand Money VO to two columns
     if (isMoneyType(prop.type)) {
       const moneyFields = expandMoneyField(prop, bcYaml);
@@ -349,6 +408,9 @@ function buildJpaEntityImports(aggregate, bcYaml, config) {
   // Iterate properties
   for (const prop of aggregate.properties || []) {
     if (prop.name === 'id' || AUDIT_FIELD_NAMES.has(prop.name)) continue;
+
+    // StoredObject expands to String/Long columns only — no extra imports needed.
+    if (isStoredObjectType(prop.type)) continue;
 
     if (isMoneyType(prop.type)) {
       imports.add('java.math.BigDecimal');
@@ -435,6 +497,11 @@ function buildJpaChildFields(entity, bcYaml) {
   for (const prop of entity.properties || []) {
     if (prop.name === 'id') continue;
 
+    if (isStoredObjectType(prop.type)) {
+      fields.push(...expandStoredObjectField(prop));
+      continue;
+    }
+
     if (isMoneyType(prop.type)) {
       fields.push(...expandMoneyField(prop, bcYaml));
       continue;
@@ -491,6 +558,9 @@ function buildJpaChildEntityImports(entity, bcYaml, config) {
 
   for (const prop of entity.properties || []) {
     if (prop.name === 'id') continue;
+
+    // StoredObject expands to String/Long columns only — no extra imports needed.
+    if (isStoredObjectType(prop.type)) continue;
 
     if (isMoneyType(prop.type)) {
       imports.add('java.math.BigDecimal');
@@ -573,8 +643,8 @@ function buildIndexes(aggregateName, properties, bcYaml) {
   return (properties || [])
     .filter((p) => {
       if (p.indexed !== true || p.unique === true || p.name === 'id') return false;
-      // Skip Money and multi-prop VOs — they expand to multiple columns; @Index column name would be wrong
-      if (isMoneyType(p.type)) return false;
+      // Skip Money / StoredObject and multi-prop VOs — they expand to multiple columns; @Index column name would be wrong
+      if (isMoneyType(p.type) || isStoredObjectType(p.type)) return false;
       const voDef = getVoDef(p.type, bcYaml || {});
       if (voDef && (voDef.properties || []).length > 1) return false;
       return true;

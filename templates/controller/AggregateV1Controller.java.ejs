@@ -20,7 +20,10 @@ public class <%= controllerName %> {
     }
 <% operations.forEach(function(op) {
     const pathArgs = [];
-    if (op.mappingPath) pathArgs.push('"' + op.mappingPath + '"');
+    // When a named attribute (consumes) is present, the path must use the
+    // explicit value = "…" form — mixing a positional value with a named
+    // attribute is a Java compile error.
+    if (op.mappingPath) pathArgs.push((op.consumes ? 'value = ' : '') + '"' + op.mappingPath + '"');
     if (op.consumes) pathArgs.push('consumes = ' + op.consumes);
     const pathArg = pathArgs.join(', ');
 %>

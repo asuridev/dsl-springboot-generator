@@ -38,7 +38,7 @@
 // resuelven en NINGUNA capa.
 const CANONICAL_SCALARS = new Set([
   'Uuid', 'String', 'Text', 'Integer', 'Long', 'Decimal', 'Boolean',
-  'Date', 'DateTime', 'Duration', 'Email', 'Url', 'Money', 'PageRequest',
+  'Date', 'DateTime', 'Duration', 'Email', 'Url', 'Money', 'StoredObject', 'PageRequest',
   'File', 'BinaryStream', 'SearchText', 'BigInt', 'BigInteger', 'Json', 'JSON',
   'void',
 ]);

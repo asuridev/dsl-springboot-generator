@@ -205,6 +205,17 @@ function mapType(type, prop = {}) {
         isValueObject: true,
       };
 
+    case 'StoredObject':
+      // Canonical composite Value Object for object storage (Fase 2). BC-less —
+      // lives in shared.domain.valueobject (see isCanonicalSharedVo). Persisted as
+      // expanded columns by the JPA generator (storageKey/url/contentType/sizeBytes).
+      return {
+        javaType: 'StoredObject',
+        importHint: null,
+        validationAnnotations: ['@Valid'],
+        isValueObject: true,
+      };
+
     case 'PageRequest':
       // Framework-level pagination type; resolved in templates
       return {
@@ -355,4 +366,15 @@ function resolveCanonicalReturnType(type) {
   }
 }
 
-module.exports = { mapType, mapToPostgres, mapToOpenApiFormat, PROHIBITED_TYPES, isListType, getListElementType, resolveCanonicalReturnType };
+/**
+ * Returns true for canonical value-object types that are BC-less and live in the
+ * shared package (shared.domain.valueobject) rather than a per-BC package.
+ * Currently only StoredObject (object storage, Fase 2). Import resolvers use this
+ * to route the import to shared.* instead of {bc}.domain.valueobject.
+ */
+function isCanonicalSharedVo(type) {
+  const head = typeof type === 'string' ? type.replace(/\(.*\)/, '') : type;
+  return head === 'StoredObject';
+}
+
+module.exports = { mapType, mapToPostgres, mapToOpenApiFormat, PROHIBITED_TYPES, isListType, getListElementType, resolveCanonicalReturnType, isCanonicalSharedVo };

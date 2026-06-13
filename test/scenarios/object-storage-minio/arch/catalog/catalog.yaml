@@ -1,0 +1,128 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+    entities:
+      - name: ProductImage
+        relationship: composition
+        cardinality: oneToMany
+        properties:
+          - name: id
+            type: Uuid
+            readOnly: true
+            defaultValue: generated
+          - name: media
+            type: StoredObject
+            required: true
+    domainMethods:
+      - name: create
+        params:
+          - name: name
+            type: String(200)
+        returns: Product
+      - name: addImage
+        params:
+          - name: media
+            type: StoredObject
+        returns: void
+      - name: removeImage
+        params:
+          - name: imageId
+            type: Uuid
+        returns: void
+
+useCases:
+  - id: UC-CAT-001
+    name: CreateProduct
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: createProduct
+    method: create
+    input:
+      - name: name
+        type: String(200)
+        source: body
+        required: true
+    returns: Uuid
+    implementation: scaffold
+
+  - id: UC-CAT-011
+    name: AddProductImage
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: addProductImage
+    method: addImage
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+      - name: file
+        type: File
+        source: multipart
+        partName: file
+        maxSize: 10MB
+        contentTypes:
+          - image/png
+          - image/jpeg
+        required: true
+    storageCalls:
+      - store: product-media
+        operation: put
+        input: file
+        bindsTo: media
+    notFoundError: PRODUCT_NOT_FOUND
+    implementation: scaffold
+
+  - id: UC-CAT-012
+    name: RemoveProductImage
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: removeProductImage
+    method: removeImage
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+      - name: imageId
+        type: Uuid
+        source: path
+        required: true
+    storageCalls:
+      - store: product-media
+        operation: delete
+    notFoundError: PRODUCT_NOT_FOUND
+    implementation: scaffold
+
+errors:
+  - code: PRODUCT_NOT_FOUND
+    httpStatus: 404
+    description: Product not found.
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: save
+        signature: "save(Product): Product"

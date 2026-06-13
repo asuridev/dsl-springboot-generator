@@ -8,6 +8,9 @@ spring:
 <%- resilienceEnabled ? '      - "classpath:parameters/local/resilience.yaml"' : '' %>
 <%- oauth2ClientEnabled ? '      - "classpath:parameters/local/oauth2.yaml"' : '' %>
 <%- mtlsEnabled ? '      - "classpath:parameters/local/mtls.yaml"' : '' %>
+<% if (objectStoragePresent) { -%>
+      - "classpath:parameters/local/storage.yaml"
+<% } -%>
 <% if (authServerEnabled) { -%>
       - "classpath:parameters/local/auth-server.yaml"
 <% } -%>

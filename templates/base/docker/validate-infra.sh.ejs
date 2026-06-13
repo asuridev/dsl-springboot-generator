@@ -68,6 +68,18 @@ check "Keycloak realm endpoint" \
   curl -sf "http://localhost:8180/realms/master"
 
 <% } -%>
+<% if (objectStoragePresent) { -%>
+check "MinIO object storage reachable" \
+  ${RUNTIME} exec "${SYSTEM}-devtools" \
+  sh -c "mc alias set local http://minio:9000 \${MINIO_ROOT_USER:-minioadmin} \${MINIO_ROOT_PASSWORD:-minioadmin} && mc ls local"
+
+<% stores.forEach(function (store) { -%>
+check "MinIO bucket '<%= store.name %>' exists" \
+  ${RUNTIME} exec "${SYSTEM}-devtools" \
+  sh -c "mc ls local/<%= store.name %>"
+
+<% }); -%>
+<% } -%>
 echo "============================================"
 if [ "${ERRORS}" -gt 0 ]; then
   echo "Result: ${ERRORS} check(s) FAILED"

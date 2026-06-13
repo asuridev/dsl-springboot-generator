@@ -1,0 +1,4 @@
+{
+  "description": "Object storage (MinIO): system.yaml declares infrastructure.objectStorage[product-media] (public/public-url/ownedBy:catalog). UC-CAT-011 AddProductImage uses storageCalls.put with a multipart File input; UC-CAT-012 RemoveProductImage uses storageCalls.delete. Verifies the storage output port, the MinIO adapter, StoredObject shared VO + JPA column expansion, handler storage wiring, multipart controller, and per-env storage config.",
+  "allowNoExpected": true
+}

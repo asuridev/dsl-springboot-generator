@@ -54,6 +54,18 @@ async function readSystemYaml() {
     })),
     infrastructure: doc.infrastructure || {},
     authServer: !!(doc.infrastructure && doc.infrastructure.authServer),
+    // Object storage (Fase 2) — list of logical stores (buckets) declared in
+    // infrastructure.objectStorage[]. Normalised here; INT-028..031 / BC-028 are
+    // already enforced upstream by `dsl validate`, so this reader does not re-validate.
+    objectStorage: Array.isArray(doc.infrastructure && doc.infrastructure.objectStorage)
+      ? doc.infrastructure.objectStorage.map((s) => ({
+          name: s.name,
+          visibility: s.visibility,
+          urlAccess: s.urlAccess,
+          ownedBy: s.ownedBy,
+          signedUrlTtl: s.signedUrlTtl || null,
+        }))
+      : [],
     integrations: doc.integrations || [],
     externalSystems: doc.externalSystems || [],
     // Phase 4 — choreographed sagas (optional). Pass-through when absent → [].

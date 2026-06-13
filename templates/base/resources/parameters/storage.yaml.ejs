@@ -1,0 +1,24 @@
+<%
+// Object storage configuration (Fase 2).
+// Shared endpoint/region/credentials (S3-compatible / MinIO) + per-store buckets.
+// Credentials are NEVER literal — only ${ENV_VAR} placeholders.
+const defaultEndpoint = env === 'local' ? 'http://localhost:9000' : 'http://minio:9000';
+const endpoint = env === 'production' ? '${STORAGE_ENDPOINT}' : '${STORAGE_ENDPOINT:' + defaultEndpoint + '}';
+const publicBase = env === 'production' ? '${STORAGE_PUBLIC_URL}' : '${STORAGE_PUBLIC_URL:' + defaultEndpoint + '}';
+-%>
+storage:
+  endpoint: <%= endpoint %>
+  region: ${STORAGE_REGION:us-east-1}
+  access-key: ${MINIO_ROOT_USER:minioadmin}
+  secret-key: ${MINIO_ROOT_PASSWORD:minioadmin}
+  buckets:
+<% stores.forEach(function (store) { -%>
+    <%= store.name %>:
+      bucket: ${STORAGE_<%= store.name.toUpperCase().replace(/-/g, '_') %>_BUCKET:<%= store.name %>}
+<% if (store.urlAccess === 'public-url') { -%>
+      base-url: <%= publicBase %>
+<% } -%>
+<% if (store.urlAccess === 'signed-url') { -%>
+      signed-url-ttl: <%= store.signedUrlTtl || 'PT15M' %>
+<% } -%>
+<% }); -%>

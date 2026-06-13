@@ -30,6 +30,10 @@ function buildDockerContext(resolvedConfig, dockerImages, opts = {}) {
     ? dockerImages[cacheProviderId]
     : dockerImages.redis;
 
+  // [object storage] declared stores → MinIO services + bucket init.
+  const objectStores = Array.isArray(opts.objectStores) ? opts.objectStores : [];
+  const objectStoragePresent = objectStores.length > 0;
+
   return {
     systemName,
     databaseType,
@@ -42,6 +46,11 @@ function buildDockerContext(resolvedConfig, dockerImages, opts = {}) {
     requestIdempotencyEnabled: !!opts.requestIdempotencyEnabled,
     cacheImage,
     cachePort,
+    // [object storage]
+    objectStoragePresent,
+    stores: objectStores,
+    minioImage: dockerImages.minio,
+    minioClientImage: dockerImages.minioClient,
     // Docker image versions (from catalog)
     postgresImage: dockerImages.postgres,
     mysqlImage: dockerImages.mysql,
@@ -119,6 +128,17 @@ async function generateDockerFiles(resolvedConfig, outputDir, opts = {}) {
     const redisContent = await renderTemplate(redisSrc, ctx);
     const redisServices = yaml.load(redisContent);
     Object.assign(composeObj.services, redisServices);
+  }
+
+  // 2d. Merge MinIO + bucket-init services when object storage is declared
+  if (ctx.objectStoragePresent) {
+    const minioSrc = path.join(DOCKER_TEMPLATES_DIR, 'minio-services.yaml.ejs');
+    const minioContent = await renderTemplate(minioSrc, ctx);
+    const minioServices = yaml.load(minioContent);
+    Object.assign(composeObj.services, minioServices);
+    // Declare the named volume used by the minio service.
+    composeObj.volumes = composeObj.volumes || {};
+    composeObj.volumes[`${ctx.systemName}-minio-data`] = null;
   }
 
   // 3. Merge devtools service (always present when docker-compose is generated)

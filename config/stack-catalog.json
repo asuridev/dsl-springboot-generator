@@ -92,8 +92,25 @@
     "rabbitmq": "rabbitmq:4-management",
     "keycloak": "quay.io/keycloak/keycloak:26.3.1",
     "redis": "redis:7-alpine",
-    "valkey": "valkey/valkey:8-alpine"
+    "valkey": "valkey/valkey:8-alpine",
+    "minio": "minio/minio:latest",
+    "minioClient": "minio/mc:latest"
   },
+  "storageProviders": [
+    {
+      "id": "minio",
+      "label": "MinIO (S3-compatible)",
+      "gradleDependency": [
+        "implementation 'software.amazon.awssdk:s3:2.31.6'",
+        "implementation 'software.amazon.awssdk:s3-presigner:2.31.6'"
+      ],
+      "defaultPort": 9000,
+      "consolePort": 9001,
+      "region": "us-east-1",
+      "cliTool": "mc",
+      "cliValidateCmd": "mc alias set local http://minio:9000 $MINIO_ROOT_USER $MINIO_ROOT_PASSWORD && mc ls local"
+    }
+  ],
   "cacheProviders": [
     {
       "id": "redis",

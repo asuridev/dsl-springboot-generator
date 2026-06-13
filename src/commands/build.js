@@ -17,6 +17,7 @@ const { generateJpaEntities } = require('../generators/jpa-entity-generator');
 const { generateRepositories } = require('../generators/repository-generator');
 const { generateSpecifications } = require('../generators/specifications-generator');
 const { generateApplicationLayer, generateProjections } = require('../generators/application-generator');
+const { generateStorageArtifacts } = require('../generators/storage-generator');
 const { generateOutboundHttpAdapters } = require('../generators/outbound-http-generator');
 const { generateExternalAdapters } = require('../generators/external-adapter-generator');
 const { generateOutboxArtifacts } = require('../generators/outbox-generator');
@@ -92,6 +93,7 @@ async function promptConfig(systemName, system) {
 
   const needsBroker = !!(system.infrastructure && system.infrastructure.messageBroker);
   const needsAuthServer = !!system.authServer;
+  const needsStorage = Array.isArray(system.objectStorage) && system.objectStorage.length > 0;
 
   const questions = [
     {
@@ -159,6 +161,20 @@ async function promptConfig(systemName, system) {
     default: null,
   });
 
+  if (needsStorage) {
+    const storageChoices = [
+      ...(params.storageProviders || []).map((s) => ({ name: s.label, value: s.id })),
+      { name: 'None', value: null },
+    ];
+    questions.push({
+      type: 'list',
+      name: 'storageProvider',
+      message: 'Object storage provider (system declares object storage buckets):',
+      choices: storageChoices,
+      default: (params.storageProviders && params.storageProviders[0] && params.storageProviders[0].id) || null,
+    });
+  }
+
   const answers = await inquirer.prompt(questions);
 
   return {
@@ -169,6 +185,7 @@ async function promptConfig(systemName, system) {
     broker: needsBroker ? (answers.broker || null) : null,
     authProvider: needsAuthServer ? (answers.authProvider || null) : null,
     cacheProvider: answers.cacheProvider || null,
+    storageProvider: needsStorage ? (answers.storageProvider || null) : null,
     systemName,
   };
 }
@@ -214,7 +231,7 @@ async function buildCommand(options = {}) {
     let config;
     if (await configExists()) {
       config = await readConfig();
-      logger.info(`Using saved configuration (${config.packageName}, Java ${config.javaVersion}, Spring Boot ${config.springBootVersion}, DB: ${config.database || 'postgresql'}, Broker: ${config.broker || 'none'}, Auth: ${config.authProvider || 'none'})`);
+      logger.info(`Using saved configuration (${config.packageName}, Java ${config.javaVersion}, Spring Boot ${config.springBootVersion}, DB: ${config.database || 'postgresql'}, Broker: ${config.broker || 'none'}, Auth: ${config.authProvider || 'none'}, Storage: ${config.storageProvider || 'none'})`);
     } else {
       config = await promptConfig(system.name, system);
       await writeConfig(config);
@@ -238,6 +255,18 @@ async function buildCommand(options = {}) {
     const outputDir = process.cwd();
     logger.info(`Output directory: ${outputDir}`);
     console.log('');
+
+    // ── 3.1. Object-storage guard ────────────────────────────────────────────
+    // system.yaml declares object storage but no provider was selected/persisted.
+    const objectStores = Array.isArray(system.objectStorage) ? system.objectStorage : [];
+    const objectStoragePresent = objectStores.length > 0;
+    if (objectStoragePresent && !resolvedConfig.storageProvider) {
+      logger.error(
+        'system.yaml declares infrastructure.objectStorage but "storageProvider" is not set in ' +
+        'dsl-springboot.json. Add "storageProvider": "minio" and re-run.'
+      );
+      process.exit(1);
+    }
 
     // ── 3.5. Discover BCs + load all bc.yaml docs (needed early for Flyway gating) ──
     const bcNames = await discoverBcNames(outputDir);
@@ -357,7 +386,7 @@ async function buildCommand(options = {}) {
     }
     const dockerSpinner = ora('Generating Docker Compose and Dockerfile…').start();
     try {
-      await generateDockerFiles(resolvedConfig, outputDir, { requestIdempotencyEnabled: cacheNeeded, cacheProviderMeta });
+      await generateDockerFiles(resolvedConfig, outputDir, { requestIdempotencyEnabled: cacheNeeded, cacheProviderMeta, objectStores });
       dockerSpinner.succeed('Docker Compose and Dockerfile generated');
     } catch (err) {
       dockerSpinner.fail(`Docker generation failed: ${err.message}`);
@@ -402,9 +431,21 @@ async function buildCommand(options = {}) {
       await generateProjections(bcYaml, resolvedConfig, outputDir);
       const internalApiDocForApp = await readInternalApiYaml(bcYaml.bc);
       const publicApiDocForApp = await readOpenApiYaml(bcYaml.bc);
-      await generateApplicationLayer(bcYaml, resolvedConfig, outputDir, internalApiDocForApp, publicApiDocForApp);
+      await generateApplicationLayer(bcYaml, resolvedConfig, outputDir, internalApiDocForApp, publicApiDocForApp, objectStores);
     }
     appSpinner.succeed(`Application layer generated for ${allBcYamls.length} bounded context(s)`);
+
+    // ── 8-bis. Object-storage ports + MinIO adapters (T2/T3) ─────────────────
+    if (objectStoragePresent) {
+      const storageSpinner = ora('Generating object-storage artifacts (ports + MinIO adapters)…').start();
+      try {
+        const { count } = await generateStorageArtifacts(system, resolvedConfig, outputDir);
+        storageSpinner.succeed(`Object-storage artifacts generated: ${count} store(s)`);
+      } catch (err) {
+        storageSpinner.fail(`Object-storage artifact generation failed: ${err.message}`);
+        throw err;
+      }
+    }
 
     // ── 8a. Per-BC errors catalog (Phase 4, Gap E7) ─────────────────────────
     const errorsCatalogSpinner = ora('Generating errors catalogs…').start();

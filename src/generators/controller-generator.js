@@ -1003,6 +1003,8 @@ function buildMethodStrings(op) {
       `Resource resource = useCaseMediator.dispatch(${op.dispatchCall});\n` +
       `        return ResponseEntity.ok()\n` +
       `                .contentType(MediaType.APPLICATION_OCTET_STREAM)\n` +
+      `                .header(HttpHeaders.CONTENT_DISPOSITION,\n` +
+      `                        "attachment; filename=\\"" + resource.getFilename() + "\\"")\n` +
       `                .body(resource);`;
   } else if (op.isAsyncJobTracking) {
     // [G10] Wrap JobReference in 202 Accepted with Location header pointing at
@@ -1088,6 +1090,7 @@ function buildControllerImports(operations, packageName, moduleName, bcYaml = nu
       if (baseDtoType === 'Resource') {
         imports.add('org.springframework.core.io.Resource');
         imports.add('org.springframework.http.MediaType');
+        imports.add('org.springframework.http.HttpHeaders');
       } else {
         // [G4] canonical scalar return type — import stdlib, not BC DTO.
         const canonicalReturn = resolveCanonicalReturnType(op.rawReturns);

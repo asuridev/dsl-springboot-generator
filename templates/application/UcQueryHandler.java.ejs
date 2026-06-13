@@ -7,6 +7,10 @@ import <%= packageName %>.<%= moduleName %>.domain.repository.<%= repoName %>;
 <% if (injectDependencies) { %>
 import <%= packageName %>.<%= moduleName %>.application.mappers.<%= mapperName %>;
 <% } %>
+<% if (storagePorts && storagePorts.length > 0) { %>
+<% storagePorts.forEach(p => { %>import <%= p.importPath %>;
+<% }); %>
+<% } %>
 import <%= packageName %>.shared.domain.annotations.ApplicationComponent;
 import <%= packageName %>.shared.domain.annotations.LogExceptions;
 import <%= packageName %>.shared.domain.interfaces.QueryHandler;
@@ -25,14 +29,23 @@ import org.springframework.transaction.annotation.Transactional;
 <% } %>@ApplicationComponent
 public class <%= useCaseName %>QueryHandler implements QueryHandler<<%= useCaseName %>Query, <%- returnType %>> {
 
-<% if (injectRepository || injectDependencies) { %>
+<%
+  const hasStoragePorts = storagePorts && storagePorts.length > 0;
+  const hasDI = injectRepository || injectDependencies || hasStoragePorts;
+  const ctorParams = [];
+  const ctorAssigns = [];
+  if (injectRepository) { ctorParams.push(repoName + ' ' + repoFieldName); ctorAssigns.push(repoFieldName); }
+  if (injectDependencies) { ctorParams.push(mapperName + ' ' + mapperFieldName); ctorAssigns.push(mapperFieldName); }
+  if (hasStoragePorts) { storagePorts.forEach(p => { ctorParams.push(p.portName + ' ' + p.portFieldName); ctorAssigns.push(p.portFieldName); }); }
+%>
+<% if (hasDI) { %>
 <% if (injectRepository) { %>    private final <%= repoName %> <%= repoFieldName %>;
 <% } %><% if (injectDependencies) { %>    private final <%= mapperName %> <%= mapperFieldName %>;
-<% } %>
-    public <%= useCaseName %>QueryHandler(<% if (injectRepository) { %><%= repoName %> <%= repoFieldName %><% if (injectDependencies) { %>, <% } %><% } %><% if (injectDependencies) { %><%= mapperName %> <%= mapperFieldName %><% } %>) {
-<% if (injectRepository) { %>        this.<%= repoFieldName %> = <%= repoFieldName %>;
-<% } %><% if (injectDependencies) { %>        this.<%= mapperFieldName %> = <%= mapperFieldName %>;
-<% } %>    }
+<% } %><% if (hasStoragePorts) { %><% storagePorts.forEach(p => { %>    private final <%= p.portName %> <%= p.portFieldName %>;
+<% }); %><% } %>
+    public <%= useCaseName %>QueryHandler(<%= ctorParams.join(', ') %>) {
+<% ctorAssigns.forEach(a => { %>        this.<%= a %> = <%= a %>;
+<% }); %>    }
 <% } %>
 
     @Override
@@ -48,7 +61,9 @@ public class <%= useCaseName %>QueryHandler implements QueryHandler<<%= useCaseN
         }
 <% } else { %>        // TODO useCase(<%= useCaseId %>, validations[<%= v.id %>]): enforce expression "<%= v.expression %>" and throw <%= v.errorClass ? 'new ' + v.errorClass + '()' : 'the exception bound to errorCode "' + v.errorCode + '"' %> on violation.<% if (v.description && v.description.trim()) { %> // <%- v.description.trim() %><% } %>
 
-<% } %><% }); %><% } %><% if (implementation === 'scaffold') { %>
+<% } %><% }); %><% } %><% if (storageGetBody && storageGetBody.trim()) { %>
+<%- storageGetBody %>
+<% } else if (implementation === 'scaffold') { %>
         // TODO: implement business logic — ver <%= moduleName %>-flows.md
         throw new UnsupportedOperationException("Not implemented yet");
 <% } else { %>

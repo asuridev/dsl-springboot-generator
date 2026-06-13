@@ -3,13 +3,13 @@
 const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPackagePath } = require('../utils/naming');
-const { mapType, isListType, getListElementType } = require('../utils/type-mapper');
+const { mapType, isListType, getListElementType, isCanonicalSharedVo } = require('../utils/type-mapper');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
 const CANONICAL_TYPES = new Set([
   'Uuid', 'String', 'Text', 'Integer', 'Long', 'Decimal', 'Boolean',
-  'Date', 'DateTime', 'Duration', 'Email', 'Url', 'Money', 'PageRequest',
+  'Date', 'DateTime', 'Duration', 'Email', 'Url', 'Money', 'StoredObject', 'PageRequest',
 ]);
 
 const NUMERIC_PRIM_TYPES = new Set(['Integer', 'Long']);
@@ -366,7 +366,9 @@ function resolveEventDtoPropType(prop, bcYaml, config, imports, dtoName) {
     let importHint = mapped.importHint;
     // Money and other VOs that mapType returns with importHint: null
     if (!importHint && mapped.isValueObject) {
-      importHint = `${pkg}.${bc}.domain.valueobject.${mapped.javaType}`;
+      importHint = isCanonicalSharedVo(type)
+        ? `${pkg}.shared.domain.valueobject.${mapped.javaType}`
+        : `${pkg}.${bc}.domain.valueobject.${mapped.javaType}`;
     }
     if (importHint) imports.add(`import ${importHint};`);
     return mapped.javaType;

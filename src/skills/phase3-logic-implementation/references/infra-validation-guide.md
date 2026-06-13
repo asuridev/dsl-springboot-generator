@@ -172,6 +172,40 @@ curl -s http://localhost:8080/{path} \
   -H "Authorization: Bearer ${TOKEN}" | jq .
 ```
 
+### MinIO / Object Storage (S3-compatible, vía cliente `mc`)
+
+> El generador solo soporta **MinIO** como proveedor; el código de la app es agnóstico
+> (AWS SDK v2 apuntando al endpoint S3-compatible). El bucket lógico (`store`) declarado en
+> `system.yaml` → `infrastructure.objectStorage[]` se crea por el init container `minio-createbuckets`.
+> Las credenciales por defecto del entorno local son `minioadmin` / `minioadmin`.
+
+```bash
+# Registrar el alias 'local' (ejecutar una vez por sesión dentro de devtools)
+${RUNTIME} exec ${SYSTEM}-devtools \
+  mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-minioadmin} ${MINIO_ROOT_PASSWORD:-minioadmin}
+
+# Verificar conectividad / listar buckets
+${RUNTIME} exec ${SYSTEM}-devtools mc ls local
+
+# Listar el contenido de un store (reemplaza {store} por el objectStorage[].name, p.ej. product-media)
+${RUNTIME} exec ${SYSTEM}-devtools mc ls --recursive local/{store}
+
+# Inspeccionar metadatos de un objeto subido (storageKey persistido en la BD)
+${RUNTIME} exec ${SYSTEM}-devtools mc stat local/{store}/{storageKey}
+
+# Verificar la política de acceso del bucket (los stores public-url quedan en 'download')
+${RUNTIME} exec ${SYSTEM}-devtools mc anonymous get local/{store}
+
+# Descargar un objeto al contenedor para inspección
+${RUNTIME} exec ${SYSTEM}-devtools mc cp local/{store}/{storageKey} /tmp/obj.bin
+
+# Verificar una URL pública (store public-url) — debe responder 200
+curl -sI "http://localhost:9000/{store}/{storageKey}" | head -1
+```
+
+> Consola web de MinIO: `http://localhost:9001` (usuario/clave = `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`).
+> Para stores `signed-url` la URL pública NO funciona: la app emite una presigned URL en el endpoint de lectura.
+
 ---
 
 ## Validación de la aplicación Spring Boot
@@ -263,6 +297,10 @@ ${COMPOSE} logs --tail=50 cache
 
 # Keycloak
 ${COMPOSE} logs --tail=50 keycloak
+
+# MinIO (object storage) + init de buckets
+${COMPOSE} logs --tail=50 minio
+${COMPOSE} logs --tail=50 minio-createbuckets
 
 # Todos los servicios a la vez
 ${COMPOSE} logs --tail=30

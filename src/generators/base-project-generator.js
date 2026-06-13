@@ -320,6 +320,21 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   const cacheSpringDependency = cacheProviderMeta ? cacheProviderMeta.springDependency : null;
   const cachePort = cacheProviderMeta ? cacheProviderMeta.port : 6379;
 
+  // ── Object storage (Fase 2) ──────────────────────────────────────────────
+  // derived_from: system.yaml#/infrastructure/objectStorage[] + dsl-springboot.json#/storageProvider
+  const objectStores         = Array.isArray(system.objectStorage) ? system.objectStorage : [];
+  const objectStoragePresent = objectStores.length > 0;
+  const storageProviderId    = config.storageProvider || null;
+  const storageProviderMeta  = storageProviderId
+    ? (params.storageProviders || []).find((s) => s.id === storageProviderId) || null
+    : null;
+  // gradleDependency is an array of `implementation '...'` lines (s3 + s3-presigner).
+  const storageDependencies  = objectStoragePresent && storageProviderMeta
+    ? (Array.isArray(storageProviderMeta.gradleDependency)
+        ? storageProviderMeta.gradleDependency
+        : [storageProviderMeta.gradleDependency])
+    : [];
+
   const hasMessaging        = !!brokerId;
   const httpIntegrations    = buildHttpIntegrations(system);
   const hasHttpIntegrations = httpIntegrations.length > 0;
@@ -384,7 +399,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'gradle', 'build.gradle.ejs'),
     path.join(outputDir, 'build.gradle'),
-    { groupId, artifactId, javaVersion, springBootVersion, databaseDependency, brokerDependency, brokerTestDependency, flywayEnabled, databaseId: dbId, resilienceEnabled, oauth2ClientEnabled, requestIdempotencyEnabled, cacheableQueriesPresent, cacheSpringDependency }
+    { groupId, artifactId, javaVersion, springBootVersion, databaseDependency, brokerDependency, brokerTestDependency, flywayEnabled, databaseId: dbId, resilienceEnabled, oauth2ClientEnabled, requestIdempotencyEnabled, cacheableQueriesPresent, cacheSpringDependency, storageDependencies }
   );
 
   await renderAndWrite(
@@ -441,7 +456,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'base', 'resources', `application-${env}.yaml.ejs`),
       path.join(resourcesDir, `application-${env}.yaml`),
-      { hasMessaging, hasHttpIntegrations, broker: brokerId, resilienceEnabled, oauth2ClientEnabled, mtlsEnabled, authServerEnabled, env }
+      { hasMessaging, hasHttpIntegrations, broker: brokerId, resilienceEnabled, oauth2ClientEnabled, mtlsEnabled, authServerEnabled, objectStoragePresent, env }
     );
   }
 
@@ -520,6 +535,15 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
         path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', env, 'redis.yaml.ejs'),
         path.join(paramDir, 'redis.yaml'),
         { cachePort }
+      );
+    }
+
+    // storage.yaml (only when the system declares object storage buckets)
+    if (objectStoragePresent) {
+      await renderAndWrite(
+        path.join(TEMPLATES_DIR, 'base', 'resources', 'parameters', 'storage.yaml.ejs'),
+        path.join(paramDir, 'storage.yaml'),
+        { env, stores: objectStores }
       );
     }
 
@@ -665,6 +689,28 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
       path.join(TEMPLATES_DIR, 'shared', 'application', 'dtos', 'Range.java.ejs'),
       path.join(sharedDtosDir, 'Range.java'),
       { packageName }
+    );
+  }
+
+  // ── Shared: StoredObject VO + StorageConfig (object storage, Fase 2) ──────
+  // derived_from: objectStorage. StoredObject is a canonical composite VO (like
+  // Money) but BC-less, so it lives in shared.domain.valueobject. StorageConfig
+  // produces the provider-agnostic S3Client/S3Presigner beans (MinIO endpoint).
+  if (objectStoragePresent) {
+    const sharedVoDir = path.join(javaMainDir, 'shared', 'domain', 'valueobject');
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'shared', 'domain', 'valueobject', 'StoredObject.java.ejs'),
+      path.join(sharedVoDir, 'StoredObject.java'),
+      { packageName }
+    );
+
+    const storageConfigDir = path.join(
+      javaMainDir, 'shared', 'infrastructure', 'configurations', 'storageConfig'
+    );
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'shared', 'configurations', 'storageConfig', 'StorageConfig.java.ejs'),
+      path.join(storageConfigDir, 'StorageConfig.java'),
+      { packageName, stores: objectStores }
     );
   }
 

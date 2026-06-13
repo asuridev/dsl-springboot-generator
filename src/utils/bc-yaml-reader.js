@@ -191,6 +191,8 @@ function validate(doc, opts = {}) {
     // [sagas] marks a UC as a saga step or compensation handler; generator reads
     // saga definitions from system.yaml and messaging consumers from async-api.yaml.
     'sagaStep',
+    // [object storage] declarative storage interactions (put/signUrl/get/delete)
+    'storageCalls',
   ]);
   const ALLOWED_UC_VALIDATION_KEYS = new Set(['id', 'expression', 'errorCode', 'description']);
   const ALLOWED_UC_TRIGGER_KEYS = new Set([
@@ -241,6 +243,9 @@ function validate(doc, opts = {}) {
   const ALLOWED_UC_ON_FAILURE_KEYS = new Set(['compensate']);
   const ALLOWED_UC_COMPENSATE_KEYS = new Set(['aggregate', 'method']);
   const ALLOWED_UC_IMPLEMENTATIONS = new Set(['full', 'scaffold']);
+  // [object storage] storageCalls[] whitelists
+  const ALLOWED_UC_STORAGE_KEYS = new Set(['store', 'operation', 'input', 'bindsTo']);
+  const ALLOWED_UC_STORAGE_OPS = new Set(['put', 'signUrl', 'get', 'delete']);
 
   for (const uc of useCases) {
     if (!uc || typeof uc !== 'object' || Array.isArray(uc)) {
@@ -702,6 +707,31 @@ function validate(doc, opts = {}) {
         }
       }
     }
+    // [object storage] storageCalls[] — declarative interactions with an object
+    // store. Structural validation only; cross-store coherence (INT-028..031 /
+    // BC-028) is enforced upstream by `dsl validate` and assumed here.
+    if (uc.storageCalls != null) {
+      if (!Array.isArray(uc.storageCalls)) {
+        fail(`Use case "${uc.id}" "storageCalls" must be a list.`);
+      }
+      for (const sc of uc.storageCalls) {
+        if (!sc || typeof sc !== 'object' || Array.isArray(sc)) {
+          fail(`Use case "${uc.id}" storageCalls[] contains a non-mapping entry.`);
+        }
+        for (const k of Object.keys(sc)) {
+          if (!ALLOWED_UC_STORAGE_KEYS.has(k)) {
+            fail(`Use case "${uc.id}" storageCall declares unsupported attribute "${k}". Allowed: ${[...ALLOWED_UC_STORAGE_KEYS].join(', ')}.`);
+          }
+        }
+        if (!sc.store || typeof sc.store !== 'string') {
+          fail(`Use case "${uc.id}" storageCall is missing required "store" (the objectStorage name).`);
+        }
+        if (!sc.operation || !ALLOWED_UC_STORAGE_OPS.has(sc.operation)) {
+          fail(`Use case "${uc.id}" storageCall declares invalid "operation" "${sc.operation}". Allowed: ${[...ALLOWED_UC_STORAGE_OPS].join(', ')}.`);
+        }
+      }
+    }
+
     // [Phase 3, Gap E8] lookups[] — declarative multi-lookup. Supersedes the
     // single-entry `notFoundError`. Each entry binds an input param to an
     // aggregate (or a nested entity collection via `nestedIn`) and the error

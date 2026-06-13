@@ -511,6 +511,11 @@ function javaTypeForDto(type, packageName, moduleName, imports, voNames = new Se
     imports.add(`${packageName}.${moduleName}.domain.valueobject.Money`);
     return 'Money';
   }
+  // StoredObject — canonical shared VO (object storage); lives in shared.*
+  if (type === 'StoredObject') {
+    imports.add(`${packageName}.shared.domain.valueobject.StoredObject`);
+    return 'StoredObject';
+  }
   const stringMatch = /^String\((\d+)\)$/.exec(type);
   if (stringMatch) return 'String';
   if (type === 'String') return 'String';
@@ -1764,6 +1769,135 @@ function buildFkDependencies(uc, packageName, moduleName, mainAggregateName, bcY
   return { fkRepos, fkPorts };
 }
 
+// ─── Object storage wiring ────────────────────────────────────────────────────
+
+/**
+ * Builds the storage-port injection descriptors and the deterministic call
+ * preamble for a use case's `storageCalls[]` (object storage, Fase 2).
+ *
+ * The returned `storagePorts` reuse the generic fkPorts injection machinery
+ * (import + field + ctor + assignment). The `preamble` is rendered before the
+ * handler body/scaffold — it performs the put/signUrl/delete operations and
+ * binds their results to locals named by `bindsTo`. StoredObject and URI are
+ * fully-qualified to avoid import bookkeeping. `get` is handled by the query
+ * handler (returns Resource), so it is a no-op here.
+ *
+ * @param {object} uc          - the use case
+ * @param {Map}    storeIndex  - map storeName → objectStorage entry (for ownedBy)
+ * @param {string} packageName
+ * @param {string} moduleName  - the BC owning the handler
+ * @returns {{storagePorts: Array, preamble: string}}
+ */
+function buildStorageWiring(uc, storeIndex, packageName, moduleName) {
+  const calls = Array.isArray(uc.storageCalls) ? uc.storageCalls : [];
+  if (calls.length === 0) return { storagePorts: [], preamble: '' };
+
+  const SO_FQN = `${packageName}.shared.domain.valueobject.StoredObject`;
+  const ports = new Map(); // portFieldName → descriptor
+  const lines = [];
+
+  for (const sc of calls) {
+    const store = storeIndex && storeIndex.get ? storeIndex.get(sc.store) : null;
+    const ownerBc = (store && store.ownedBy) || moduleName;
+    const storePascal = toPascalCase(sc.store);
+    const portName = `${storePascal}StoragePort`;
+    const portFieldName = `${toCamelCase(sc.store)}StoragePort`;
+    if (!ports.has(portFieldName)) {
+      ports.set(portFieldName, {
+        portName,
+        portFieldName,
+        importPath: `${packageName}.${ownerBc}.application.ports.${portName}`,
+        isNew: false,
+      });
+    }
+    const field = portFieldName;
+    const trace = `derived_from: storageCalls[${sc.store}:${sc.operation}]`;
+
+    if (sc.operation === 'put') {
+      const bindsTo = sc.bindsTo || 'storedObject';
+      const inputAcc = sc.input
+        ? `command.${toCamelCase(sc.input)}()`
+        : '/* TODO: bind the multipart file input */ null';
+      lines.push(`        // storage put → ${sc.store} (${trace})`);
+      lines.push(`        ${SO_FQN} ${bindsTo} = ${field}.put(${inputAcc});`);
+    } else if (sc.operation === 'signUrl') {
+      const bindsTo = sc.bindsTo || 'signedUrl';
+      lines.push(`        // storage signUrl → ${sc.store} (${trace})`);
+      if (sc.input) {
+        lines.push(`        java.net.URI ${bindsTo} = ${field}.signUrl(command.${toCamelCase(sc.input)}());`);
+      } else {
+        lines.push(`        String ${bindsTo}Key = null; // TODO useCase(${uc.id}, storageCalls): resolve storageKey (e.g. from the loaded aggregate)`);
+        lines.push(`        java.net.URI ${bindsTo} = ${field}.signUrl(${bindsTo}Key);`);
+      }
+    } else if (sc.operation === 'delete') {
+      lines.push(`        // storage delete → ${sc.store} (${trace})`);
+      if (sc.input) {
+        lines.push(`        ${field}.delete(command.${toCamelCase(sc.input)}());`);
+      } else {
+        const keyVar = `${toCamelCase(sc.store)}StorageKey`;
+        lines.push(`        String ${keyVar} = null; // TODO useCase(${uc.id}, storageCalls): resolve storageKey from the loaded aggregate`);
+        lines.push(`        ${field}.delete(${keyVar});`);
+      }
+    } else if (sc.operation === 'get') {
+      lines.push(`        // storage get → ${sc.store} handled by the query handler (returns Resource) (${trace})`);
+    }
+  }
+
+  return { storagePorts: [...ports.values()], preamble: lines.join('\n') };
+}
+
+/**
+ * Build storage wiring for a QUERY handler — only the `get` operation is valid
+ * on a query (it returns the binary Resource). Other operations on a query are
+ * ignored here (they are handled by the command handler). Returns the storage
+ * port to inject and the body that returns the Resource.
+ *
+ * Determinism guard: a `get` storageCall requires the use case to return a
+ * binary stream (returnType === 'Resource'); otherwise we stop and notify.
+ *
+ * @returns {{storagePorts: Array, getBody: string}}
+ */
+function buildQueryStorageWiring(uc, storeIndex, packageName, moduleName, returnType) {
+  const calls = Array.isArray(uc.storageCalls) ? uc.storageCalls : [];
+  const gets = calls.filter((c) => c.operation === 'get');
+  if (gets.length === 0) return { storagePorts: [], getBody: '' };
+
+  if (returnType !== 'Resource') {
+    throw new Error(
+      `[storage-generator] useCase "${uc.id}" declares storageCalls.get but does not return a ` +
+        'binary stream (returns: BinaryStream). A storage "get" must stream the object back. ' +
+        'Fix the design YAML before generating.'
+    );
+  }
+
+  const ports = new Map();
+  const lines = [];
+  for (const sc of gets) {
+    const store = storeIndex && storeIndex.get ? storeIndex.get(sc.store) : null;
+    const ownerBc = (store && store.ownedBy) || moduleName;
+    const storePascal = toPascalCase(sc.store);
+    const portName = `${storePascal}StoragePort`;
+    const portFieldName = `${toCamelCase(sc.store)}StoragePort`;
+    if (!ports.has(portFieldName)) {
+      ports.set(portFieldName, {
+        portName,
+        portFieldName,
+        importPath: `${packageName}.${ownerBc}.application.ports.${portName}`,
+      });
+    }
+    const trace = `derived_from: storageCalls[${sc.store}:get]`;
+    lines.push(`        // storage get → ${sc.store} (${trace})`);
+    if (sc.input) {
+      lines.push(`        return ${portFieldName}.get(query.${toCamelCase(sc.input)}());`);
+    } else {
+      lines.push(`        String storageKey = null; // TODO useCase(${uc.id}, storageCalls): resolve storageKey from the query`);
+      lines.push(`        return ${portFieldName}.get(storageKey);`);
+    }
+  }
+
+  return { storagePorts: [...ports.values()], getBody: lines.join('\n') };
+}
+
 // ─── VO Request record helpers ────────────────────────────────────────────────
 
 /**
@@ -2054,12 +2188,18 @@ async function generateServicePort(port, packageName, moduleName, bcDir) {
   );
 }
 
-async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, errorMap, bcYaml, repoMethods) {
+async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, errorMap, bcYaml, repoMethods, storeIndex = null) {
   const ucClassName = toPascalCase(uc.name);
   const aggVarName = toCamelCase(agg.name);
   const repoName = `${agg.name}Repository`;
   const repoFieldName = `${aggVarName}Repository`;
   const { fkRepos, fkPorts } = buildFkDependencies(uc, packageName, moduleName, agg.name, bcYaml);
+
+  // [object storage] inject storage ports + build the deterministic call preamble.
+  const { storagePorts, preamble: storagePreamble } = buildStorageWiring(uc, storeIndex, packageName, moduleName);
+  for (const sp of storagePorts) {
+    if (!fkPorts.some((p) => p.portFieldName === sp.portFieldName)) fkPorts.push(sp);
+  }
 
   // Detect properties that must be injected from SecurityContext (not from command)
   const authContextFields = (agg.properties || [])
@@ -2224,6 +2364,7 @@ async function generateCommandHandler(uc, agg, moduleName, packageName, bcDir, e
       implementation: (uc.async ? 'full' : (uc.implementation || 'scaffold')),
       body,
       scaffoldSteps,
+      storagePreamble,
       imports: extraImports,
       returnType,
       // [G20] declarative cross-field validations — enriched with errorClass/throwable (Phase 3, Gap E9)
@@ -2492,7 +2633,7 @@ async function generatePublicApiResponseDtos(schemasToGenerate, components, pack
   }
 }
 
-async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, errorMap, repoMethods, customReturnType = null, bcYaml = null) {
+async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, errorMap, repoMethods, customReturnType = null, bcYaml = null, storeIndex = null) {
   const ucClassName = toPascalCase(uc.name);
   const aggVarName = toCamelCase(agg.name);
   const repoName = `${agg.name}Repository`;
@@ -2578,6 +2719,12 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
     }
   }
 
+  // [object storage] `get` storage call → inject the port and stream the Resource.
+  // The port interface file itself is emitted by generateStorageArtifacts, so we
+  // only wire injection here (no generateServicePort call).
+  const { storagePorts: queryStoragePorts, getBody: storageGetBody } =
+    buildQueryStorageWiring(uc, storeIndex, packageName, moduleName, returnType);
+
   // [G21] declarative query caching — translate technology-agnostic keyFields/cacheWhen to Spring SpEL
   let cacheableAnnotation = null;
   if (uc.cacheable) {
@@ -2614,6 +2761,9 @@ async function generateQueryHandler(uc, agg, moduleName, packageName, bcDir, err
       implementation: effectiveImpl,
       body,
       imports: extraImports,
+      // [object storage] `get` operation wiring
+      storagePorts: queryStoragePorts,
+      storageGetBody,
       // [G21] declarative query caching
       cacheableAnnotation,
       // [G20] declarative cross-field validations — enriched with errorClass/throwable (Phase 3, Gap E9)
@@ -2803,6 +2953,7 @@ async function generateMultiAggregateCommandHandler(uc, moduleName, packageName,
       mapperName: '',
       mapperFieldName: '',
       authContextFields: [],
+      storagePreamble: '',
       // 'full' so the template emits our body instead of the scaffold throw.
       implementation: 'full',
       body,
@@ -2858,11 +3009,14 @@ async function generateBulkCommandHandler(uc, moduleName, packageName, bcDir) {
   );
 }
 
-async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDoc = null, publicApiDoc = null) {
+async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDoc = null, publicApiDoc = null, objectStores = []) {
   const { packageName, systemName } = config;
   const moduleName = bcYaml.bc;
   const packagePath = toPackagePath(packageName);
   const bcDir = path.join(outputDir, 'src', 'main', 'java', packagePath, moduleName);
+
+  // [object storage] storeName → objectStorage entry, for handler/query wiring.
+  const storeIndex = new Map((objectStores || []).map((s) => [s.name, s]));
 
   const errorMap = buildErrorMap(bcYaml.errors || []);
   const repoMethods = normalizeRepoMethods(bcYaml.repositories || []);
@@ -3067,7 +3221,7 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
           }
         } else {
           const voRequestsNeeded = await generateCommand(uc, agg, moduleName, packageName, bcDir, errorMap, voNames, bcYaml, eventDtoNames);
-          await generateCommandHandler(uc, agg, moduleName, packageName, bcDir, errorMap, bcYaml, repoMethods);
+          await generateCommandHandler(uc, agg, moduleName, packageName, bcDir, errorMap, bcYaml, repoMethods, storeIndex);
           for (const voName of voRequestsNeeded) {
             if (!generatedVoRequests.has(voName)) {
               generatedVoRequests.add(voName);
@@ -3106,7 +3260,7 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
           }
         }
         await generateQuery(uc, agg, moduleName, packageName, bcDir, repoMethods, bcYaml);
-        await generateQueryHandler(uc, agg, moduleName, packageName, bcDir, errorMap, repoMethods, null, bcYaml);
+        await generateQueryHandler(uc, agg, moduleName, packageName, bcDir, errorMap, repoMethods, null, bcYaml, storeIndex);
       }
     }
   }

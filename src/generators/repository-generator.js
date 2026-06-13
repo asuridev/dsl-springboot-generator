@@ -23,6 +23,32 @@ function isMoneyType(type) {
   return type === 'Money';
 }
 
+function isStoredObjectType(type) {
+  return type === 'StoredObject';
+}
+
+/**
+ * Mapper fragments for a StoredObject property. The domain holds the shared
+ * StoredObject record (storageKey, url:URI, contentType, sizeBytes); the JPA
+ * entity holds four expanded columns ({name}StorageKey/Url/ContentType/SizeBytes).
+ * All accesses are null-safe because a StoredObject property is often optional
+ * (e.g. an image attached later).
+ */
+function storedObjectToDomainExpr(prop) {
+  const p = capitalize(prop.name);
+  return `new StoredObject(jpa.get${p}StorageKey(), jpa.get${p}Url() != null ? java.net.URI.create(jpa.get${p}Url()) : null, jpa.get${p}ContentType(), jpa.get${p}SizeBytes())`;
+}
+function storedObjectToJpaLines(prop) {
+  const p = capitalize(prop.name);
+  const g = `domain.get${p}()`;
+  return [
+    `        .${prop.name}StorageKey(${g} != null ? ${g}.storageKey() : null)`,
+    `        .${prop.name}Url(${g} != null && ${g}.url() != null ? ${g}.url().toString() : null)`,
+    `        .${prop.name}ContentType(${g} != null ? ${g}.contentType() : null)`,
+    `        .${prop.name}SizeBytes(${g} != null ? ${g}.sizeBytes() : null)`,
+  ];
+}
+
 function isUrlType(type) {
   return type === 'Url';
 }
@@ -1051,7 +1077,9 @@ function buildToDomainBody(aggregate, bcYaml) {
   const args = ['jpa.getId()'];
 
   for (const prop of props) {
-    if (isMoneyType(prop.type)) {
+    if (isStoredObjectType(prop.type)) {
+      args.push(storedObjectToDomainExpr(prop));
+    } else if (isMoneyType(prop.type)) {
       const amountField = `${prop.name}${capitalize(amountProp)}`;
       const currencyField = `${prop.name}${capitalize(currencyProp)}`;
       args.push(`new Money(jpa.get${capitalize(amountField)}(), jpa.get${capitalize(currencyField)}())`);
@@ -1144,7 +1172,9 @@ function buildToJpaBody(aggregate, bcYaml) {
   const lines = [`${name}Jpa jpa = ${name}Jpa.builder()`, `        .id(domain.getId())`];
 
   for (const prop of props) {
-    if (isMoneyType(prop.type)) {
+    if (isStoredObjectType(prop.type)) {
+      lines.push(...storedObjectToJpaLines(prop));
+    } else if (isMoneyType(prop.type)) {
       const amountField = `${prop.name}${capitalize(amountProp)}`;
       const currencyField = `${prop.name}${capitalize(currencyProp)}`;
       lines.push(`        .${amountField}(domain.get${capitalize(prop.name)}().get${capitalize(amountProp)}())`);
@@ -1233,7 +1263,9 @@ function buildChildToDomainBody(entity, bcYaml) {
   const args = ['jpa.getId()'];
 
   for (const prop of props) {
-    if (isMoneyType(prop.type)) {
+    if (isStoredObjectType(prop.type)) {
+      args.push(storedObjectToDomainExpr(prop));
+    } else if (isMoneyType(prop.type)) {
       const amountField = `${prop.name}${capitalize(amountProp)}`;
       const currencyField = `${prop.name}${capitalize(currencyProp)}`;
       args.push(`new Money(jpa.get${capitalize(amountField)}(), jpa.get${capitalize(currencyField)}())`);
@@ -1282,7 +1314,9 @@ function buildChildToJpaBody(entity, bcYaml) {
   const lines = [`return ${name}Jpa.builder()`, `        .id(domain.getId())`];
 
   for (const prop of props) {
-    if (isMoneyType(prop.type)) {
+    if (isStoredObjectType(prop.type)) {
+      lines.push(...storedObjectToJpaLines(prop));
+    } else if (isMoneyType(prop.type)) {
       const amountField = `${prop.name}${capitalize(amountProp)}`;
       const currencyField = `${prop.name}${capitalize(currencyProp)}`;
       lines.push(`        .${amountField}(domain.get${capitalize(prop.name)}().get${capitalize(amountProp)}())`);
@@ -1538,6 +1572,15 @@ function collectImplImports(aggregateName, aggregate, methods, bc, packageName, 
   );
   if (hasMoneyInAggregate || hasMoneyInEntities) {
     imports.add(`${packageName}.${bc}.domain.valueobject.Money`);
+  }
+
+  // StoredObject VO (shared, object storage) — reconstructed in the mappers.
+  const hasStoredObjectInAggregate = (aggregate.properties || []).some((p) => isStoredObjectType(p.type));
+  const hasStoredObjectInEntities = (aggregate.entities || []).some((e) =>
+    (e.properties || []).some((p) => isStoredObjectType(p.type))
+  );
+  if (hasStoredObjectInAggregate || hasStoredObjectInEntities) {
+    imports.add(`${packageName}.shared.domain.valueobject.StoredObject`);
   }
 
   // Non-Money VOs used in toDomain/toJpa mappers
