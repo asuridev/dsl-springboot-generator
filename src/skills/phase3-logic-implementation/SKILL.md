@@ -141,6 +141,9 @@ Dentro de los handlers, sigue el orden de los flujos en `flows.md`.
 Antes de editar cualquier handler o aggregate, construye una mini-checklist por UC usando
 `{bc-name}.yaml` + `{bc-name}-flows.md`:
 
+- **`storageCalls[]`**: Si el UC declara `storageCalls[]` en el YAML, lee
+    `references/storage-integration-patterns.md` antes de tocar el handler. Identifica la
+    operación (`put` / `delete` / `signUrl` / `get`) y qué parte dejó como TODO la Fase 2.
 - **Campos opcionales**: si un input tiene `required: false` o una `fkValidation` tiene
     `conditional: true`, el handler solo debe parsear/consultar ese valor cuando venga presente.
     Nunca hagas `UUID.fromString(command.x())` sobre un campo opcional sin guardia.
@@ -415,5 +418,6 @@ No inferas, no completes por tu cuenta. Notifica con precisión qué falta y por
 | `.agents/skills/phase3-logic-implementation/references/bc-artifacts-guide.md` | Necesitas entender la estructura de `flows.md` o `{bc-name}.yaml` |
 | `.agents/skills/phase3-logic-implementation/references/domain-service-patterns.md` | Detectas lógica que cruza aggregates o es reusable |
 | `.agents/skills/phase3-logic-implementation/references/virtual-threads-in-handlers.md` | El handler tiene I/O independiente en paralelo |
-| `.agents/skills/phase3-logic-implementation/references/infra-validation-guide.md` | Comandos CLI exactos para DB, Kafka, Redis, RabbitMQ, Keycloak o reinicio de app |
+| `.agents/skills/phase3-logic-implementation/references/storage-integration-patterns.md` | El UC declara `storageCalls[]` (put / delete / signUrl / get) |
+| `.agents/skills/phase3-logic-implementation/references/infra-validation-guide.md` | Comandos CLI exactos para DB, Kafka, Redis, RabbitMQ, MinIO, Keycloak o reinicio de app |
 | `AGENTS.md` (raíz del proyecto) | Necesitas confirmar una convención de código o arquitectura |

@@ -34,6 +34,9 @@ Tienes acceso a:
 **Antes de escribir cualquier código**, lee:
 1. `.agents/skills/phase3-logic-implementation/SKILL.md` — workflow completo en 5 pasos
 2. `arch/{bc-name}/{bc-name}.yaml` y `arch/{bc-name}/{bc-name}-flows.md` en paralelo
+3. Si algún UC del BC declara `storageCalls[]` en el YAML, lee además
+   `.agents/skills/phase3-logic-implementation/references/storage-integration-patterns.md`
+   para entender qué generó la Fase 2 y qué queda pendiente para Fase 3.
 
 Sigue el workflow de la skill paso a paso. No improvises ni inferas lógica de dominio
 que no esté especificada en los artefactos de diseño.
