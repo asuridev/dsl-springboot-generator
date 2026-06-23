@@ -205,6 +205,25 @@ function expandMoneyField(prop, bcYaml) {
 }
 
 /**
+ * Nombres de campo JPA producidos por la expansión de VOs canónicos compuestos
+ * (Money / StoredObject) de propiedades NO derivadas. Una propiedad `derived: true`
+ * cuyo nombre coincida con uno de estos representa la MISMA columna física
+ * (ej. `priceAmount` ES `price.amount`); debe omitirse para no duplicar la columna.
+ */
+function collectExpandedColumnNames(properties, bcYaml) {
+  const names = new Set();
+  for (const prop of properties || []) {
+    if (prop.derived === true) continue;
+    if (isMoneyType(prop.type)) {
+      for (const f of expandMoneyField(prop, bcYaml)) names.add(f.name);
+    } else if (isStoredObjectType(prop.type)) {
+      for (const f of expandStoredObjectField(prop)) names.add(f.name);
+    }
+  }
+  return names;
+}
+
+/**
  * Build an @ElementCollection field descriptor for a List[T] property.
  * T may be a scalar or a single-property VO (collapsed to its primitive type).
  * Multi-property VOs are not supported and throw a descriptive error.
@@ -307,6 +326,7 @@ function buildElementCollectionField(prop, aggregate, bcYaml) {
  */
 function buildJpaFields(properties, aggregate, bcYaml) {
   const fields = [];
+  const expandedNames = collectExpandedColumnNames(properties, bcYaml);
 
   for (const prop of properties || []) {
     // Skip id (handled as @Id separately)
@@ -314,6 +334,10 @@ function buildJpaFields(properties, aggregate, bcYaml) {
 
     // Skip audit / soft-delete fields — managed by FullAuditableEntity
     if (AUDIT_FIELD_NAMES.has(prop.name)) continue;
+
+    // derived: true que colisiona con una columna de expansión Money/StoredObject:
+    // es el mismo valor/columna física — se omite para no duplicarla.
+    if (prop.derived === true && expandedNames.has(prop.name)) continue;
 
     // S5 — fields marked hidden: true get @JsonIgnore so they never leak through DTOs
     // serialized via Jackson. The column is still persisted; only its serialization is suppressed.
@@ -493,9 +517,13 @@ function buildJpaEntityImports(aggregate, bcYaml, config) {
  */
 function buildJpaChildFields(entity, bcYaml) {
   const fields = [];
+  const expandedNames = collectExpandedColumnNames(entity.properties, bcYaml);
 
   for (const prop of entity.properties || []) {
     if (prop.name === 'id') continue;
+
+    // derived: true que colisiona con una columna de expansión Money/StoredObject → omitir.
+    if (prop.derived === true && expandedNames.has(prop.name)) continue;
 
     if (isStoredObjectType(prop.type)) {
       fields.push(...expandStoredObjectField(prop));

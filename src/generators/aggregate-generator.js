@@ -583,7 +583,14 @@ function resolveReturnType(returnTypeStr, aggregateName) {
 }
 
 // ─── Helper: check if a type is a known value object ─────────────────────────
+// Incluye `Money`: es un VO canónico per-BC (vive en {bc}.domain.valueobject.Money)
+// que el generador emite aunque no se declare en valueObjects[] (ver
+// value-object-generator: fallback canónico). Sin esto, las clases de dominio
+// (agregado raíz y entidades hijas) usarían `Money` sin importarlo. StoredObject
+// NO se incluye aquí: es un VO canónico compartido (shared.*), resuelto por sus
+// propios bloques de import.
 function isValueObjectType(type, bcYaml) {
+  if (type === 'Money') return true;
   return (bcYaml.valueObjects || []).some((vo) => vo.name === type);
 }
 

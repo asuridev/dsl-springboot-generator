@@ -328,7 +328,8 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   const storageProviderMeta  = storageProviderId
     ? (params.storageProviders || []).find((s) => s.id === storageProviderId) || null
     : null;
-  // gradleDependency is an array of `implementation '...'` lines (s3 + s3-presigner).
+  // gradleDependency is an array of `implementation '...'` lines. The presigner
+  // classes ship inside the `s3` module — there is no separate s3-presigner artifact.
   const storageDependencies  = objectStoragePresent && storageProviderMeta
     ? (Array.isArray(storageProviderMeta.gradleDependency)
         ? storageProviderMeta.gradleDependency

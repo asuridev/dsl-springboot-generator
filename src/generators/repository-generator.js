@@ -1089,6 +1089,31 @@ function getMoneyVoProps(bcYaml) {
 }
 
 /**
+ * Nombres de campo del builder JPA producidos por la expansión de VOs canónicos
+ * compuestos (Money/StoredObject) de props NO derivados. Una propiedad `derived: true`
+ * con el mismo nombre es la MISMA columna física → su llamada de builder se omite,
+ * evitando el duplicado y el sobrescribe del valor autoritativo de Money con un
+ * getter que es null hasta Fase 3.
+ */
+function collectMapperExpandedNames(props, bcYaml) {
+  const [amountProp, currencyProp] = getMoneyVoProps(bcYaml);
+  const names = new Set();
+  for (const prop of props || []) {
+    if (prop.derived === true) continue;
+    if (isMoneyType(prop.type)) {
+      names.add(`${prop.name}${capitalize(amountProp)}`);
+      names.add(`${prop.name}${capitalize(currencyProp)}`);
+    } else if (isStoredObjectType(prop.type)) {
+      names.add(`${prop.name}StorageKey`);
+      names.add(`${prop.name}Url`);
+      names.add(`${prop.name}ContentType`);
+      names.add(`${prop.name}SizeBytes`);
+    }
+  }
+  return names;
+}
+
+/**
  * Build the body of the toDomain mapper for an aggregate.
  * Reconstruction constructor order: id, all props (minus id/audit), child lists, audit, softDelete
  */
@@ -1202,8 +1227,12 @@ function buildToJpaBody(aggregate, bcYaml) {
   });
 
   const lines = [`${name}Jpa jpa = ${name}Jpa.builder()`, `        .id(domain.getId())`];
+  const expandedNames = collectMapperExpandedNames(props, bcYaml);
 
   for (const prop of props) {
+    // derived: true que colisiona con una expansión Money/StoredObject → misma columna;
+    // se omite (la llamada de Money ya la setea con el valor autoritativo).
+    if (prop.derived === true && expandedNames.has(prop.name)) continue;
     if (isStoredObjectType(prop.type)) {
       lines.push(...storedObjectToJpaLines(prop));
     } else if (isMoneyType(prop.type)) {
@@ -1344,8 +1373,11 @@ function buildChildToJpaBody(entity, bcYaml) {
   const props = (entity.properties || []).filter((p) => p.name !== 'id');
 
   const lines = [`return ${name}Jpa.builder()`, `        .id(domain.getId())`];
+  const expandedNames = collectMapperExpandedNames(props, bcYaml);
 
   for (const prop of props) {
+    // derived: true que colisiona con una expansión Money/StoredObject → misma columna; omitir.
+    if (prop.derived === true && expandedNames.has(prop.name)) continue;
     if (isStoredObjectType(prop.type)) {
       lines.push(...storedObjectToJpaLines(prop));
     } else if (isMoneyType(prop.type)) {

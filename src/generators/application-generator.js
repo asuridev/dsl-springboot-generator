@@ -2056,9 +2056,10 @@ async function generateApplicationMapper(agg, moduleName, packageName, bcDir, vo
     let pmFields = [];
     if (derivable) {
       const aggMap = aggregateGetterMap(agg);
+      const enumNames = new Set((bcYaml?.enums || []).map((e) => e.name));
       for (const prop of projection.properties || []) {
         // Collect type imports via the side-effect call (matches existing pattern in buildMapperFields)
-        javaTypeForDto(prop.type, packageName, moduleName, importsSet, voNames, bcYaml);
+        const projJavaType = javaTypeForDto(prop.type, packageName, moduleName, importsSet, voNames, bcYaml);
         for (const nestedProjectionName of projectionNamesInType(prop.type, bcYaml)) {
           if (nestedProjectionName !== projection.name) {
             importsSet.add(`${packageName}.${moduleName}.application.dtos.${nestedProjectionName}`);
@@ -2071,6 +2072,14 @@ async function generateApplicationMapper(agg, moduleName, packageName, bcDir, vo
           const expr = aggProp.required
             ? `domain.${baseGetter}().toString()`
             : `domain.${baseGetter}() != null ? domain.${baseGetter}().toString() : null`;
+          pmFields.push({ name: prop.name, expr });
+          continue;
+        }
+        // Enum domain field projected as a serialized String — emit enum.name() conversion.
+        if (enumNames.has(aggProp.type) && projJavaType === 'String') {
+          const expr = aggProp.required
+            ? `domain.${baseGetter}().name()`
+            : `domain.${baseGetter}() != null ? domain.${baseGetter}().name() : null`;
           pmFields.push({ name: prop.name, expr });
           continue;
         }

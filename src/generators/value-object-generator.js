@@ -181,155 +181,232 @@ function resolveDomainImport(typeName, bcYaml, config) {
 
 // ─── Main generator ──────────────────────────────────────────────────────────
 
+// Descriptor canónico del VO `Money`. type-mapper.js y type-resolution-validator.js
+// tratan `Money` como tipo canónico (no requiere declararse en valueObjects[]), por
+// lo que el resto de generators emite `import {bc}.domain.valueobject.Money` de forma
+// incondicional. Cuando el diseñador NO lo declara, este generador debe emitir la
+// clase para que ese import resuelva. Forma confirmada por el código consumidor
+// (p. ej. ProductJpaMapper: `new Money(BigDecimal, String)`, getAmount()/getCurrency()).
+const CANONICAL_MONEY_VO = {
+  name: 'Money',
+  description: 'Monetary amount with currency (canonical value object).',
+  properties: [
+    { name: 'amount', type: 'Decimal', precision: 19, scale: 4, required: true },
+    { name: 'currency', type: 'String(3)', required: true },
+  ],
+};
+
+// Wrappers estructurales + String(n), reutilizando el patrón de type-resolution-validator.
+const MONEY_WRAPPER_RE = /^(List|Page|Slice|Stream|Set|Optional|Range)\[(.+)\]$/;
+const MONEY_STRING_N_RE = /^String\(\d+\)$/;
+
+/**
+ * ¿Algún `type:` del BC resuelve (tras quitar wrappers y sufijo `?`) al canónico Money?
+ * Solo se inspeccionan valores bajo claves `type` para evitar falsos positivos de
+ * descripciones/comentarios que mencionen "money".
+ */
+function bcReferencesMoney(bcYaml) {
+  let found = false;
+
+  const typeHasMoney = (raw) => {
+    if (raw == null || typeof raw !== 'string') return false;
+    let t = raw.trim();
+    while (t.endsWith('?')) t = t.slice(0, -1).trim();
+    const wrap = MONEY_WRAPPER_RE.exec(t);
+    if (wrap) return typeHasMoney(wrap[2]);
+    if (MONEY_STRING_N_RE.test(t)) return false;
+    return t === 'Money';
+  };
+
+  const walk = (node) => {
+    if (found || node == null) return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item);
+      return;
+    }
+    if (typeof node === 'object') {
+      for (const [key, value] of Object.entries(node)) {
+        if (key === 'type' && typeHasMoney(value)) {
+          found = true;
+          return;
+        }
+        walk(value);
+      }
+    }
+  };
+
+  walk(bcYaml);
+  return found;
+}
+
+/**
+ * Renderiza un único Value Object a su archivo Java. Extraído del bucle principal
+ * para poder reutilizarse tanto con VOs declarados como con el Money canónico.
+ */
+async function renderValueObject(vo, bcYaml, config, voDir) {
+  if (!vo.properties || vo.properties.length === 0) {
+    throw new Error(
+      `[value-object-generator] VO "${vo.name}" has no properties defined. ` +
+      `Value Objects must declare at least one property.`
+    );
+  }
+
+  const bc = bcYaml.bc;
+  const imports = new Set();
+  imports.add('import java.util.Objects;');
+
+  const fields = [];
+  let hasDecimal = false;
+  let hasEmail = false;
+
+  for (const prop of vo.properties || []) {
+    const isList = isListType(prop.type);
+    let javaType;
+
+    if (isList) {
+      imports.add('import java.util.List;');
+      const innerRaw = getListElementType(prop.type);
+      const innerHead = (innerRaw || '').replace(/\(.*\)/, '');
+      let innerJavaType;
+      if (CANONICAL_TYPES.has(innerHead)) {
+        const innerMapped = mapType(innerRaw, prop);
+        if (innerMapped.importHint) imports.add(`import ${innerMapped.importHint};`);
+        innerJavaType = innerMapped.javaType;
+      } else {
+        const ref = resolveDomainImport(innerRaw, bcYaml, config);
+        if (!ref) {
+          throw new Error(
+            `[value-object-generator] VO "${vo.name}" property "${prop.name}" element type "${innerRaw}" cannot be resolved. ` +
+            `Declare it under enums[] or valueObjects[], or use a canonical type.`
+          );
+        }
+        if (ref.importStmt) imports.add(ref.importStmt);
+        innerJavaType = ref.javaType;
+      }
+      javaType = `List<${innerJavaType}>`;
+    } else {
+      const head = (prop.type || '').replace(/\(.*\)/, '');
+      if (CANONICAL_TYPES.has(head)) {
+        const mapped = mapType(prop.type, prop);
+        if (mapped.importHint) imports.add(`import ${mapped.importHint};`);
+        javaType = mapped.javaType;
+      } else {
+        const ref = resolveDomainImport(prop.type, bcYaml, config);
+        if (!ref) {
+          throw new Error(
+            `[value-object-generator] VO "${vo.name}" property "${prop.name}" type "${prop.type}" cannot be resolved. ` +
+            `Declare it under enums[] or valueObjects[], or use a canonical type.`
+          );
+        }
+        if (ref.importStmt) imports.add(ref.importStmt);
+        javaType = ref.javaType;
+      }
+    }
+
+    const isDecimal = prop.type === 'Decimal';
+    const isNumericPrim = NUMERIC_PRIM_TYPES.has(prop.type);
+    const isString = !isList && javaType === 'String';
+    const isEmailType = prop.type === 'Email';
+
+    if (isDecimal) {
+      hasDecimal = true;
+      imports.add('import java.math.BigDecimal;');
+      imports.add('import java.math.RoundingMode;');
+    }
+    if (isEmailType) {
+      hasEmail = true;
+      imports.add('import java.util.regex.Pattern;');
+    }
+
+    const vals = extractValidations(prop);
+    if (vals.pattern) imports.add('import java.util.regex.Pattern;');
+
+    const guards = buildGuards(prop, {
+      name: prop.name,
+      isString,
+      isDecimal,
+      isNumeric: isNumericPrim,
+      isLong: prop.type === 'Long',
+      isEmailType,
+      vals,
+      voName: vo.name,
+    });
+
+    // Assignment
+    let assignment;
+    if (isList) {
+      assignment = `        this.${prop.name} = (${prop.name} == null) ? List.of() : List.copyOf(${prop.name});`;
+    } else if (isDecimal) {
+      const scale = prop.scale != null ? prop.scale : 4;
+      assignment =
+        `        try {\n` +
+        `            this.${prop.name} = (${prop.name} == null) ? null : ${prop.name}.setScale(${scale}, RoundingMode.UNNECESSARY);\n` +
+        `        } catch (ArithmeticException ex) {\n` +
+        `            throw new IllegalArgumentException("VO ${vo.name}.${prop.name}: scale exceeds ${scale}", ex);\n` +
+        `        }`;
+    } else {
+      assignment = `        this.${prop.name} = ${prop.name};`;
+    }
+
+    const equalsExpr = isDecimal
+      ? `eqDecimal(${prop.name}, that.${prop.name})`
+      : `Objects.equals(${prop.name}, that.${prop.name})`;
+
+    fields.push({
+      name: prop.name,
+      pascalName: pascal(prop.name),
+      javaType,
+      isList,
+      isDecimal,
+      guards,
+      assignment,
+      equalsExpr,
+    });
+  }
+
+  const isMicrotype = fields.length === 1;
+
+  const context = {
+    packageName: config.packageName,
+    bc,
+    name: vo.name,
+    description: vo.description || '',
+    traceTag: `valueObject:${vo.name}`,
+    imports: [...imports].sort(),
+    fields,
+    hasDecimal,
+    hasEmail,
+    isMicrotype,
+  };
+
+  const destPath = path.join(voDir, `${vo.name}.java`);
+  await renderAndWrite(
+    path.join(TEMPLATES_DIR, 'domain', 'ValueObject.java.ejs'),
+    destPath,
+    context
+  );
+}
+
 async function generateValueObjects(bcYaml, config, outputDir) {
   const valueObjects = bcYaml.valueObjects || [];
-  if (valueObjects.length === 0) return;
+  const declaresMoney = valueObjects.some((v) => v && v.name === 'Money');
+  const needsCanonicalMoney = !declaresMoney && bcReferencesMoney(bcYaml);
+
+  if (valueObjects.length === 0 && !needsCanonicalMoney) return;
 
   const bc = bcYaml.bc;
   const packagePath = toPackagePath(config.packageName);
   const voDir = path.join(outputDir, 'src', 'main', 'java', packagePath, bc, 'domain', 'valueobject');
 
   for (const vo of valueObjects) {
-    if (!vo.properties || vo.properties.length === 0) {
-      throw new Error(
-        `[value-object-generator] VO "${vo.name}" has no properties defined. ` +
-        `Value Objects must declare at least one property.`
-      );
-    }
+    await renderValueObject(vo, bcYaml, config, voDir);
+  }
 
-    const imports = new Set();
-    imports.add('import java.util.Objects;');
-
-    const fields = [];
-    let hasDecimal = false;
-    let hasEmail = false;
-
-    for (const prop of vo.properties || []) {
-      const isList = isListType(prop.type);
-      let javaType;
-
-      if (isList) {
-        imports.add('import java.util.List;');
-        const innerRaw = getListElementType(prop.type);
-        const innerHead = (innerRaw || '').replace(/\(.*\)/, '');
-        let innerJavaType;
-        if (CANONICAL_TYPES.has(innerHead)) {
-          const innerMapped = mapType(innerRaw, prop);
-          if (innerMapped.importHint) imports.add(`import ${innerMapped.importHint};`);
-          innerJavaType = innerMapped.javaType;
-        } else {
-          const ref = resolveDomainImport(innerRaw, bcYaml, config);
-          if (!ref) {
-            throw new Error(
-              `[value-object-generator] VO "${vo.name}" property "${prop.name}" element type "${innerRaw}" cannot be resolved. ` +
-              `Declare it under enums[] or valueObjects[], or use a canonical type.`
-            );
-          }
-          if (ref.importStmt) imports.add(ref.importStmt);
-          innerJavaType = ref.javaType;
-        }
-        javaType = `List<${innerJavaType}>`;
-      } else {
-        const head = (prop.type || '').replace(/\(.*\)/, '');
-        if (CANONICAL_TYPES.has(head)) {
-          const mapped = mapType(prop.type, prop);
-          if (mapped.importHint) imports.add(`import ${mapped.importHint};`);
-          javaType = mapped.javaType;
-        } else {
-          const ref = resolveDomainImport(prop.type, bcYaml, config);
-          if (!ref) {
-            throw new Error(
-              `[value-object-generator] VO "${vo.name}" property "${prop.name}" type "${prop.type}" cannot be resolved. ` +
-              `Declare it under enums[] or valueObjects[], or use a canonical type.`
-            );
-          }
-          if (ref.importStmt) imports.add(ref.importStmt);
-          javaType = ref.javaType;
-        }
-      }
-
-      const isDecimal = prop.type === 'Decimal';
-      const isNumericPrim = NUMERIC_PRIM_TYPES.has(prop.type);
-      const isString = !isList && javaType === 'String';
-      const isEmailType = prop.type === 'Email';
-
-      if (isDecimal) {
-        hasDecimal = true;
-        imports.add('import java.math.BigDecimal;');
-        imports.add('import java.math.RoundingMode;');
-      }
-      if (isEmailType) {
-        hasEmail = true;
-        imports.add('import java.util.regex.Pattern;');
-      }
-
-      const vals = extractValidations(prop);
-      if (vals.pattern) imports.add('import java.util.regex.Pattern;');
-
-      const guards = buildGuards(prop, {
-        name: prop.name,
-        isString,
-        isDecimal,
-        isNumeric: isNumericPrim,
-        isLong: prop.type === 'Long',
-        isEmailType,
-        vals,
-        voName: vo.name,
-      });
-
-      // Assignment
-      let assignment;
-      if (isList) {
-        assignment = `        this.${prop.name} = (${prop.name} == null) ? List.of() : List.copyOf(${prop.name});`;
-      } else if (isDecimal) {
-        const scale = prop.scale != null ? prop.scale : 4;
-        assignment =
-          `        try {\n` +
-          `            this.${prop.name} = (${prop.name} == null) ? null : ${prop.name}.setScale(${scale}, RoundingMode.UNNECESSARY);\n` +
-          `        } catch (ArithmeticException ex) {\n` +
-          `            throw new IllegalArgumentException("VO ${vo.name}.${prop.name}: scale exceeds ${scale}", ex);\n` +
-          `        }`;
-      } else {
-        assignment = `        this.${prop.name} = ${prop.name};`;
-      }
-
-      const equalsExpr = isDecimal
-        ? `eqDecimal(${prop.name}, that.${prop.name})`
-        : `Objects.equals(${prop.name}, that.${prop.name})`;
-
-      fields.push({
-        name: prop.name,
-        pascalName: pascal(prop.name),
-        javaType,
-        isList,
-        isDecimal,
-        guards,
-        assignment,
-        equalsExpr,
-      });
-    }
-
-    const isMicrotype = fields.length === 1;
-
-    const context = {
-      packageName: config.packageName,
-      bc,
-      name: vo.name,
-      description: vo.description || '',
-      traceTag: `valueObject:${vo.name}`,
-      imports: [...imports].sort(),
-      fields,
-      hasDecimal,
-      hasEmail,
-      isMicrotype,
-    };
-
-    const destPath = path.join(voDir, `${vo.name}.java`);
-    await renderAndWrite(
-      path.join(TEMPLATES_DIR, 'domain', 'ValueObject.java.ejs'),
-      destPath,
-      context
-    );
+  // Money es canónico: si el BC lo referencia pero no lo declara, emitimos la clase
+  // para que los imports `{bc}.domain.valueobject.Money` (emitidos por otros
+  // generators) resuelvan. Si lo declara, gana la declaración explícita (arriba).
+  if (needsCanonicalMoney) {
+    await renderValueObject(CANONICAL_MONEY_VO, bcYaml, config, voDir);
   }
 }
 
