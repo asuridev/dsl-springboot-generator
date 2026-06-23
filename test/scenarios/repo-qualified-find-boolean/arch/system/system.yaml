@@ -1,0 +1,15 @@
+system:
+  name: test-repo-qualified-find-boolean
+  domainType: core
+boundedContexts:
+  - name: orders
+    type: core
+    purpose: Orders.
+    aggregates:
+      - name: Cart
+        root: Cart
+        entities: []
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

@@ -1,0 +1,57 @@
+bc: orders
+version: "1.0.0"
+enums:
+  - name: CartStatus
+    values:
+      - value: ACTIVE
+      - value: CHECKED_OUT
+aggregates:
+  - name: Cart
+    root: Cart
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: customerId
+        type: Uuid
+      - name: status
+        type: CartStatus
+      - name: isDefault
+        type: Boolean
+repositories:
+  - aggregate: Cart
+    queryMethods:
+      # Boolean-flag qualifier: 'Default' → Boolean property isDefault (= true).
+      - name: findDefaultByCustomerId
+        params:
+          - name: customerId
+            type: Uuid
+            required: true
+        returns: Cart?
+        derivedFrom: implicit
+      # Negated boolean-flag qualifier: 'NonDefault' → isDefault = false.
+      - name: findNonDefaultByCustomerId
+        params:
+          - name: customerId
+            type: Uuid
+            required: true
+        returns: Cart?
+        derivedFrom: implicit
+      # Boolean-flag qualifier on count.
+      - name: countDefaultByCustomerId
+        params:
+          - name: customerId
+            type: Uuid
+            required: true
+        returns: Long
+      # Boolean-flag qualifier on exists.
+      - name: existsDefaultByCustomerId
+        params:
+          - name: customerId
+            type: Uuid
+            required: true
+        returns: Boolean
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Cart?"

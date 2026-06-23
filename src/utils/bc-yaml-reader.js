@@ -1679,7 +1679,7 @@ function validateRepositories(doc) {
     if (!enumDef) {
       fail(`${ctx} uses qualifier "${qualifier}" but field "${statusProp.name}" does not reference a declared enum.`);
     }
-    const values = (enumDef.values || []).map((v) => (typeof v === 'string' ? v : v.value));
+    const values = (enumDef.values || []).map((v) => (typeof v === 'string' ? v : (v.value || v.name)));
     const candidate = qualifier.startsWith('Non')
       ? qualifier.slice(3).replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()
       : qualifier.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase();
@@ -1699,12 +1699,23 @@ function validateRepositories(doc) {
     if (!statusProp) return false;
     const enumDef = enumByName.get(statusProp.type);
     if (!enumDef) return false;
-    const values = (enumDef.values || []).map((v) => (typeof v === 'string' ? v : v.value));
+    const values = (enumDef.values || []).map((v) => (typeof v === 'string' ? v : (v.value || v.name)));
     if ((qualifier === 'NonDeleted' || qualifier === 'NotDeleted' || qualifier === 'Deleted') && values.includes('DELETED')) return true;
     const candidate = qualifier.startsWith('Non')
       ? qualifier.slice(3).replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()
       : qualifier.replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase();
     return values.includes(candidate);
+  };
+
+  // Mirror of repository-generator.resolveBooleanQualifier: a qualifier that maps
+  // to a Boolean property on the aggregate (e.g. "Default" → isDefault/default).
+  // Non{Flag}/Not{Flag} are accepted too. Keeps validator and generator in lockstep.
+  const booleanQualifierMatches = (qualifier, aggregate) => {
+    if (!aggregate || !qualifier) return false;
+    const core = (qualifier.startsWith('Non') || qualifier.startsWith('Not')) ? qualifier.slice(3) : qualifier;
+    if (!core) return false;
+    const candidates = new Set([core.charAt(0).toLowerCase() + core.slice(1), `is${core}`]);
+    return (aggregate.properties || []).some((p) => candidates.has(p.name) && p.type === 'Boolean');
   };
 
   const hasStatusQualifierSource = (aggregate) => {
@@ -1929,11 +1940,15 @@ function validateRepositories(doc) {
         if (qualifiedFind) {
           const [, qualifier, fieldRaw] = qualifiedFind;
           const field = fieldRaw.charAt(0).toLowerCase() + fieldRaw.slice(1);
-          if (statusQualifierMatches(qualifier, aggregate)) {
+          if (statusQualifierMatches(qualifier, aggregate) || booleanQualifierMatches(qualifier, aggregate)) {
             if (!/\?$/.test(ret) && !/^List\[/.test(ret) && !/^Page\[/.test(ret)) {
               fail(`${ctx} naming convention "find{Qualifier}By*" requires returns of T?, List[T] or Page[T]; got "${ret}".`);
             }
-            resolveStatusQualifier(qualifier, aggregate, ctx);
+            // Boolean-flag qualifiers map to a Boolean property directly; only status
+            // qualifiers need enum/soft-delete resolution.
+            if (!booleanQualifierMatches(qualifier, aggregate)) {
+              resolveStatusQualifier(qualifier, aggregate, ctx);
+            }
             if (!aggregateFieldMap(aggregate).has(field)) {
               fail(`${ctx} references unknown aggregate field "${field}" in method name "${m.name}".`);
             }
@@ -1950,7 +1965,9 @@ function validateRepositories(doc) {
             fail(`${ctx} naming convention "count{Qualifier}By*" requires returns: Int or Long; got "${ret}".`);
           }
           const [, qualifier, fieldRaw] = qualifiedCount;
-          resolveStatusQualifier(qualifier, aggregate, ctx);
+          if (!booleanQualifierMatches(qualifier, aggregate)) {
+            resolveStatusQualifier(qualifier, aggregate, ctx);
+          }
           const field = fieldRaw.charAt(0).toLowerCase() + fieldRaw.slice(1);
           if (!aggregateFieldMap(aggregate).has(field)) {
             fail(`${ctx} references unknown aggregate field "${field}" in method name "${m.name}".`);
@@ -1965,7 +1982,9 @@ function validateRepositories(doc) {
             fail(`${ctx} naming convention "exists{Qualifier}By*" requires returns: Boolean; got "${ret}".`);
           }
           const [, qualifier, fieldRaw] = qualifiedExists;
-          resolveStatusQualifier(qualifier, aggregate, ctx);
+          if (!booleanQualifierMatches(qualifier, aggregate)) {
+            resolveStatusQualifier(qualifier, aggregate, ctx);
+          }
           const field = fieldRaw.charAt(0).toLowerCase() + fieldRaw.slice(1);
           if (!aggregateFieldMap(aggregate).has(field)) {
             fail(`${ctx} references unknown aggregate field "${field}" in method name "${m.name}".`);
@@ -1977,7 +1996,7 @@ function validateRepositories(doc) {
             fail(`${ctx} naming convention "search*" requires Page[T], Slice[T] or Stream[T] returns; got "${ret}".`);
           }
           const qualifier = qualifiedSearch[1];
-          if (qualifier !== 'All') {
+          if (qualifier !== 'All' && !booleanQualifierMatches(qualifier, aggregate)) {
             resolveStatusQualifier(qualifier, aggregate, ctx);
           }
         }

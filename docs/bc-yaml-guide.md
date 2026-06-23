@@ -806,6 +806,25 @@ El nombre del `queryMethod` sigue las mismas convenciones que `methods`:
 
 > **Calificadores en `count`/`list` sobre agregados `softDelete: true`:** El calificador `Active` (ej: `countActiveByCustomerId`, `listActiveByOwnerId`) implica `status = 'ACTIVE'`, pero en agregados soft-deleted no hay `status`. El generador no puede resolver la ambigüedad y produce un predicado incorrecto. Usar siempre `NonDeleted` como calificador de exclusión de borrados lógicos — el generador lo mapea inequívocamente a `deleted_at IS NULL`.
 
+### Calificadores de bandera booleana — `find/count/exists/search{Flag}By{Campo}`
+
+Un calificador `{Flag}` que coincide con una propiedad **`Boolean`** del agregado se resuelve
+directamente contra esa columna. El generador busca la propiedad cuyo nombre sea `{flag}`
+(camelCase del calificador) o `is{Flag}`.
+
+| Método | JPQL derivado (propiedad `isDefault: Boolean`) |
+|---|---|
+| `findDefaultByCustomerId(customerId): T?` | `WHERE c.isDefault = true AND c.customerId = :customerId` |
+| `findNonDefaultByCustomerId(customerId): T?` | `WHERE c.isDefault = false AND c.customerId = :customerId` |
+| `countDefaultByCustomerId(customerId): Long` | `SELECT COUNT(c) … WHERE c.isDefault = true AND c.customerId = :customerId` |
+| `existsDefaultByCustomerId(customerId): Boolean` | `SELECT CASE WHEN COUNT(c) > 0 … WHERE c.isDefault = true AND c.customerId = :customerId` |
+
+- Prefijos `Non`/`Not` niegan la bandera (`= false`).
+- Los calificadores de **estado** (enum) y **soft-delete** tienen prioridad: solo si ninguno
+  coincide se intenta resolver como bandera booleana.
+- **Palabra reservada:** evita nombrar la propiedad literalmente `default` (reservada en Java/JPQL).
+  Prefiere `isDefault`.
+
 ### Ejemplo completo
 
 ```yaml

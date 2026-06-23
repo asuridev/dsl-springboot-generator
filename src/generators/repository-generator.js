@@ -468,13 +468,43 @@ function resolveCountQualifier(qualifier, targetAggregate, bcYaml, alias, method
     }
   }
 
-  // 3. Unknown qualifier — stop rather than invent.
+  // 3. Boolean-flag qualifier — the qualifier maps to a Boolean property on the
+  //    target (e.g. 'Default' → isDefault). Checked after status so existing
+  //    status/soft-delete qualifiers keep priority.
+  const boolQualifier = resolveBooleanQualifier(qualifier, targetAggregate);
+  if (boolQualifier) {
+    return [`${alias}.${boolQualifier.field} = ${boolQualifier.value}`];
+  }
+
+  // 4. Unknown qualifier — stop rather than invent.
   const known = statusInfo ? statusInfo.values.join(', ') : '(none — target has no status enum)';
   throw new Error(
     `[repository-generator] Unknown qualifier '${qualifier}' in count method '${methodName}' for aggregate ` +
     `'${targetAggregate.name}'. Recognised qualifiers: NonDeleted, Deleted, or any literal of the target's ` +
     `status enum [${known}]. Rename the method or extend the enum.`
   );
+}
+
+/**
+ * Resolve a boolean-flag qualifier (e.g. "Default" → Boolean property `isDefault`/`default`)
+ * against an aggregate. Returns { field, value } or null. The negated forms
+ * Non{Flag}/Not{Flag} resolve to value:false. Unlike status qualifiers, the flag
+ * maps directly to a Boolean property on the aggregate — no enum lookup involved.
+ */
+function resolveBooleanQualifier(qualifier, aggregate) {
+  if (!aggregate || !qualifier) return null;
+  let core = qualifier;
+  let value = true;
+  if (qualifier.startsWith('Non') || qualifier.startsWith('Not')) {
+    core = qualifier.slice(3);
+    value = false;
+  }
+  if (!core) return null;
+  const candidates = new Set([toCamelCase(core), `is${core}`]);
+  const prop = (aggregate.properties || []).find(
+    (p) => candidates.has(p.name) && p.type === 'Boolean'
+  );
+  return prop ? { field: prop.name, value } : null;
 }
 
 /**
@@ -487,7 +517,7 @@ function findStatusEnum(aggregate, bcYaml) {
   if (!statusProp) return null;
   const enumDef = (bcYaml.enums || []).find((e) => e.name === statusProp.type);
   if (!enumDef) return null;
-  const values = (enumDef.values || []).map((v) => (typeof v === 'string' ? v : v.value));
+  const values = (enumDef.values || []).map((v) => (typeof v === 'string' ? v : (v.value || v.name)));
   return { field: statusProp.name, enumName: enumDef.name, values };
 }
 
@@ -729,7 +759,9 @@ function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
   }
 
   const findQualifiedMatch = name.match(/^find(?!By)([A-Z][A-Za-z0-9]*)By([A-Z][A-Za-z0-9]*)$/);
-  if (findQualifiedMatch && statusQualifierMatches(findQualifiedMatch[1], aggregate, bcYaml)) {
+  if (findQualifiedMatch &&
+      (statusQualifierMatches(findQualifiedMatch[1], aggregate, bcYaml) ||
+       resolveBooleanQualifier(findQualifiedMatch[1], aggregate))) {
     const [, qualifier, fieldRaw] = findQualifiedMatch;
     const a = jpaEntityName.charAt(0).toLowerCase();
     const field = fieldRaw.charAt(0).toLowerCase() + fieldRaw.slice(1);
