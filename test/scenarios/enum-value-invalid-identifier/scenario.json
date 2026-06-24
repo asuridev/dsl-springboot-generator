@@ -1,0 +1,5 @@
+{
+  "description": "An enum value that is not a valid Java identifier (e.g. 'pending-approval') would emit a non-compilable enum constant; the YAML reader must reject it early.",
+  "expectFailure": true,
+  "expectedErrorPattern": "must be a valid Java identifier"
+}

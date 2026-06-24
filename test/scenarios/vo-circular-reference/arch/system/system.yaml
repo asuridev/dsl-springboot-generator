@@ -1,0 +1,18 @@
+system:
+  name: test-vo-circular-reference-system
+  description: Test system for circular value object reference detection.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages items.
+    aggregates:
+      - name: Item
+        root: Item
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

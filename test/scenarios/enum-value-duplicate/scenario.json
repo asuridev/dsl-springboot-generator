@@ -1,0 +1,5 @@
+{
+  "description": "Duplicate enum values produce a duplicated Java enum constant which fails compilation; the YAML reader must reject it early.",
+  "expectFailure": true,
+  "expectedErrorPattern": "has a duplicate value"
+}

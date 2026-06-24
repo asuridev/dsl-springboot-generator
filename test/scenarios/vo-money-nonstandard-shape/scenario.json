@@ -1,0 +1,5 @@
+{
+  "description": "A user-declared Money VO that drops the canonical amount/currency shape makes the JPA mappers call getAmount()/getCurrency() on a VO that lacks them; the YAML reader must reject it early.",
+  "expectFailure": true,
+  "expectedErrorPattern": "Money value object must declare"
+}

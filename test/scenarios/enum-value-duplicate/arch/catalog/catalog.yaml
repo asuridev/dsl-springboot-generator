@@ -1,0 +1,10 @@
+bc: catalog
+version: "1.0.0"
+
+enums:
+  - name: ProductStatus
+    description: Lifecycle states of a Product.
+    values:
+      - value: DRAFT
+      - value: ACTIVE
+      - value: ACTIVE

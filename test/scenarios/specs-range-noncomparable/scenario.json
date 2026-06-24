@@ -1,0 +1,5 @@
+{
+  "description": "Range[T] builds a JPA cb.between specification that requires an order-comparable scalar; a non-orderable inner type (e.g. Boolean) cannot be evaluated. The YAML reader must reject it early.",
+  "expectFailure": true,
+  "expectedErrorPattern": "is not orderable"
+}

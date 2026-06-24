@@ -108,6 +108,15 @@ function validateEnums(enums) {
       if (!label) {
         fail(`Enum "${enumDef.name}" has a value entry without a 'value' (or 'name') field.`);
       }
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(label)) {
+        fail(
+          `Enum "${enumDef.name}" value "${label}" must be a valid Java identifier ` +
+          `(letters, digits and underscore only, not starting with a digit). UPPER_SNAKE_CASE is recommended.`
+        );
+      }
+      if (declaredValues.has(label)) {
+        fail(`Enum "${enumDef.name}" has a duplicate value "${label}". Enum values must be unique.`);
+      }
       declaredValues.add(label);
     }
     for (const v of enumDef.values) {
@@ -353,6 +362,11 @@ function validate(doc, opts = {}) {
           if (inp.partName != null && typeof inp.partName !== 'string') {
             fail(`Use case "${uc.id}" input "${inp.name}" "partName" must be a string (the multipart form-data part identifier).`);
           }
+          // partName is interpolated into generated Java string literals (controller
+          // guards); restrict it to a safe identifier so it cannot break the literal.
+          if (typeof inp.partName === 'string' && !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(inp.partName)) {
+            fail(`Use case "${uc.id}" input "${inp.name}" "partName" "${inp.partName}" must be a safe identifier (letters, digits, underscore and hyphen; not starting with a digit or hyphen).`);
+          }
           if (inp.maxSize != null) {
             if (typeof inp.maxSize !== 'string' || !/^\d+(B|KB|MB|GB)$/.test(inp.maxSize)) {
               fail(`Use case "${uc.id}" input "${inp.name}" "maxSize" must be a size string like "10MB" (units: B, KB, MB, GB).`);
@@ -361,6 +375,13 @@ function validate(doc, opts = {}) {
           if (inp.contentTypes != null) {
             if (!Array.isArray(inp.contentTypes) || inp.contentTypes.length === 0 || inp.contentTypes.some((c) => typeof c !== 'string')) {
               fail(`Use case "${uc.id}" input "${inp.name}" "contentTypes" must be a non-empty array of MIME-type strings (e.g. ["image/png", "image/jpeg"]).`);
+            }
+            // Each entry is interpolated into generated Java string literals; require a
+            // safe "type/subtype" MIME shape so it cannot break the literal.
+            for (const c of inp.contentTypes) {
+              if (typeof c === 'string' && !/^[\w.+-]+\/[\w.+-]+$/.test(c)) {
+                fail(`Use case "${uc.id}" input "${inp.name}" "contentTypes" entry "${c}" is not a valid MIME type (expected "type/subtype", e.g. "image/png").`);
+              }
             }
           }
         }
@@ -382,6 +403,17 @@ function validate(doc, opts = {}) {
         }
         if (inp.fields != null && inp.type !== 'SearchText') {
           fail(`Use case "${uc.id}" input "${inp.name}" declares "fields" but type is "${inp.type}". "fields" is only valid for type: SearchText.`);
+        }
+        // [G8] Range[T] builds a JPA cb.between(min, max) specification, which requires
+        // an order-comparable scalar. A non-orderable inner type (Boolean, enum, VO,
+        // or any non-scalar) produces code that does not compile / cannot be evaluated.
+        const rangeMatch = /^Range\[(.+)\]$/.exec(String(inp.type || ''));
+        if (rangeMatch) {
+          const inner = rangeMatch[1].replace(/\(.*\)/, '').trim();
+          const ORDERABLE = new Set(['Integer', 'Long', 'Decimal', 'Date', 'DateTime', 'Duration', 'String', 'Uuid']);
+          if (!ORDERABLE.has(inner)) {
+            fail(`Use case "${uc.id}" input "${inp.name}" declares "${inp.type}", but Range filters require an order-comparable scalar inner type (${[...ORDERABLE].join(', ')}). "${inner}" is not orderable.`);
+          }
         }
       }
       // [G12] when any input is multipart, no other input may be source: body
@@ -540,6 +572,7 @@ function validate(doc, opts = {}) {
         }
       }
       const ca = uc.cacheable;
+      const cacheInputNames = new Set((uc.input || []).map((i) => i && i.name).filter(Boolean));
       if (!ca.ttl || typeof ca.ttl !== 'string' || !/^P/.test(ca.ttl)) {
         fail(`Use case "${uc.id}" cacheable.ttl is required and must be an ISO-8601 duration (e.g. "PT5M", "PT1H", "P1D").`);
       }
@@ -551,6 +584,9 @@ function validate(doc, opts = {}) {
           if (typeof f !== 'string' || !/^[a-z][a-zA-Z0-9]*$/.test(f)) {
             fail(`Use case "${uc.id}" cacheable.keyFields entry "${f}" must be a camelCase string matching a field in input[].`);
           }
+          if (typeof f === 'string' && !cacheInputNames.has(f)) {
+            fail(`Use case "${uc.id}" cacheable.keyFields entry "${f}" does not match any input[] field name. The cache key is built from declared inputs.`);
+          }
         }
       }
       if (ca.cacheWhen != null) {
@@ -560,6 +596,9 @@ function validate(doc, opts = {}) {
         for (const f of ca.cacheWhen) {
           if (typeof f !== 'string' || !/^[a-z][a-zA-Z0-9]*$/.test(f)) {
             fail(`Use case "${uc.id}" cacheable.cacheWhen entry "${f}" must be a camelCase string matching a field in input[].`);
+          }
+          if (typeof f === 'string' && !cacheInputNames.has(f)) {
+            fail(`Use case "${uc.id}" cacheable.cacheWhen entry "${f}" does not match any input[] field name.`);
           }
         }
       }
@@ -1057,6 +1096,25 @@ function validate(doc, opts = {}) {
     }
   }
 
+  // Money is a canonical shared VO. When a BC declares its own Money VO it must keep
+  // the canonical shape (amount + currency); otherwise jpa-entity-generator's column
+  // expansion and the application mappers emit getAmount()/getCurrency() calls against
+  // a VO that does not declare those getters, and the generated project fails to compile.
+  const declaredMoney = (doc.valueObjects || []).find((v) => v.name === 'Money');
+  if (declaredMoney) {
+    const props = declaredMoney.properties || [];
+    const amount = props.find((p) => p.name === 'amount');
+    const currency = props.find((p) => p.name === 'currency');
+    const amountOk = amount && /^(Decimal|String(\(\d+\))?)$/.test((amount.type || '').trim());
+    const currencyOk = currency && /^String(\(\d+\))?$/.test((currency.type || '').trim());
+    if (!amountOk || !currencyOk) {
+      fail(
+        `Money value object must declare an "amount" property (Decimal or String) and a "currency" property (String). ` +
+        `The generator's JPA column expansion and mappers assume this canonical shape.`
+      );
+    }
+  }
+
   // ── Projections ────────────────────────────────────────────────────────────
   const RESERVED_PROJECTION_SUFFIX = /(Dto|Response|Request|Payload)$/;
   const ALLOWED_PROJECTION_PROP_KEYS = new Set([
@@ -1351,6 +1409,22 @@ function validate(doc, opts = {}) {
           fail(`Use case "${uc.id}" input "${inp.name}" SearchText.fields references "${fieldName}" which is not declared as a property on aggregate "${agg.name}".`);
         }
       }
+    }
+  }
+
+  // [G3] authorization.ownership.field must reference a real aggregate property.
+  // The generated ownership guard compares this property against a JWT claim; an
+  // unknown name produces a getter call that does not compile.
+  for (const uc of useCases) {
+    const ownership = uc.authorization && uc.authorization.ownership;
+    if (!ownership || !ownership.field) continue;
+    const aggName = uc.aggregate || (Array.isArray(uc.aggregates) ? uc.aggregates[0] : null);
+    if (!aggName) continue;
+    const agg = aggByName.get(aggName);
+    if (!agg) continue;
+    const propNames = new Set((agg.properties || []).map((p) => p.name));
+    if (!propNames.has(ownership.field)) {
+      fail(`Use case "${uc.id}" authorization.ownership.field references "${ownership.field}" which is not declared as a property on aggregate "${agg.name}".`);
     }
   }
 

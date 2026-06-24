@@ -1,0 +1,61 @@
+bc: catalog
+version: "1.0.0"
+
+valueObjects:
+  - name: Foo
+    description: References Bar, which references back to Foo (cycle).
+    properties:
+      - name: label
+        type: String(50)
+        required: true
+      - name: bar
+        type: Bar
+        required: true
+
+  - name: Bar
+    description: References Foo, closing the cycle.
+    properties:
+      - name: code
+        type: String(20)
+        required: true
+      - name: foo
+        type: Foo
+        required: true
+
+aggregates:
+  - name: Item
+    root: Item
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: foo
+        type: Foo
+
+useCases:
+  - id: UC-001
+    name: CreateItem
+    type: command
+    aggregate: Item
+    trigger:
+      kind: http
+      operationId: createItem
+    input:
+      - name: id
+        type: Uuid
+        source: body
+        required: true
+    implementation: scaffold
+
+errors:
+  - code: ITEM_NOT_FOUND
+    httpStatus: 404
+    description: Item not found.
+
+repositories:
+  - aggregate: Item
+    methods:
+      - name: save
+        signature: "save(Item): Item"

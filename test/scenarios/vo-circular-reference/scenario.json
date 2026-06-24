@@ -1,0 +1,5 @@
+{
+  "description": "Two value objects that embed each other form a cycle, producing mutually recursive equals/hashCode and infinite @Embeddable nesting; the type-resolution validator must reject it (GEN-003).",
+  "expectFailure": true,
+  "expectedErrorPattern": "circular value object reference detected"
+}

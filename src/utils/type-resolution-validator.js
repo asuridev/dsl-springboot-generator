@@ -190,7 +190,92 @@ function validateTypeResolution(bcYaml) {
     }
   }
 
+  // ── Value object reference cycles (GEN-003) ────────────────────────────────
+  diagnostics.push(...detectVoCycles(bcYaml));
+
   return diagnostics;
 }
 
-module.exports = { validateTypeResolution, buildRegistry, resolutionError };
+/**
+ * Devuelve el nombre del value object referenciado por `type` (desempaquetando
+ * List/Set/Optional/…, ignorando Enum<X> y String(n)), o null si no referencia un VO.
+ */
+function voReference(type, voNames) {
+  if (type == null || typeof type !== 'string') return null;
+  let t = type.trim();
+  if (!t) return null;
+  if (t.endsWith('?')) t = t.slice(0, -1).trim();
+  const wrap = WRAPPER_RE.exec(t);
+  if (wrap) return voReference(wrap[2].trim(), voNames);
+  if (ENUM_WRAP_RE.test(t)) return null; // un enum nunca es un VO
+  const head = t.replace(/\(.*\)/, ''); // strip String(n)
+  return voNames.has(head) ? head : null;
+}
+
+/**
+ * GEN-003 — Detecta ciclos en el grafo dirigido VO→VO.
+ *
+ * Una referencia circular (A→B→A, o A→A) genera `equals`/`hashCode`/`toString`
+ * mutuamente recursivos y una expansión @Embeddable infinita en JPA: el proyecto
+ * generado no compila o desborda la pila en runtime. Por eso se rechaza.
+ *
+ * @param {object} bcYaml
+ * @returns {Array<{code,level,message,location}>}
+ */
+function detectVoCycles(bcYaml) {
+  const diagnostics = [];
+  const vos = (bcYaml.valueObjects || []).filter((v) => v && v.name);
+  if (vos.length === 0) return diagnostics;
+  const bcName = bcYaml.bc || '<unknown-bc>';
+  const voNames = new Set(vos.map((v) => v.name));
+
+  const edges = new Map();
+  for (const vo of vos) {
+    const targets = new Set();
+    for (const prop of vo.properties || []) {
+      const ref = voReference(prop && prop.type, voNames);
+      if (ref) targets.add(ref);
+    }
+    edges.set(vo.name, targets);
+  }
+
+  const WHITE = 0, GRAY = 1, BLACK = 2;
+  const color = new Map(vos.map((v) => [v.name, WHITE]));
+  const stack = [];
+  let reported = false;
+
+  function visit(node) {
+    color.set(node, GRAY);
+    stack.push(node);
+    for (const next of edges.get(node) || []) {
+      if (reported) break;
+      if (color.get(next) === GRAY) {
+        const idx = stack.indexOf(next);
+        const cyclePath = stack.slice(idx).concat(next).join(' -> ');
+        diagnostics.push({
+          code: 'GEN-003',
+          level: 'error',
+          message: `BC "${bcName}": circular value object reference detected: ${cyclePath}. ` +
+            `Break the cycle (e.g. reference a Uuid instead of embedding the value object).`,
+          location: `arch/${bcName}/${bcName}.yaml valueObjects`,
+        });
+        reported = true;
+        return;
+      }
+      if (color.get(next) === WHITE) {
+        visit(next);
+        if (reported) return;
+      }
+    }
+    stack.pop();
+    color.set(node, BLACK);
+  }
+
+  for (const vo of vos) {
+    if (reported) break;
+    if (color.get(vo.name) === WHITE) visit(vo.name);
+  }
+  return diagnostics;
+}
+
+module.exports = { validateTypeResolution, buildRegistry, resolutionError, detectVoCycles };

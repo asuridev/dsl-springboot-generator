@@ -1,0 +1,119 @@
+openapi: "3.0.3"
+info:
+  title: Catalog API
+  version: "1.0.0"
+  description: Product catalog API with cacheable query operations.
+
+paths:
+  /products/{productId}:
+    get:
+      operationId: getProductById
+      summary: Get product by ID
+      tags:
+        - Products
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Product found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductDetail'
+        '404':
+          description: Product not found.
+
+  /categories/tree:
+    get:
+      operationId: getCategoryTree
+      summary: Get full category tree
+      tags:
+        - Categories
+      responses:
+        '200':
+          description: Category tree returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CategoryTree'
+
+  /products:
+    get:
+      operationId: searchProductsByCategory
+      summary: Search products by category
+      tags:
+        - Products
+      parameters:
+        - name: categoryId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: size
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Products page returned.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProductPage'
+
+components:
+  schemas:
+    ProductDetail:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        categoryId:
+          type: string
+          format: uuid
+        status:
+          type: string
+
+    CategoryTree:
+      type: object
+      properties:
+        categories:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+                format: uuid
+              name:
+                type: string
+              parentId:
+                type: string
+                format: uuid
+
+    ProductPage:
+      type: object
+      properties:
+        content:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProductDetail'
+        totalElements:
+          type: integer
+        totalPages:
+          type: integer

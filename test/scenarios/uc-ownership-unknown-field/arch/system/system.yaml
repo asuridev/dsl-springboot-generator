@@ -1,0 +1,31 @@
+# ─── Test scenario: query-cacheable ───────────────────────────────────────────
+# Covers:
+#   - cacheable block on query use cases
+#   - cacheable.keyFields → @Cacheable(key = "#query.field") SpEL
+#   - cacheable.cacheWhen → @Cacheable(condition = "#query.field != null")
+#   - cacheable with only ttl (no keyFields, no cacheWhen)
+#   - CacheConfig.java generated with per-cache TTL via RedisCacheManager
+#   - redis.yaml generated (cacheEnabled path, no idempotency UC)
+#   - spring-boot-starter-data-redis dependency added to build.gradle
+#   - org.springframework.cache.annotation.Cacheable imported in handlers
+# ──────────────────────────────────────────────────────────────────────────────
+system:
+  name: test-query-cacheable-system
+  description: Validates declarative query caching with Redis backend.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages product catalog with cacheable queries.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+      - name: Category
+        root: Category
+        entities: []
+
+infrastructure:
+  database:
+    engine: postgresql

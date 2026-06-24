@@ -1,0 +1,5 @@
+{
+  "description": "A multipart contentTypes entry that is not a clean MIME type would be interpolated raw into a generated Java string literal (breaking it / injecting code). The YAML reader must reject it early.",
+  "expectFailure": true,
+  "expectedErrorPattern": "is not a valid MIME type"
+}

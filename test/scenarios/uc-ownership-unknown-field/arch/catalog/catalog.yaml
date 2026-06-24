@@ -1,0 +1,110 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: true
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+      - name: categoryId
+        type: Uuid
+      - name: status
+        type: String(20)
+    domainMethods:
+      - name: create
+        description: Creates a new product.
+        returns: Product
+
+  - name: Category
+    root: Category
+    auditable: true
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(100)
+      - name: parentId
+        type: Uuid
+    domainMethods:
+      - name: create
+        description: Creates a new category.
+        returns: Category
+
+useCases:
+
+  - id: UC-CAT-010
+    name: GetProductById
+    type: query
+    actor: customer
+    trigger:
+      kind: http
+      operationId: getProductById
+    aggregate: Product
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+    returns: ProductDetail
+    notFoundError: PRODUCT_NOT_FOUND
+    authorization:
+      ownership:
+        field: ownerId
+        claim: userId
+    cacheable:
+      ttl: PT5M
+      keyFields: [productId]
+
+  - id: UC-CAT-020
+    name: GetCategoryTree
+    type: query
+    actor: customer
+    trigger:
+      kind: http
+      operationId: getCategoryTree
+    aggregate: Category
+    input: []
+    returns: CategoryTree
+    cacheable:
+      ttl: PT1H
+
+  - id: UC-CAT-030
+    name: SearchProductsByCategory
+    type: query
+    actor: customer
+    trigger:
+      kind: http
+      operationId: searchProductsByCategory
+    aggregate: Product
+    input:
+      - name: categoryId
+        type: Uuid
+        source: query
+        required: false
+      - name: page
+        type: Integer
+        source: query
+        required: false
+      - name: size
+        type: Integer
+        source: query
+        required: false
+    returns: ProductPage
+    cacheable:
+      ttl: PT3M
+      keyFields: [categoryId, page, size]
+      cacheWhen: [categoryId]
+
+errors:
+  - code: PRODUCT_NOT_FOUND
+    httpStatus: 404
+    message: "Product not found."

@@ -1,0 +1,53 @@
+bc: catalog
+version: "1.0.0"
+
+valueObjects:
+  - name: Money
+    description: Non-canonical Money shape — uses 'value'/'currencyCode' instead of 'amount'/'currency'.
+    properties:
+      - name: value
+        type: Decimal
+        precision: 19
+        scale: 4
+        required: true
+      - name: currencyCode
+        type: String(3)
+        required: true
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: price
+        type: Money
+
+useCases:
+  - id: UC-001
+    name: CreateProduct
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: createProduct
+    input:
+      - name: id
+        type: Uuid
+        source: body
+        required: true
+    implementation: scaffold
+
+errors:
+  - code: PRODUCT_NOT_FOUND
+    httpStatus: 404
+    description: Product not found.
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: save
+        signature: "save(Product): Product"

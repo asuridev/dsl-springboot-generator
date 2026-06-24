@@ -1,0 +1,5 @@
+{
+  "description": "authorization.ownership.field must reference a real aggregate property; an unknown field would generate a getter call that does not compile. The YAML reader must reject it early.",
+  "expectFailure": true,
+  "expectedErrorPattern": "authorization.ownership.field references"
+}

@@ -1,0 +1,5 @@
+{
+  "description": "A cacheable.keyFields entry that does not match any declared input means the cache key is built from a non-existent field; the YAML reader must reject it early.",
+  "expectFailure": true,
+  "expectedErrorPattern": "does not match any input[] field name"
+}

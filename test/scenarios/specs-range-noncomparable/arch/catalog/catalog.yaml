@@ -1,0 +1,46 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: true
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+      - name: price
+        type: Decimal
+        precision: 12
+        scale: 2
+      - name: stock
+        type: Integer
+
+useCases:
+
+  - id: UC-CAT-010
+    name: SearchProductsByPriceRange
+    type: query
+    actor: customer
+    trigger:
+      kind: http
+      operationId: searchProductsByPriceRange
+    aggregate: Product
+    pagination:
+      defaultSize: 20
+    input:
+      - name: priceRange
+        type: Range[Boolean]
+        source: query
+        required: false
+    returns: Page[ProductResponse]
+    implementation: scaffold
+
+repositories:
+  - aggregate: Product
+    queryMethods: []
+
+errors: []

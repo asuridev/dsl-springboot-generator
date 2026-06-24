@@ -42,7 +42,29 @@
     "contains": [
       "import org.springframework.security.access.AccessDeniedException",
       "onAccessDeniedException",
-      "HttpStatus.FORBIDDEN"
+      "HttpStatus.FORBIDDEN",
+      "import org.springframework.web.HttpRequestMethodNotSupportedException",
+      "@ExceptionHandler(HttpRequestMethodNotSupportedException.class)",
+      "HttpStatus.METHOD_NOT_ALLOWED"
+    ]
+  },
+  "keycloak/realm-export.json": {
+    "contains": [
+      "\"name\": \"ADMIN\"",
+      "\"name\": \"CATALOG_MANAGER\"",
+      "\"name\": \"CUSTOMER\""
+    ],
+    "notContains": [
+      "ROLE_ADMIN",
+      "ROLE_CATALOG_MANAGER",
+      "ROLE_ROLE_"
+    ]
+  },
+  "build.gradle": {
+    "contains": [
+      "tasks.withType(JavaCompile)",
+      "--add-opens",
+      "jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED"
     ]
   },
   "src/main/java/com/test/shared/infrastructure/security/JwtAuthConverter.java": {

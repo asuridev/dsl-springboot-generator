@@ -4,6 +4,7 @@ const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPackagePath } = require('../utils/naming');
 const { mapType, isListType, getListElementType, isCanonicalSharedVo } = require('../utils/type-mapper');
+const { escapeJavaString } = require('../utils/java');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -33,8 +34,10 @@ function pascal(name) {
   return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
+// Escapes a string for embedding inside an existing Java string literal.
+// Delegates to the shared helper so newlines/tabs are escaped too (defense in depth).
 function quoteJava(str) {
-  return String(str).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return escapeJavaString(str);
 }
 
 /**

@@ -1,0 +1,25 @@
+# ─── Test scenario: specs-range-filter ────────────────────────────────────────
+# Covers:
+#   - [G8] Query UC with Range[Decimal] input generates {Aggregate}Specs.java
+#   - {Aggregate}Specs contains a by{Field}() Specification builder
+#   - JpaRepositoryInterface extends JpaSpecificationExecutor<{Aggregate}Jpa>
+#   - JpaSpecificationExecutor import is added to repository interface
+#   - Query handler body falls back to TODO/UnsupportedOperationException
+# ──────────────────────────────────────────────────────────────────────────────
+system:
+  name: test-specs-range-filter-system
+  description: Validates Range[T] Specification builder and JpaSpecificationExecutor wiring.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products with range-filtered queries.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: postgresql

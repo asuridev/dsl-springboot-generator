@@ -5,6 +5,7 @@ const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toCamelCase, toPackagePath } = require('../utils/naming');
 const { mapType, resolveCanonicalReturnType } = require('../utils/type-mapper');
 const { buildOpenApiOperationMap } = require('../utils/openapi-contract');
+const { escapeJavaString } = require('../utils/java');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -955,10 +956,10 @@ function buildMethodStrings(op) {
   // [G7] Sortable whitelist guard — runs before dispatch when pagination.sortable[] declared.
   let sortableGuard = '';
   if (op.sortableFields && op.sortableFields.length > 0) {
-    const setLiteral = op.sortableFields.map((s) => `"${s}"`).join(', ');
+    const setLiteral = op.sortableFields.map((s) => `"${escapeJavaString(s)}"`).join(', ');
     sortableGuard =
       `if (!java.util.Set.of(${setLiteral}).contains(sortBy)) {\n` +
-      `            throw new BadRequestException("sortBy must be one of: ${op.sortableFields.join(', ')}");\n` +
+      `            throw new BadRequestException("sortBy must be one of: ${escapeJavaString(op.sortableFields.join(', '))}");\n` +
       `        }`;
   }
 
@@ -966,25 +967,26 @@ function buildMethodStrings(op) {
   const multipartGuards = [];
   if (op.multipartInputsList && op.multipartInputsList.length > 0) {
     for (const mp of op.multipartInputsList) {
+      const partName = escapeJavaString(mp.partName);
       if (mp.required) {
         multipartGuards.push(
           `if (${mp.name} == null || ${mp.name}.isEmpty()) {\n` +
-          `            throw new BadRequestException("${mp.partName}: file part is required");\n` +
+          `            throw new BadRequestException("${partName}: file part is required");\n` +
           `        }`
         );
       }
       if (mp.maxSizeBytes != null) {
         multipartGuards.push(
           `if (${mp.name} != null && ${mp.name}.getSize() > ${mp.maxSizeBytes}L) {\n` +
-          `            throw new BadRequestException("${mp.partName}: file exceeds max size ${mp.maxSizeLabel}");\n` +
+          `            throw new BadRequestException("${partName}: file exceeds max size ${escapeJavaString(mp.maxSizeLabel)}");\n` +
           `        }`
         );
       }
       if (mp.contentTypes && mp.contentTypes.length > 0) {
-        const set = mp.contentTypes.map((c) => `"${c}"`).join(', ');
+        const set = mp.contentTypes.map((c) => `"${escapeJavaString(c)}"`).join(', ');
         multipartGuards.push(
           `if (${mp.name} != null && !${mp.name}.isEmpty() && !java.util.Set.of(${set}).contains(${mp.name}.getContentType())) {\n` +
-          `            throw new BadRequestException("${mp.partName}: unsupported content type — allowed: ${mp.contentTypes.join(', ')}");\n` +
+          `            throw new BadRequestException("${partName}: unsupported content type — allowed: ${escapeJavaString(mp.contentTypes.join(', '))}");\n` +
           `        }`
         );
       }
