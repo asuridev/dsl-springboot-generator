@@ -1,0 +1,25 @@
+package com.test.shared.domain.customExceptions;
+
+public class ValidationException extends DomainException {
+
+    private final Integer rowNumber;
+
+    public ValidationException(String message) {
+        super(message);
+        this.rowNumber = null;
+    }
+
+    public ValidationException(String message, Throwable cause) {
+        super(message, cause);
+        this.rowNumber = null;
+    }
+
+    public ValidationException(Integer rowNumber, String message) {
+        super(message);
+        this.rowNumber = rowNumber;
+    }
+
+    public Integer getRowNumber() {
+        return rowNumber;
+    }
+}

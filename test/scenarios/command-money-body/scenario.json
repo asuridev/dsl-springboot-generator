@@ -1,0 +1,5 @@
+{
+  "description": "Canonical Money (not declared in valueObjects[]) used as a source: body command input must be interposed as a MoneyRequest DTO field (@Valid), not bind the domain Money VO directly to the wire (R3). Verifies MoneyRequest.java is generated and the command field type is MoneyRequest.",
+  "expectFailure": false,
+  "compileGeneratedJava": true
+}

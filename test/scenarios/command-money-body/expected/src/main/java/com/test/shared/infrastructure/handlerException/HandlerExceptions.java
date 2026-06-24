@@ -15,7 +15,6 @@ import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
@@ -191,23 +190,6 @@ public class HandlerExceptions {
             ex.getDetails()
         );
         return ResponseEntity.status(http).body(body);
-    }
-
-    // ── Optimistic locking ─────────────────────────────────────────
-    // [R1] Aggregates declared `concurrencyControl: optimistic` carry a @Version
-    // column. A concurrent update raises ObjectOptimisticLockingFailureException
-    // (a subclass of OptimisticLockingFailureException). Map it to 409 Conflict so
-    // the client gets an actionable signal instead of a generic 500.
-
-    @ResponseStatus(HttpStatus.CONFLICT)
-    @ExceptionHandler(OptimisticLockingFailureException.class)
-    @ResponseBody
-    public ErrorResponse onOptimisticLockingFailure(OptimisticLockingFailureException ex) {
-        return new ErrorResponse(
-            HttpStatus.CONFLICT.value(),
-            "Conflict",
-            "The resource was modified concurrently — retry the operation"
-        );
     }
 
     // ── Catch-all ──────────────────────────────────────────────────

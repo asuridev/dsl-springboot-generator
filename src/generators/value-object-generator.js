@@ -5,6 +5,7 @@ const { renderAndWrite } = require('../utils/template-engine');
 const { toPackagePath } = require('../utils/naming');
 const { mapType, isListType, getListElementType, isCanonicalSharedVo } = require('../utils/type-mapper');
 const { escapeJavaString } = require('../utils/java');
+const { CANONICAL_MONEY_VO } = require('../utils/canonical-vo');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -190,14 +191,7 @@ function resolveDomainImport(typeName, bcYaml, config) {
 // incondicional. Cuando el diseñador NO lo declara, este generador debe emitir la
 // clase para que ese import resuelva. Forma confirmada por el código consumidor
 // (p. ej. ProductJpaMapper: `new Money(BigDecimal, String)`, getAmount()/getCurrency()).
-const CANONICAL_MONEY_VO = {
-  name: 'Money',
-  description: 'Monetary amount with currency (canonical value object).',
-  properties: [
-    { name: 'amount', type: 'Decimal', precision: 19, scale: 4, required: true },
-    { name: 'currency', type: 'String(3)', required: true },
-  ],
-};
+// CANONICAL_MONEY_VO is the single source of truth in ../utils/canonical-vo.js.
 
 // Wrappers estructurales + String(n), reutilizando el patrón de type-resolution-validator.
 const MONEY_WRAPPER_RE = /^(List|Page|Slice|Stream|Set|Optional|Range)\[(.+)\]$/;

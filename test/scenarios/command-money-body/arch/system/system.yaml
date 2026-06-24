@@ -1,0 +1,17 @@
+system:
+  name: test-command-money-body
+  description: Canonical Money as a command body input.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Product catalog with a money-valued create command.
+    aggregates:
+      - name: Product
+        root: Product
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

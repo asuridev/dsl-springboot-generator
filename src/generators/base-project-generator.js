@@ -623,10 +623,17 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
 
   const handlerDir = path.join(javaMainDir, 'shared', 'infrastructure', 'handlerException');
 
+  // [R1] Only aggregates with concurrencyControl: optimistic emit a @Version field,
+  // so OptimisticLockingFailureException can only be thrown by those projects. Gate the
+  // dedicated 409 handler on their presence to avoid touching every project's handler.
+  const optimisticLockingEnabled = (allBcYamls || []).some(
+    (bc) => (bc.aggregates || []).some((a) => a.concurrencyControl === 'optimistic')
+  );
+
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'shared', 'handlerException', 'HandlerExceptions.java.ejs'),
     path.join(handlerDir, 'HandlerExceptions.java'),
-    { packageName, authServerEnabled, constraintErrorMap: buildConstraintErrorMap(packageName, allBcYamls), infrastructureErrorMap: buildInfrastructureErrorMap(packageName, allBcYamls) }
+    { packageName, authServerEnabled, optimisticLockingEnabled, constraintErrorMap: buildConstraintErrorMap(packageName, allBcYamls), infrastructureErrorMap: buildInfrastructureErrorMap(packageName, allBcYamls) }
   );
 
   // ── Shared: CQRS interfaces ───────────────────────────────────────────────

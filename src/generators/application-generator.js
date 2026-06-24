@@ -6,6 +6,7 @@ const { toPascalCase, toCamelCase, toPackagePath } = require('../utils/naming');
 const { mapType, resolveCanonicalReturnType } = require('../utils/type-mapper');
 const { mapDslValidations, mergeAnnotations } = require('../utils/validation-mapper');
 const { mapRule } = require('../utils/domain-rule-mapper');
+const { resolveVoDefinition } = require('../utils/canonical-vo');
 const { getOutboundHttpBcNames } = require('./outbound-http-generator');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
@@ -745,7 +746,7 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
     const listInnerMatch = /^List\[(.+)\]$/.exec(rawType);
     const listInnerVoName = listInnerMatch ? listInnerMatch[1] : null;
     const listInnerVoDef = listInnerVoName
-      ? (bcYaml && bcYaml.valueObjects || []).find((v) => v.name === listInnerVoName)
+      ? resolveVoDefinition(listInnerVoName, bcYaml)
       : null;
 
     if (!isEventTriggered && listInnerVoDef && (listInnerVoDef.properties || []).length > 1) {
@@ -763,8 +764,11 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
       voRequestsNeeded.add(listInnerVoName);
     } else {
 
-    // Look up VO definition for any type that matches a declared valueObject
-    const voDefinition = (bcYaml && bcYaml.valueObjects || []).find((v) => v.name === rawType);
+    // Look up VO definition for any type that matches a declared valueObject, or
+    // a canonical auto-emitted VO (e.g. Money). [R3] Routing canonical Money here
+    // makes a `type: Money` body input become a MoneyRequest DTO with @Valid instead
+    // of binding the domain VO directly to the wire.
+    const voDefinition = resolveVoDefinition(rawType, bcYaml);
 
     if (!isEventTriggered && voDefinition && (voDefinition.properties || []).length > 1) {
       // ── Multi-property VO (e.g. Money) — emit one nested {VoName}Request field with @Valid ──
@@ -1939,7 +1943,9 @@ function buildVoRequestFields(voDefinition) {
  * Called once per unique multi-property VO used as a command input.
  */
 async function generateVoRequestRecord(voName, bcYaml, packageName, moduleName, bcDir) {
-  const voDefinition = (bcYaml.valueObjects || []).find((v) => v.name === voName);
+  // [R3] Fall back to a canonical VO (e.g. Money) when not declared in valueObjects[],
+  // so the MoneyRequest record is generated for canonical Money body inputs.
+  const voDefinition = resolveVoDefinition(voName, bcYaml);
   if (!voDefinition) return;
 
   const { fields, imports } = buildVoRequestFields(voDefinition);

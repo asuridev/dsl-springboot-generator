@@ -23,7 +23,10 @@ La barrida de compilación sobre los 106 escenarios dio **101 pasan / 5 fallan**
 
 Hallazgo transversal importante: **ninguno de los 5 escenarios que fallan hace opt-in al compile gate** (`scenario.json: compileGeneratedJava: true`), así que `npm test` (que solo hace diff de golden files) **no detecta** estas roturas. Son regresiones latentes — confirma el weak-point #1 de `mvp-robustez-generador.md`.
 
-> **Estado (2026-06-24, post-auditoría):** B1 y B2 **ya fueron corregidos** en esta misma sesión (fixes mínimos en `aggregate-generator.js` y `application-generator.js`), se regeneraron los golden files de los 5 escenarios y se activó su compile gate (`compileGeneratedJava: true`) para evitar regresiones. La suite completa pasa **106/106** (antes 101/106). Los gaps de RUN (R1–R4) siguen pendientes como hardening futuro.
+> **Estado (2026-06-24, post-auditoría):**
+> - **BUILD:** B1 y B2 **corregidos** (fixes mínimos en `aggregate-generator.js` y `application-generator.js`), golden files regenerados y compile gate activado en los 5 escenarios.
+> - **Suite final: 107/107** (106 originales + escenario nuevo `command-money-body` de R3), 0 regresiones.
+> - **RUN:** **R1 corregido** (`@ExceptionHandler(OptimisticLockingFailureException)`→409, gateado). **R3 corregido** (Money canónico se interpone como `MoneyRequest` DTO; escenario nuevo `command-money-body`). **R2 verificado como NO-issue** en Hibernate 6.6 (un `@DataJpaTest` que persiste un aggregate con hijos pasa — Hibernate incluye la FK en el INSERT; sin cambio de código). **R4 ya estaba cubierto** por `validateBlockingUseCaseFallbacks` (`bc-yaml-reader.js:2434`), que falla el build ante `implementation: full` + `returns`; el `return null` es código muerto.
 
 ### Gaps de BUILD (compila ⇒ falla)
 
@@ -34,14 +37,14 @@ Hallazgo transversal importante: **ninguno de los 5 escenarios que fallan hace o
 
 ### Gaps de RUN (compila pero falla al arrancar/ejecutar)
 
-`compileJava` no los detecta; es la razón por la que el pedido incluía "o realizar el run". Cuatro, ninguno cubierto por un validador:
+`compileJava` no los detecta; es la razón por la que el pedido incluía "o realizar el run". Cuatro encontrados; estado tras la implementación de esta sesión:
 
-| # | Gap | Severidad | Combinación YAML que lo dispara | Validador |
-|---|-----|-----------|---------------------------------|-----------|
-| R1 | Conflicto de bloqueo optimista devuelve **500** en vez de **409** | Media | `aggregates[].concurrencyControl: optimistic` | No existe |
-| R2 | `@OneToMany` unidireccional + `@JoinColumn(nullable=false)` → posible violación NOT NULL al insertar hijos | Media (verificar) | child entity `relationship: composition`, `cardinality: oneToMany` | No existe |
-| R3 | Value Object de dominio (p.ej. `Money`) usado directo como campo `@RequestBody` | Baja-Media | input `source: body` con `type:` = un VO de dominio | No existe |
-| R4 | Handler con `implementation: full` + `returns` emite `return null` | Baja | UC trivial con `returns` declarado | No existe (weak-point #4 del MVP) |
+| # | Gap | Severidad | Combinación YAML que lo dispara | Estado |
+|---|-----|-----------|---------------------------------|--------|
+| R1 | Conflicto de bloqueo optimista devolvía **500** en vez de **409** | Media | `aggregates[].concurrencyControl: optimistic` | **Corregido** (handler 409 gateado) |
+| R2 | `@OneToMany` unidireccional + `@JoinColumn(nullable=false)` → posible violación NOT NULL al insertar hijos | Media (a verificar) | child entity `relationship: composition`, `cardinality: oneToMany` | **No-issue** en Hibernate 6.6 (test de persistencia pasa) |
+| R3 | Value Object de dominio (p.ej. `Money`) usado directo como campo `@RequestBody` | Baja-Media | input `source: body` con `type:` = un VO de dominio | **Corregido** (interposición `MoneyRequest`) |
+| R4 | Handler con `implementation: full` + `returns` emitía `return null` | Baja | UC trivial con `returns` declarado | **Ya cubierto** (fail-fast del reader) |
 
 Varias categorías de riesgo **están correctamente cubiertas** (se verificaron y NO son gaps): wiring de beans, inyección cross-aggregate, identidad temprana JPA, soft-delete, gating de cache provider, e `INT-025`. Ver Sección C.
 
@@ -116,27 +119,28 @@ Command idempotente (`idempotency.storage: cache`) + query `cacheable` (ambos so
 - **Evidencia:** `templates/shared/handlerException/HandlerExceptions.java.ejs` mapea `DataIntegrityViolationException`→409, `ConflictException`→409, `InvalidStateTransitionException`→409, validación→422, etc., pero **no tiene `@ExceptionHandler` para `OptimisticLockingFailureException` / `ObjectOptimisticLockingFailureException`**.
 - **Efecto en run:** bajo contención concurrente, Hibernate lanza `ObjectOptimisticLockingFailureException` (por el `@Version` que sí se genera en `OrderJpa`), que cae al handler genérico → **HTTP 500** en lugar de **409 Conflict**. El diseño declaró `optimistic` justamente para manejar concurrencia, pero el cliente no recibe una señal accionable.
 - **Cómo confirmarlo:** dos updates concurrentes del mismo aggregate con `@Version`; observar 500.
-- **Acción sugerida (hardening futuro):** agregar `@ExceptionHandler(OptimisticLockingFailureException.class)` → 409 en el template, condicionado a que algún aggregate use `concurrencyControl: optimistic`.
+- **✅ Resuelto:** se agregó `@ExceptionHandler(OptimisticLockingFailureException.class)` → 409 en `HandlerExceptions.java.ejs`, gateado por la flag `optimisticLockingEnabled` (computada en `base-project-generator.js` a partir de `concurrencyControl: optimistic`) para no tocar el handler de proyectos sin bloqueo optimista. Golden actualizado: `domain-aggregate-optimistic-lock`.
 
 #### R2 — `@OneToMany` unidireccional con `@JoinColumn(nullable=false)` (severidad media — verificar)
 - **Disparador:** child entity `relationship: composition`, `cardinality: oneToMany`.
 - **Evidencia:** `OrderJpa.orderLines` se genera como `@OneToMany(cascade=ALL, orphanRemoval=true, fetch=LAZY)` + `@JoinColumn(name="order_id", nullable=false)` **sin `mappedBy`** (unidireccional). El hijo `OrderLineJpa` no tiene la columna `order_id` como atributo propio. Ver `templates/infrastructure/JpaEntity.java.ejs` (líneas ~51-64).
 - **Efecto en run (potencial):** patrón clásico de Hibernate para `@OneToMany` unidireccional con `@JoinColumn`: insertar el hijo con FK nula y luego un `UPDATE` para setear la FK. Con `nullable=false` el `INSERT` inicial puede violar el NOT NULL → `PropertyValueException`/violación de constraint al persistir un aggregate con hijos. El comportamiento exacto depende de la versión de Hibernate (Spring Boot 3.4.5 = Hibernate 6.6), por eso se marca **a verificar**, no como bug confirmado.
 - **Cómo confirmarlo:** test de persistencia (`@DataJpaTest` o integración con Postgres/H2) que guarde un `Order` con ≥1 `OrderLine`.
-- **Acción sugerida (hardening futuro):** mapeo bidireccional (`mappedBy` + FK como atributo `@Column` del hijo, o `@JoinColumn(..., insertable/updatable)` adecuado), o documentar/forzar la FK en el INSERT.
+- **✅ Verificado como NO-issue:** se generó el proyecto `domain-aggregate-child-entities` y se corrió un `@DataJpaTest` (H2, `ddl-auto=create-drop`) que persiste un `Order` con una `OrderLine` y la recarga → **pasa**. Hibernate 6.6 incluye la FK `order_id` en el `INSERT` del hijo (no hace insert-then-update), así que la violación NOT NULL **no ocurre**. PostgreSQL se comporta igual (ambos chequean NOT NULL al insertar). Sin cambio de código.
 
 #### R3 — Value Object de dominio como campo `@RequestBody` (severidad baja-media)
 - **Disparador:** un `useCases[].input` con `source: body` cuyo `type` es un VO de dominio (en Combo 1: `totalAmount: Money`).
 - **Evidencia:** `CreateOrderCommand` es un `record` con `@NotNull Money totalAmount`, y el controller hace `@RequestBody CreateOrderCommand command`. `Money` (`domain/valueobject/Money.java`) es `final class` con **un solo constructor `Money(BigDecimal, String)`, sin `@JsonCreator` ni constructor vacío**.
 - **Efecto en run:** la deserialización JSON→`Money` **depende** de que el plugin de Spring Boot compile con `-parameters` (lo hace por defecto) y del `ParameterNamesModule` (auto-registrado) para detectar el creador implícito por nombres `amount`/`currency`. Funciona en el happy path, pero: (a) **acopla el contrato de wire al VO de dominio**; (b) las validaciones estrictas del constructor (`setScale(4, UNNECESSARY)`, `currency.length()>3`) se ejecutan **durante** la deserialización → un body mal formado produce un **400 genérico** (`HttpMessageNotReadableException`) en vez de un error de validación estructurado.
 - **Comparación:** para un `Uuid` body el generador usa `String` en el command (tipo de wire), pero para `Money` usa el VO de dominio directo — inconsistencia de criterio.
-- **Acción sugerida (hardening futuro):** interponer un request DTO (patrón `VoRequest`) para inputs `source: body` de tipo VO, **o** un validador que advierta cuando un body input es un VO de dominio.
+- **Causa raíz precisa:** la maquinaria `VoRequest` DTO **ya existía** (`buildCommandFields` emite `{Vo}Request` para VO multi-propiedad declarado en `valueObjects[]`), pero el `Money` **canónico** (usado por nombre sin declararlo) no se resolvía como VO → caía a bindear el `Money` de dominio.
+- **✅ Resuelto:** nuevo helper `src/utils/canonical-vo.js` (`resolveVoDefinition`) que resuelve VOs declarados **y** canónicos (Money). `buildCommandFields` y `generateVoRequestRecord` lo usan, de modo que un `type: Money, source: body` ahora se interpone como `MoneyRequest` (`record MoneyRequest(BigDecimal amount, String currency)`, Jackson-native) con `@Valid`, sin acoplar el dominio al wire. Escenario nuevo `command-money-body` (con compile gate) bloquea la regresión. Sin churn en goldens existentes (ningún escenario commiteado usaba Money canónico como body input).
 
 #### R4 — `return null` en `implementation: full` + `returns` (severidad baja)
 - **Disparador:** un UC trivial (`implementation: full`) que además declara `returns`.
 - **Evidencia:** `src/generators/application-generator.js` (~línea 2290) agrega `// TODO ... return null;` cuando el cuerpo autogenerado no produce un return. Coincide con el weak-point #4 de `mvp-robustez-generador.md`.
 - **Efecto en run:** compila, pero el handler devuelve `null` → el controller responde body `null` o NPE aguas abajo si se desreferencia.
-- **Acción sugerida (hardening futuro):** clasificar este `return null` como TODO **bloqueante** en `--strict` (la política ya propuesta en el roadmap, Fase 2).
+- **✅ Ya cubierto (no requiere fix):** `validateBlockingUseCaseFallbacks` (`bc-yaml-reader.js:2434`) hace `fail()` ante cualquier command `implementation: full` + `returns` (salvo bulk/jobTracking, que retornan `BulkResult`/`JobReference` de forma determinista). El `return null` de `application-generator.js:2293` es **inalcanzable** en ese caso (el `fail()` del reader es duro, no diagnóstico). El escenario `command-full-return-unmapped` (`expectFailure`) lo prueba. Se deja el código tal cual para no tocar la ruta de bulk/jobTracking.
 
 ### Categorías verificadas que NO son gaps (cubiertas)
 
