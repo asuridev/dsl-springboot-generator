@@ -1,4 +1,5 @@
 {
   "description": "Kafka consumer with List[Uuid] and List[DateTime] fields in consumed event payload. Validates that KafkaListener imports java.util.UUID and java.time.Instant for List inner types (GAP-2 fix).",
-  "expectFailure": false
+  "expectFailure": false,
+  "compileGeneratedJava": true
 }

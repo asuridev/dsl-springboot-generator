@@ -3,6 +3,7 @@ package com.test.warehouse.domain.aggregate;
 import com.test.shared.domain.DomainEvent;
 import com.test.shared.domain.EventMetadata;
 import com.test.warehouse.domain.events.ShipmentDispatchedEvent;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;

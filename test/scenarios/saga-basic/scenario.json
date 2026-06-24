@@ -1,4 +1,5 @@
 {
   "description": "Happy path: choreographed saga with RabbitMQ. orders publishes OrderPlaced (trigger), inventory consumes it and publishes StockReserved (step 1 success). Verifies SagaStep annotation, CorrelationContext, CorrelationFilter and CheckoutSagaSteps constants.",
-  "expectFailure": false
+  "expectFailure": false,
+  "compileGeneratedJava": true
 }

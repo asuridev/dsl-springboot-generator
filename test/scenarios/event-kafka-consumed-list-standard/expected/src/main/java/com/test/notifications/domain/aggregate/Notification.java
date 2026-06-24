@@ -1,5 +1,6 @@
 package com.test.notifications.domain.aggregate;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 

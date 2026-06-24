@@ -720,7 +720,19 @@ function buildImports(aggregate, bcYaml, config, businessMethods, publishedEvent
       if (listInnerMatch) {
         imports.add('import java.util.List;');
         const inner = listInnerMatch[1];
-        if (isValueObjectType(inner, bcYaml)) {
+        // `inner` is the already-mapped Java type (e.g. List[DateTime] → Instant),
+        // so resolve stdlib imports by Java type — not via mapType, which only knows
+        // DSL names. Without this, List[DateTime] compiles to List<Instant> with no
+        // `import java.time.Instant;` → cannot find symbol.
+        if (inner === 'Instant') {
+          imports.add('import java.time.Instant;');
+        } else if (inner === 'URI') {
+          imports.add('import java.net.URI;');
+        } else if (inner === 'BigDecimal') {
+          imports.add('import java.math.BigDecimal;');
+        } else if (inner === 'LocalDate') {
+          imports.add('import java.time.LocalDate;');
+        } else if (isValueObjectType(inner, bcYaml)) {
           imports.add(`import ${pkg}.${bc}.domain.valueobject.${inner};`);
         } else if ((bcYaml.eventDtos || []).some((d) => d.name === inner)) {
           imports.add(`import ${pkg}.${bc}.application.dtos.incoming.${inner};`);

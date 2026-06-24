@@ -1,4 +1,5 @@
 {
   "description": "Saga with Kafka broker and outbox enabled. Verifies @SagaStep injected in KafkaListener and DomainEventHandler (outbox mode), and CorrelationContext propagation.",
-  "expectFailure": false
+  "expectFailure": false,
+  "compileGeneratedJava": true
 }

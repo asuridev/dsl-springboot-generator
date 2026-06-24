@@ -1,4 +1,5 @@
 {
   "description": "Saga with compensation: CheckoutSaga has 2 steps. Step 1 (inventory) can compensate (StockReleased). Step 2 (payments) can fail (PaymentFailed). Verifies COMPENSATION role constant generation and FAILURE role annotation injection.",
-  "expectFailure": false
+  "expectFailure": false,
+  "compileGeneratedJava": true
 }

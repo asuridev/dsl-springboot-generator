@@ -709,7 +709,11 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
   // mirror the listener fallback and use the consumed event payload. If neither is
   // declared, the command record stays empty and the listener calls new XyzCommand().
   if (isEventTriggered && !commandInputs.some((i) => i.source !== 'authContext')) {
-    const consumedEvent = (bcYaml?.domainEvents?.consumed || []).find((event) => event.name === uc.trigger.consumes);
+    // bc-yaml-reader normalises trigger.consumes → trigger.event, so trigger.event is
+    // the canonical (always-populated) key. Reading trigger.consumes here missed the
+    // consumed event whenever the YAML used `event:` (e.g. sagas), yielding an empty
+    // command record while the listener still constructs it with the payload fields.
+    const consumedEvent = (bcYaml?.domainEvents?.consumed || []).find((event) => event.name === uc.trigger.event);
     commandInputs = consumedEvent?.payload || [];
     if (commandInputs.length === 0) {
       return { fields, imports: [...imports].sort(), voRequestsNeeded };
