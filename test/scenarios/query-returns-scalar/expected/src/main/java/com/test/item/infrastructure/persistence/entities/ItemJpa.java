@@ -2,6 +2,7 @@ package com.test.item.infrastructure.persistence.entities;
 
 import jakarta.persistence.*;
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.UUID;
 import lombok.*;
 
@@ -26,4 +27,7 @@ public class ItemJpa {
 
     @Column(name = "price", precision = 10, scale = 2)
     private BigDecimal price;
+
+    @Column(name = "created_at")
+    private Instant createdAt;
 }

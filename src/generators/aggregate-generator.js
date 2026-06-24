@@ -507,8 +507,26 @@ function computeMethodBody(uc, sig, aggregate, bcEnums, bcName, publishedEvents,
         if (ep.readOnly && ep.defaultValue != null) return false;
         return true;
       });
-      // Use method params (which are in scope) as ctor args, not entity prop names (GAP-AGG-003)
-      const ctorArgs = params.map((p) => p.name).join(', ');
+      // Build ctor args by iterating the child entity's creation params (their
+      // declaration order matches the entity constructor's parameter order), mapping
+      // each to an in-scope method param of the same name. Creation fields the method
+      // does not supply get a `null /* TODO */` placeholder + a warn — mirroring the
+      // static-factory pattern below — instead of silently emitting an arity-mismatched
+      // call that fails to compile (GAP-AGG-003).
+      const methodParamNames = new Set(params.map((p) => p.name));
+      const unmappedCreationFields = [];
+      const ctorArgs = entityCreationParams.map((ep) => {
+        if (methodParamNames.has(ep.name)) return ep.name;
+        unmappedCreationFields.push(ep.name);
+        return `null /* TODO: compute ${ep.name} */`;
+      }).join(', ');
+      if (unmappedCreationFields.length > 0) {
+        logger.warn(
+          `[aggregate=${aggregate.name}] Method "${methodName}" does not supply child entity ` +
+          `"${entity.name}" creation field(s): ${unmappedCreationFields.join(', ')}. Emitted null ` +
+          `placeholders; declare them as method params or mark the field readOnly + defaultValue.`
+        );
+      }
       let body = isOneToOne
         ? `this.${fieldName} = new ${entity.name}(${ctorArgs});`
         : `this.${fieldName}.add(new ${entity.name}(${ctorArgs}));`;

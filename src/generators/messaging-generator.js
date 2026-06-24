@@ -584,6 +584,9 @@ async function generateRabbitListener(consumedEvent, packageName, moduleName, li
       eventName: consumedEvent.name,
       fields,
       commandFields,
+      // Early-identity create: the target command's first component is an @JsonIgnore
+      // UUID id (added unconditionally for method:create). The listener must supply it.
+      hasEarlyIdentityId: consumedEvent.hasEarlyIdentityId === true,
       consumerIdempotencyEnabled,
       sagasEnabled,
       sagaSteps,
@@ -792,6 +795,8 @@ async function generateKafkaListener(consumedEvent, packageName, moduleName, lis
       useCase:  consumedEvent.useCase  || consumedEvent.command,
       eventName: consumedEvent.name,
       fields,
+      // Early-identity create: listener must supply the command's leading @JsonIgnore UUID id.
+      hasEarlyIdentityId: consumedEvent.hasEarlyIdentityId === true,
       consumerIdempotencyEnabled,
       sagasEnabled,
       sagaSteps,
@@ -882,6 +887,7 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
         channel:       ev.channel || null,
         producer:      ev.channel ? ev.channel.split('.')[0] : (ev.sourceBc || 'unknown'),
         command:       uc.name,
+        hasEarlyIdentityId: uc.method === 'create',
         useCase:       uc.id,
         queueKey,
         payload:       ev.payload,
@@ -938,6 +944,7 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
         channel:       ev.channel || null,
         producer:      ev.channel ? ev.channel.split('.')[0] : (ev.sourceBc || 'unknown'),
         command:       uc.name,
+        hasEarlyIdentityId: uc.method === 'create',
         useCase:       uc.id,
         queueKey,
         payload:       commandPayload,
@@ -953,6 +960,7 @@ async function generateMessagingLayer(bcYaml, asyncApiDoc, config, outputDir, re
       channel:       ev.channel || null,
       producer:      ev.channel ? ev.channel.split('.')[0] : (ev.sourceBc || 'unknown'),
       command:       uc.name,
+      hasEarlyIdentityId: uc.method === 'create',
       useCase:       uc.id,
       queueKey,
       payload:       [],

@@ -28,7 +28,8 @@ import java.util.Map;
 <% const needsLocalDateTime = fields && fields.some(f => f.javaType === 'LocalDateTime'); %>
 <% const needsLocalTime     = fields && fields.some(f => f.javaType === 'LocalTime'); %>
 <% const needsInstant       = fields && fields.some(f => f.javaType === 'Instant'); %>
-<% const needsUUID          = fields && fields.some(f => f.javaType === 'UUID'); %>
+<% const _hasEarlyId        = typeof hasEarlyIdentityId !== 'undefined' && hasEarlyIdentityId; %>
+<% const needsUUID          = _hasEarlyId || (fields && fields.some(f => f.javaType === 'UUID')); %>
 <% if (needsBigDecimal) { %>import java.math.BigDecimal;
 <% } %><% if (needsLocalDate) { %>import java.time.LocalDate;
 <% } %><% if (needsLocalDateTime) { %>import java.time.LocalDateTime;
@@ -132,10 +133,17 @@ public class <%= listenerClassName %> {
         }
 <% } %>
         try {
+<% if (_hasEarlyId) { %>
+            // Early-identity create: the command carries the aggregate id as its first
+            // (@JsonIgnore) component. There is no HTTP edge here to generate it, so the
+            // listener assigns it. Phase 3 may derive it deterministically from the payload.
+            UUID id = UUID.randomUUID();
+<% } %>
             useCaseMediator.dispatch(new <%= commandClassName %>(
 <% const _cmdFields = commandFields || fields || []; %>
-<% _cmdFields.forEach((f, i) => { %>
-                    <%= f.name %><%= i < _cmdFields.length - 1 ? ',' : '' %>
+<% const _ctorArgs = _hasEarlyId ? ['id', ..._cmdFields.map(f => f.name)] : _cmdFields.map(f => f.name); %>
+<% _ctorArgs.forEach((argName, i) => { %>
+                    <%= argName %><%= i < _ctorArgs.length - 1 ? ',' : '' %>
 <% }); %>
             ));
             channel.basicAck(deliveryTag, false);

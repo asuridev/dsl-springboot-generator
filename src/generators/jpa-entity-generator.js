@@ -169,6 +169,18 @@ function expandMultiPropertyVoField(prop, voDef, bcYaml) {
 }
 
 /**
+ * Whether the BC models Money.amount as a (decimal) String rather than the canonical
+ * BigDecimal. A BC may declare its own Money VO with `amount: String` (e.g. "12.50",
+ * to avoid float precision loss). When undeclared, the canonical BigDecimal shape wins.
+ * The JPA amount column type must mirror this so it matches the domain VO getter/ctor.
+ */
+function moneyAmountIsString(bcYaml) {
+  const moneyVo = (bcYaml.valueObjects || []).find((v) => v.name === 'Money');
+  const amountProp = moneyVo ? moneyVo.properties.find((p) => p.name === 'amount') : null;
+  return !!(amountProp && /^String(\(\d+\))?$/.test(amountProp.type));
+}
+
+/**
  * Expand a Money property into two separate JPA fields (amount + currency).
  * Returns an array of field descriptors: [{name, javaType, columnAnnotation}]
  */
@@ -190,12 +202,28 @@ function expandMoneyField(prop, bcYaml) {
   const currencyName = `${prop.name}Currency`;
   const nullableClause = nullable ? '' : ', nullable = false';
 
-  return [
-    {
+  // Honor the declared Money.amount type. When it is a (decimal) String, the column is
+  // a VARCHAR/TEXT — precision/scale do not apply; use a declared String(n) length when
+  // present. Otherwise fall back to the canonical BigDecimal column.
+  let amountField;
+  if (moneyAmountIsString(bcYaml)) {
+    const lenMatch = amountProp ? /^String\((\d+)\)$/.exec(amountProp.type) : null;
+    const lengthClause = lenMatch ? `, length = ${lenMatch[1]}` : '';
+    amountField = {
+      name: amountName,
+      javaType: 'String',
+      columnAnnotation: `@Column(name = "${toSnakeCase(amountName)}"${lengthClause}${nullableClause})`,
+    };
+  } else {
+    amountField = {
       name: amountName,
       javaType: 'BigDecimal',
       columnAnnotation: `@Column(name = "${toSnakeCase(amountName)}", precision = ${precision}, scale = ${scale}${nullableClause})`,
-    },
+    };
+  }
+
+  return [
+    amountField,
     {
       name: currencyName,
       javaType: 'String',
@@ -332,8 +360,11 @@ function buildJpaFields(properties, aggregate, bcYaml) {
     // Skip id (handled as @Id separately)
     if (prop.name === 'id') continue;
 
-    // Skip audit / soft-delete fields — managed by FullAuditableEntity
-    if (AUDIT_FIELD_NAMES.has(prop.name)) continue;
+    // Skip audit fields ONLY when the aggregate is auditable — then createdAt/updatedAt
+    // are managed by FullAuditableEntity. On a non-auditable aggregate an explicitly
+    // declared createdAt/updatedAt is a normal persisted column (the domain aggregate
+    // includes it in its reconstruction constructor, so the column + mapping must exist).
+    if (AUDIT_FIELD_NAMES.has(prop.name) && aggregate.auditable === true) continue;
 
     // derived: true que colisiona con una columna de expansión Money/StoredObject:
     // es el mismo valor/columna física — se omite para no duplicarla.
@@ -431,13 +462,16 @@ function buildJpaEntityImports(aggregate, bcYaml, config) {
 
   // Iterate properties
   for (const prop of aggregate.properties || []) {
-    if (prop.name === 'id' || AUDIT_FIELD_NAMES.has(prop.name)) continue;
+    // Audit-named fields contribute imports only when NOT audit-managed (i.e. the
+    // aggregate is non-auditable and declares createdAt/updatedAt as a real column).
+    if (prop.name === 'id') continue;
+    if (AUDIT_FIELD_NAMES.has(prop.name) && aggregate.auditable === true) continue;
 
     // StoredObject expands to String/Long columns only — no extra imports needed.
     if (isStoredObjectType(prop.type)) continue;
 
     if (isMoneyType(prop.type)) {
-      imports.add('java.math.BigDecimal');
+      if (!moneyAmountIsString(bcYaml)) imports.add('java.math.BigDecimal');
       continue;
     }
 
@@ -591,7 +625,7 @@ function buildJpaChildEntityImports(entity, bcYaml, config) {
     if (isStoredObjectType(prop.type)) continue;
 
     if (isMoneyType(prop.type)) {
-      imports.add('java.math.BigDecimal');
+      if (!moneyAmountIsString(bcYaml)) imports.add('java.math.BigDecimal');
       continue;
     }
 

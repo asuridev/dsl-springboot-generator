@@ -4,6 +4,7 @@ const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toSnakeCase, toCamelCase, toPascalCase, pluralizeWord, toPackagePath } = require('../utils/naming');
 const { mapType, isListType, getListElementType } = require('../utils/type-mapper');
+const { aggregateEmittedEventNames } = require('../utils/domain-events');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -1124,7 +1125,10 @@ function buildToDomainBody(aggregate, bcYaml) {
 
   const props = (aggregate.properties || []).filter((p) => {
     if (p.name === 'id') return false;
-    if (p.name === 'createdAt' || p.name === 'updatedAt') return false;
+    // createdAt/updatedAt are audit-managed (re-added in audit order below) ONLY when the
+    // aggregate is auditable. On a non-auditable aggregate an explicit createdAt/updatedAt
+    // is a normal field — it must flow through here to match the domain reconstruction ctor.
+    if ((p.name === 'createdAt' || p.name === 'updatedAt') && aggregate.auditable === true) return false;
     // deletedAt is excluded only when softDelete=true (handled at end of constructor)
     // When declared explicitly as a prop (e.g. LRM with softDelete=false), include it
     if (p.name === 'deletedAt' && aggregate.softDelete === true) return false;
@@ -1219,7 +1223,9 @@ function buildToJpaBody(aggregate, bcYaml) {
 
   const props = (aggregate.properties || []).filter((p) => {
     if (p.name === 'id') return false;
-    if (p.name === 'createdAt' || p.name === 'updatedAt') return false;
+    // Audit-managed only when auditable; otherwise an explicit createdAt/updatedAt is a
+    // real Lombok-builder column on the JPA entity and must be set here.
+    if ((p.name === 'createdAt' || p.name === 'updatedAt') && aggregate.auditable === true) return false;
     // deletedAt is never in the Lombok builder — it lives in FullAuditableEntity (inherited).
     // FullAuditableEntity is used when auditable=true OR softDelete=true.
     if (p.name === 'deletedAt' && (aggregate.auditable === true || aggregate.softDelete === true)) return false;
@@ -1980,10 +1986,14 @@ async function generateRepositories(bcYaml, config, outputDir) {
       }
     }
 
-    // hasDomainEvents: read models never publish events and must not inject eventPublisher
+    // hasDomainEvents: read models never publish events and must not inject eventPublisher.
+    // Attribution mirrors the aggregate-generator ([Phase 3 #7]): an un-attributed event
+    // belongs to this aggregate only if the aggregate actually emits it (derived from YAML
+    // `emits`), not to every aggregate in the BC.
     const allPublishedEvents = (bcYaml.domainEvents || {}).published || [];
+    const emittedEventNames = aggregateEmittedEventNames(aggregate, bcYaml);
     const hasDomainEvents = !(aggregate.readModel === true) &&
-      allPublishedEvents.some((e) => !e.aggregate || e.aggregate === aggregateName);
+      allPublishedEvents.some((e) => e.aggregate ? e.aggregate === aggregateName : emittedEventNames.has(e.name));
 
     // 1. Domain repository interface
     const ifaceContext = buildRepoInterfaceContext(aggregateName, normalizedMethods, bc, config.packageName, bcYaml);
