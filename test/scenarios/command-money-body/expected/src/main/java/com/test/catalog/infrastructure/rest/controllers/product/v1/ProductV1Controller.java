@@ -1,6 +1,7 @@
 package com.test.catalog.infrastructure.rest.controllers.product.v1;
 
 import com.test.catalog.application.commands.CreateProductCommand;
+import com.test.catalog.application.commands.UpdateProductPriceCommand;
 import com.test.shared.infrastructure.configurations.useCaseConfig.UseCaseMediator;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -34,5 +35,19 @@ public class ProductV1Controller {
         UUID id = UUID.randomUUID();
         UUID result = useCaseMediator.dispatch(new CreateProductCommand(id, command.name(), command.price()));
         return ResponseEntity.created(URI.create("/api/v1/products/" + id)).body(result);
+    }
+
+    /**
+     * updateProductPrice
+     */
+    @PatchMapping("/{productId}/price")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    @Operation(summary = "updateProductPrice")
+    public void updateProductPrice(
+        @PathVariable String productId,
+        @Valid @RequestBody UpdateProductPriceCommand command
+    ) {
+        log.info("updateProductPrice — productId: {}", productId);
+        useCaseMediator.dispatch(new UpdateProductPriceCommand(productId, command.price()));
     }
 }

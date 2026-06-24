@@ -24,6 +24,11 @@ aggregates:
           - name: price
             type: Money
         returns: Product
+      - name: updatePrice
+        params:
+          - name: price
+            type: Money
+        returns: void
 
 useCases:
   - id: UC-CAT-001
@@ -46,7 +51,33 @@ useCases:
     returns: Uuid
     implementation: scaffold
 
-errors: []
+  # implementation: full + Money body input — exercises the handler-body conversion
+  # MoneyRequest → Money (`new Money(command.price().amount(), command.price().currency())`).
+  - id: UC-CAT-002
+    name: UpdateProductPrice
+    type: command
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: updateProductPrice
+    method: updatePrice
+    input:
+      - name: productId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+      - name: price
+        type: Money
+        source: body
+        required: true
+    notFoundError: PRODUCT_NOT_FOUND
+    implementation: full
+
+errors:
+  - code: PRODUCT_NOT_FOUND
+    httpStatus: 404
+    description: Product not found.
 
 repositories:
   - aggregate: Product

@@ -67,6 +67,13 @@ public class Product {
         return updatedAt;
     }
 
+    // ─── Business methods ─────────────────────────────────────────────────────
+
+    /** derived_from: UC-CAT-002 UpdateProductPrice */
+    public void updatePrice(Money price) {
+        this.price = price;
+    }
+
     // ─── Identity equality (S20) ──────────────────────────────────────────────
 
     @Override

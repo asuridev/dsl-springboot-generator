@@ -6,7 +6,7 @@ const { toPascalCase, toCamelCase, toPackagePath } = require('../utils/naming');
 const { mapType, resolveCanonicalReturnType } = require('../utils/type-mapper');
 const { mapDslValidations, mergeAnnotations } = require('../utils/validation-mapper');
 const { mapRule } = require('../utils/domain-rule-mapper');
-const { resolveVoDefinition } = require('../utils/canonical-vo');
+const { resolveVoDefinition, resolveMultiPropertyVo } = require('../utils/canonical-vo');
 const { getOutboundHttpBcNames } = require('./outbound-http-generator');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
@@ -1084,6 +1084,11 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
   const extraImports = new Set();
 
   const isCreate = uc.method === 'create';
+  // Event-triggered commands keep the domain VO type on their fields (buildCommandFields
+  // skips the {Vo}Request interposition when isEventTriggered), so the handler must NOT
+  // re-assemble them — passing command.field() directly is correct. Only HTTP commands
+  // carry a {Vo}Request that needs `new Vo(req.a(), req.b())`.
+  const isEventTriggered = !!(uc.trigger && uc.trigger.kind === 'event');
   const aggVarName = toCamelCase(agg.name);
   const repoFieldName = `${aggVarName}Repository`;
 
@@ -1189,10 +1194,13 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
       // Check for List[MultiPropVO] — convert List<VoRequest> → List<DomainVo>
       const listInnerMatchI = /^List\[(.+)\]$/.exec(input.type);
       const listInnerVoNameI = listInnerMatchI ? listInnerMatchI[1] : null;
-      const listInnerVoDefI = listInnerVoNameI
-        ? (bcYaml?.valueObjects || []).find((v) => v.name === listInnerVoNameI && (v.properties || []).length > 1)
+      const listInnerVoDefI = (!isEventTriggered && listInnerVoNameI)
+        ? resolveMultiPropertyVo(listInnerVoNameI, bcYaml)
         : null;
-      const inputVoDef = (bcYaml?.valueObjects || []).find((v) => v.name === input.type && (v.properties || []).length > 1);
+      // Resolve declared AND canonical (e.g. Money) multi-prop VOs so the command's
+      // {Vo}Request field is re-assembled into the domain VO instead of passed raw.
+      // Skip for event-triggered commands — their field is already the domain VO.
+      const inputVoDef = isEventTriggered ? null : resolveMultiPropertyVo(input.type, bcYaml);
       if (listInnerVoDefI) {
         extraImports.add(`${packageName}.${moduleName}.domain.valueobject.${listInnerVoNameI}`);
         const ctorArgs = listInnerVoDefI.properties.map((p) => `r.${p.name}()`).join(', ');
@@ -1231,10 +1239,10 @@ function buildCommandHandlerBody(uc, agg, errorMap, packageName, moduleName, bcY
       // Check for List[MultiPropVO] — convert List<VoRequest> → List<DomainVo>
       const listInnerMatchP = /^List\[(.+)\]$/.exec(p.type);
       const listInnerVoNameP = listInnerMatchP ? listInnerMatchP[1] : null;
-      const listInnerVoDefP = listInnerVoNameP
-        ? (bcYaml?.valueObjects || []).find((v) => v.name === listInnerVoNameP && (v.properties || []).length > 1)
+      const listInnerVoDefP = (!isEventTriggered && listInnerVoNameP)
+        ? resolveMultiPropertyVo(listInnerVoNameP, bcYaml)
         : null;
-      const paramVoDef = (bcYaml?.valueObjects || []).find((v) => v.name === p.type && (v.properties || []).length > 1);
+      const paramVoDef = isEventTriggered ? null : resolveMultiPropertyVo(p.type, bcYaml);
       if (listInnerVoDefP) {
         extraImports.add(`${packageName}.${moduleName}.domain.valueobject.${listInnerVoNameP}`);
         const ctorArgs = listInnerVoDefP.properties.map((prop) => `r.${prop.name}()`).join(', ');

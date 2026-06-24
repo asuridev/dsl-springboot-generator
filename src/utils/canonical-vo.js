@@ -33,4 +33,16 @@ function resolveVoDefinition(typeName, bcYaml) {
   return null;
 }
 
-module.exports = { CANONICAL_MONEY_VO, resolveVoDefinition };
+/**
+ * Resolve a multi-property value object (declared or canonical) by type name.
+ * Returns the definition only when it has >1 property — the shape that gets
+ * interposed as a `{Vo}Request` DTO and must be re-assembled into the domain VO
+ * in the handler body (`new Money(req.amount(), req.currency())`). Returns null
+ * for single-property VOs (collapsed to a primitive) and non-VO types.
+ */
+function resolveMultiPropertyVo(typeName, bcYaml) {
+  const def = resolveVoDefinition(typeName, bcYaml);
+  return def && (def.properties || []).length > 1 ? def : null;
+}
+
+module.exports = { CANONICAL_MONEY_VO, resolveVoDefinition, resolveMultiPropertyVo };

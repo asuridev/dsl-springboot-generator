@@ -20,6 +20,25 @@ paths:
               schema:
                 type: string
                 format: uuid
+  /products/{productId}/price:
+    patch:
+      operationId: updateProductPrice
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePriceRequest'
+      responses:
+        "204":
+          description: Price updated.
 components:
   schemas:
     MoneyRequest:
@@ -34,5 +53,10 @@ components:
       properties:
         name:
           type: string
+        price:
+          $ref: '#/components/schemas/MoneyRequest'
+    UpdatePriceRequest:
+      type: object
+      properties:
         price:
           $ref: '#/components/schemas/MoneyRequest'

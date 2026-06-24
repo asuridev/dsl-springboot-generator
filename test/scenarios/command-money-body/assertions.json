@@ -5,5 +5,11 @@
   },
   "src/main/java/com/test/catalog/application/commands/MoneyRequest.java": {
     "contains": ["record MoneyRequest", "BigDecimal amount", "String currency"]
+  },
+  "src/main/java/com/test/catalog/application/commands/UpdateProductPriceCommand.java": {
+    "contains": ["@Valid MoneyRequest price"]
+  },
+  "src/main/java/com/test/catalog/application/usecases/UpdateProductPriceCommandHandler.java": {
+    "contains": ["new Money(command.price().amount(), command.price().currency())"]
   }
 }
