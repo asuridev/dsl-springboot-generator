@@ -346,9 +346,11 @@ function checkOrphanConsumers(bcYamls, undesignedBcs, diagnostics) {
     for (let k = 0; k < consumed.length; k++) {
       const ev = consumed[k];
       if (!allPublished.has(ev.name)) {
-        // If sourceBc is declared in system.yaml but not yet designed (no YAML in arch/),
-        // downgrade to warn — the producer BC simply hasn't been designed yet.
-        const sourceBc = ev.sourceBc;
+        // If the producer BC is declared in system.yaml but not yet designed (no YAML in arch/),
+        // downgrade to warn — the producer BC simply hasn't been designed yet. The source BC is
+        // declared as `from` on the consumed event (`sourceBc` is the legacy alias); read both so
+        // the warn/error severity matches Phase 1 (dsl-design-system) — see GAP-4 conformance.
+        const sourceBc = ev.sourceBc || ev.from;
         const isUndesigned = sourceBc && undesignedBcs.has(sourceBc);
         diagnostics.push({
           code: 'INT-007',

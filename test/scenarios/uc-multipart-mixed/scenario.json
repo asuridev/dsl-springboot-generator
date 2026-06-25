@@ -1,0 +1,4 @@
+{
+  "description": "GAP-6 mixed multipart/form-data: UC-CAT-011 AddProductImage declares a File part (image) alongside typed form-data parts (altText: String(200) optional, imageType: ImageType enum, displayOrder: Integer). Verifies the relaxed [G12] validation accepts non-File multipart parts, the command record carries their real Java types, and the controller binds the File via @RequestPart MultipartFile and the form fields via typed @RequestParam.",
+  "allowNoExpected": true
+}

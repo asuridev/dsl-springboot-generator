@@ -204,6 +204,9 @@ function validate(doc, opts = {}) {
     'storageCalls',
   ]);
   const ALLOWED_UC_VALIDATION_KEYS = new Set(['id', 'expression', 'errorCode', 'description']);
+  // [G12] Enum names + scalar form-data types allowed as multipart parts alongside a File.
+  const ucEnumNames = new Set((doc.enums || []).map((e) => e.name));
+  const MULTIPART_FORM_SCALARS = new Set(['String', 'Integer', 'Long', 'Boolean', 'Decimal']);
   const ALLOWED_UC_TRIGGER_KEYS = new Set([
     'kind', 'operationId',
     // [G15] event-triggered UCs
@@ -346,9 +349,16 @@ function validate(doc, opts = {}) {
         if (inp.headerName != null && inp.source !== 'header') {
           fail(`Use case "${uc.id}" input "${inp.name}" declares "headerName" but its source is "${inp.source}". headerName is only valid for source: header.`);
         }
-        // [G12] source: multipart cross-validation with type and sub-keys
-        if (inp.source === 'multipart' && inp.type !== 'File') {
-          fail(`Use case "${uc.id}" input "${inp.name}" declares source: multipart but type is "${inp.type}". Multipart inputs must use canonical type "File".`);
+        // [G12] source: multipart cross-validation with type and sub-keys.
+        // A multipart/form-data request may carry the binary File part plus
+        // typed form-data parts (a String/enum/number sent alongside the upload).
+        // Restrict the non-File parts to scalar types that serialize cleanly as
+        // form fields; reject VOs, lists, ranges, etc.
+        if (inp.source === 'multipart') {
+          const baseType = String(inp.type || '').replace(/\(.*\)/, '').trim();
+          if (baseType !== 'File' && !MULTIPART_FORM_SCALARS.has(baseType) && !ucEnumNames.has(baseType)) {
+            fail(`Use case "${uc.id}" input "${inp.name}" declares source: multipart but type is "${inp.type}". Multipart parts must be a File or a scalar form-data type (${[...MULTIPART_FORM_SCALARS].join(', ')}, or a declared enum).`);
+          }
         }
         if (inp.type === 'File' && inp.source !== 'multipart') {
           fail(`Use case "${uc.id}" input "${inp.name}" has type "File" but source is "${inp.source}". File inputs must declare source: multipart.`);
@@ -356,6 +366,13 @@ function validate(doc, opts = {}) {
         for (const k of ['partName', 'maxSize', 'contentTypes']) {
           if (inp[k] != null && inp.source !== 'multipart') {
             fail(`Use case "${uc.id}" input "${inp.name}" declares "${k}" but its source is "${inp.source}". "${k}" is only valid for source: multipart.`);
+          }
+        }
+        // [G12] maxSize/contentTypes describe the binary File part only; they are
+        // meaningless on typed form-data parts.
+        for (const k of ['maxSize', 'contentTypes']) {
+          if (inp[k] != null && inp.type !== 'File') {
+            fail(`Use case "${uc.id}" input "${inp.name}" declares "${k}" but type is "${inp.type}". "${k}" only applies to type: File.`);
           }
         }
         if (inp.source === 'multipart') {

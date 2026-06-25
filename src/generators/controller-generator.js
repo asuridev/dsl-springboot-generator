@@ -580,16 +580,37 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
     if (!m) return null;
     return Number(m[1]) * SIZE_UNITS[m[2]];
   };
+  // [G12] Java type for a non-File form-data part bound via @RequestParam. Spring's
+  // ConversionService handles String/enum/number conversion from form fields.
+  // Optional numeric/boolean parts use boxed types so an absent param binds to
+  // null instead of throwing (a primitive cannot hold null).
+  const multipartPartJavaType = (inp) => {
+    const optional = inp.required === false;
+    switch (inp.type) {
+      case 'Integer': return optional ? 'Integer' : 'int';
+      case 'Long': return optional ? 'Long' : 'long';
+      case 'Boolean': return optional ? 'Boolean' : 'boolean';
+      case 'Decimal': return 'java.math.BigDecimal';
+      case 'Uuid': return 'String';
+      default: return enumNamesSet.has(inp.type) ? inp.type : 'String';
+    }
+  };
   const multipartInputsList = [...inputMap.values()]
     .filter((inp) => inp.source === 'multipart')
-    .map((inp) => ({
-      name: inp.name,
-      partName: inp.partName || inp.name,
-      required: inp.required !== false,
-      maxSizeLabel: inp.maxSize || null,
-      maxSizeBytes: parseMaxSize(inp.maxSize),
-      contentTypes: Array.isArray(inp.contentTypes) ? inp.contentTypes.slice() : null,
-    }));
+    .map((inp) => {
+      const isFile = inp.type === 'File';
+      return {
+        name: inp.name,
+        partName: inp.partName || inp.name,
+        required: inp.required !== false,
+        isFile,
+        // Non-File parts are bound as typed @RequestParam locals.
+        javaType: isFile ? null : multipartPartJavaType(inp),
+        maxSizeLabel: inp.maxSize || null,
+        maxSizeBytes: parseMaxSize(inp.maxSize),
+        contentTypes: Array.isArray(inp.contentTypes) ? inp.contentTypes.slice() : null,
+      };
+    });
 
   // [G10] Resolve the async status endpoint path from OpenAPI when statusEndpoint is set.
   let asyncStatusPath = null;
@@ -907,11 +928,17 @@ function buildMethodStrings(op) {
     params.push(`@Valid @RequestBody ${op.ucName}Query query`);
   }
 
-  // [G12] Multipart parts — emitted as @RequestPart MultipartFile parameters.
+  // [G12] Multipart parts — the binary File part is bound via @RequestPart
+  // MultipartFile; typed form-data parts are bound via @RequestParam so Spring's
+  // ConversionService handles enum/number conversion from the form fields.
   if (op.multipartInputsList && op.multipartInputsList.length > 0) {
     for (const mp of op.multipartInputsList) {
       const reqAttr = mp.required ? '' : ', required = false';
-      params.push(`@RequestPart(value = "${mp.partName}"${reqAttr}) MultipartFile ${mp.name}`);
+      if (mp.isFile) {
+        params.push(`@RequestPart(value = "${mp.partName}"${reqAttr}) MultipartFile ${mp.name}`);
+      } else {
+        params.push(`@RequestParam(value = "${mp.partName}"${reqAttr}) ${mp.javaType} ${mp.name}`);
+      }
     }
   }
 
@@ -963,10 +990,13 @@ function buildMethodStrings(op) {
       `        }`;
   }
 
-  // [G12] Multipart guards — size and contentType validation per file.
+  // [G12] Multipart guards — size and contentType validation per file part.
+  // Non-File form-data parts are validated by @RequestParam (required attribute +
+  // ConversionService); they need no explicit guard.
   const multipartGuards = [];
   if (op.multipartInputsList && op.multipartInputsList.length > 0) {
     for (const mp of op.multipartInputsList) {
+      if (!mp.isFile) continue;
       const partName = escapeJavaString(mp.partName);
       if (mp.required) {
         multipartGuards.push(
@@ -1170,15 +1200,22 @@ function buildControllerImports(operations, packageName, moduleName, bcYaml = nu
     imports.add(`${packageName}.shared.domain.customExceptions.BadRequestException`);
   }
 
-  // [G12] Multipart imports — MultipartFile parameter type and BadRequestException
-  // for size/contentType guards. Triggered by any op with multipart inputs.
-  const needsMultipart = operations.some(
+  // [G12] Multipart imports. Any multipart op needs MediaType (consumes). The
+  // binary File part adds MultipartFile + BadRequestException (size/contentType
+  // guards); typed form-data parts bind via @RequestParam (covered by the
+  // web.bind.annotation.* wildcard import).
+  const multipartOps = operations.filter(
     (op) => op.multipartInputsList && op.multipartInputsList.length > 0
   );
-  if (needsMultipart) {
-    imports.add('org.springframework.web.multipart.MultipartFile');
+  if (multipartOps.length > 0) {
     imports.add('org.springframework.http.MediaType');
-    imports.add(`${packageName}.shared.domain.customExceptions.BadRequestException`);
+    const hasFilePart = multipartOps.some(
+      (op) => op.multipartInputsList.some((mp) => mp.isFile)
+    );
+    if (hasFilePart) {
+      imports.add('org.springframework.web.multipart.MultipartFile');
+      imports.add(`${packageName}.shared.domain.customExceptions.BadRequestException`);
+    }
   }
 
   // [G3] @PreAuthorize import when any operation declares authorization.rolesAnyOf.

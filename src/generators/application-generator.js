@@ -725,13 +725,19 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
     // Fields sourced from authContext are injected in the handler, not in the command record
     if (input.source === 'authContext') continue;
 
-    // [G12] Multipart inputs travel as MultipartFile in the command record. Bean
+    // [G12] Multipart inputs travel through the command record. The binary File
+    // part is carried as MultipartFile; typed form-data parts (String/enum/
+    // number sent alongside the upload) carry their real Java type. Bean
     // Validation annotations (@NotNull/@Size) do not behave well across
-    // multipart boundaries — the controller emits explicit guards instead
-    // (size and contentTypes).
+    // multipart boundaries — the controller emits explicit guards instead.
     if (input.source === 'multipart') {
-      imports.add('org.springframework.web.multipart.MultipartFile');
-      fields.push({ type: 'MultipartFile', name: input.name, annotations: [] });
+      if (input.type === 'File') {
+        imports.add('org.springframework.web.multipart.MultipartFile');
+        fields.push({ type: 'MultipartFile', name: input.name, annotations: [] });
+      } else {
+        const javaType = javaTypeForCommand(input.type, packageName, moduleName, imports, voNames, bcYaml);
+        fields.push({ type: javaType, name: input.name, annotations: [] });
+      }
       continue;
     }
 
