@@ -1,0 +1,5 @@
+{
+  "description": "Two properties ('productName' and 'product_name') collapse to the same Java field and SQL column, producing a duplicate field / duplicate @Column that breaks compilation; the reader must reject the collision.",
+  "expectFailure": true,
+  "expectedErrorPattern": "both map to the"
+}

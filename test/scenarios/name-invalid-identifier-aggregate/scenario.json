@@ -1,0 +1,5 @@
+{
+  "description": "An aggregate name that is not a valid Java identifier ('Order-Item') is emitted verbatim as a class name and would not compile; the YAML reader must reject it early.",
+  "expectFailure": true,
+  "expectedErrorPattern": "is not a valid Java identifier"
+}

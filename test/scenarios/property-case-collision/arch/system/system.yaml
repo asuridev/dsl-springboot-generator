@@ -1,0 +1,18 @@
+system:
+  name: test-property-case-collision-system
+  description: Test system for case-collision property validation.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

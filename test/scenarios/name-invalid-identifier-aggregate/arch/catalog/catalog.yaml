@@ -1,0 +1,15 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Order-Item
+    root: Order-Item
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: quantity
+        type: Integer
+        required: true

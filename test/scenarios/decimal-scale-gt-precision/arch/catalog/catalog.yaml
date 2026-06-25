@@ -1,0 +1,17 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: price
+        type: Decimal
+        precision: 5
+        scale: 10
+        required: true

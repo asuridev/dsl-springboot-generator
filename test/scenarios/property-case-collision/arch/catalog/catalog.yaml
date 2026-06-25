@@ -1,0 +1,18 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: productName
+        type: String(100)
+        required: true
+      - name: product_name
+        type: String(100)
+        required: true

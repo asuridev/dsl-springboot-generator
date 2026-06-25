@@ -4,7 +4,8 @@ const fs = require('fs-extra');
 const path = require('path');
 const yaml = require('js-yaml');
 const { PROHIBITED_TYPES } = require('./type-mapper');
-const { toPascalCase } = require('./naming');
+const { toPascalCase, toCamelCase, toSnakeCase } = require('./naming');
+const { assertJavaIdentifier } = require('./java-identifiers');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -42,12 +43,42 @@ function resolveType(type) {
 function validateProperties(properties, context, enums = []) {
   if (!Array.isArray(properties)) return;
   const enumNames = new Set((enums || []).map((e) => e.name));
+  // Track the Java field (camelCase) and SQL column (snake_case) forms each
+  // property name collapses to, so two distinct YAML names that map to the same
+  // identifier (e.g. "productName" + "product_name") are rejected before they
+  // emit a duplicate field / duplicate @Column and break compilation.
+  const seenCamel = new Map();
+  const seenSnake = new Map();
   for (const prop of properties) {
     resolveType(prop.type);
+
+    // Property names are emitted verbatim as Java field declarations and getters.
+    assertJavaIdentifier(prop.name, `Property in ${context}`, fail);
+
+    const camel = toCamelCase(prop.name);
+    if (seenCamel.has(camel) && seenCamel.get(camel) !== prop.name) {
+      fail(`Properties "${seenCamel.get(camel)}" and "${prop.name}" in ${context} both map to the Java field "${camel}". Rename one.`);
+    }
+    seenCamel.set(camel, prop.name);
+    const snake = toSnakeCase(prop.name);
+    if (seenSnake.has(snake) && seenSnake.get(snake) !== prop.name) {
+      fail(`Properties "${seenSnake.get(snake)}" and "${prop.name}" in ${context} both map to the SQL column "${snake}". Rename one.`);
+    }
+    seenSnake.set(snake, prop.name);
 
     if (prop.type === 'Decimal') {
       if (prop.precision == null || prop.scale == null) {
         fail(`Property "${prop.name}" in ${context} has type Decimal but is missing "precision" and/or "scale".`);
+      }
+      // Semantic check: an invalid DECIMAL(p,s) shape produces DDL the database
+      // rejects at startup (e.g. DECIMAL(5,10)). Guard p>=1 and 0<=s<=p.
+      const p = prop.precision;
+      const s = prop.scale;
+      if (!Number.isInteger(p) || p < 1) {
+        fail(`Property "${prop.name}" in ${context}: Decimal "precision" must be an integer >= 1 (got ${JSON.stringify(p)}).`);
+      }
+      if (!Number.isInteger(s) || s < 0 || s > p) {
+        fail(`Property "${prop.name}" in ${context}: Decimal "scale" must be an integer between 0 and precision (${p}); got ${JSON.stringify(s)}.`);
       }
     }
 
@@ -114,6 +145,8 @@ function validateEnums(enums) {
           `(letters, digits and underscore only, not starting with a digit). UPPER_SNAKE_CASE is recommended.`
         );
       }
+      // The constant is emitted verbatim; a Java reserved word will not compile.
+      assertJavaIdentifier(label, `Enum "${enumDef.name}" value`, fail);
       if (declaredValues.has(label)) {
         fail(`Enum "${enumDef.name}" has a duplicate value "${label}". Enum values must be unique.`);
       }
@@ -150,6 +183,10 @@ function validateEnums(enums) {
 function validate(doc, opts = {}) {
   const bc = doc.bc;
   const systemActors = opts.systemActors instanceof Set ? opts.systemActors : null;
+
+  // The BC name is emitted verbatim as a Java package segment (package ….<bc>.domain…);
+  // a hyphen, space or reserved word produces an uncompilable package declaration.
+  assertJavaIdentifier(bc, 'Bounded context "bc"', fail);
 
   // ── enums[] structural validation ─────────────────────────────────────────
   if (doc.enums) validateEnums(doc.enums);
@@ -946,6 +983,8 @@ function validate(doc, opts = {}) {
         if (!/^[a-z][A-Za-z0-9_]*$/.test(a.name)) {
           fail(`Error "${err.code}" has invalid arg name "${a.name}". Must be a camelCase Java identifier.`);
         }
+        // Reserved words pass the camelCase regex above but break the generated method parameter.
+        assertJavaIdentifier(a.name, `Error "${err.code}" arg`, fail);
         if (argNames.has(a.name)) {
           fail(`Error "${err.code}" declares duplicate arg "${a.name}".`);
         }
@@ -1057,9 +1096,12 @@ function validate(doc, opts = {}) {
       if (allRuleIds.has(rule.id)) fail(`Duplicate domainRule id: "${rule.id}"`);
       allRuleIds.add(rule.id);
     }
+    // Aggregate / entity names become Java class names — must be valid identifiers.
+    assertJavaIdentifier(agg.name, 'Aggregate name', fail);
     // Validate properties
     validateProperties(agg.properties, `aggregate ${agg.name}`, doc.enums);
     for (const entity of agg.entities || []) {
+      assertJavaIdentifier(entity.name, `Entity name in aggregate "${agg.name}"`, fail);
       validateProperties(entity.properties, `entity ${entity.name}`, doc.enums);
       // S6 — child entity relationship/cardinality whitelist
       if (entity.relationship !== undefined &&
@@ -1081,6 +1123,7 @@ function validate(doc, opts = {}) {
   const aggregateNames = new Set((doc.aggregates || []).map((a) => a.name));
   for (const vo of doc.valueObjects || []) {
     if (!vo.name) fail('A valueObject entry is missing required field "name".');
+    assertJavaIdentifier(vo.name, 'Value object name', fail);
     if (!Array.isArray(vo.properties) || vo.properties.length === 0) {
       fail(`Value object "${vo.name}" has no properties. A VO must declare at least one property.`);
     }
@@ -1141,6 +1184,7 @@ function validate(doc, opts = {}) {
   const projectionNames = new Set();
   for (const proj of doc.projections || []) {
     if (!proj.name) fail('A projection entry is missing required field "name".');
+    assertJavaIdentifier(proj.name, 'Projection name', fail);
     if (projectionNames.has(proj.name)) fail(`Duplicate projection name: "${proj.name}"`);
     if (RESERVED_PROJECTION_SUFFIX.test(proj.name)) {
       fail(`Projection "${proj.name}" uses a reserved suffix (Dto/Response/Request/Payload). Choose a name that reflects the read-model intent (e.g. ProductSummary, OrderSnapshot).`);
@@ -1243,6 +1287,7 @@ function validate(doc, opts = {}) {
   const eventDtoNames = new Set();
   for (const dto of doc.eventDtos || []) {
     if (!dto.name) fail('An eventDtos[] entry is missing required field "name".');
+    assertJavaIdentifier(dto.name, 'eventDtos name', fail);
     if (eventDtoNames.has(dto.name)) fail(`Duplicate eventDtos name: "${dto.name}"`);
     eventDtoNames.add(dto.name);
     for (const key of Object.keys(dto)) {

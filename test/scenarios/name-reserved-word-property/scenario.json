@@ -1,0 +1,5 @@
+{
+  "description": "A property named with a Java reserved word ('class') passes a naive identifier-syntax check but emits 'private ... class;' which does not compile; the reader must reject reserved words.",
+  "expectFailure": true,
+  "expectedErrorPattern": "is a Java reserved word"
+}

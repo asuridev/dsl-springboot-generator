@@ -1,0 +1,5 @@
+{
+  "description": "A Decimal with scale (10) greater than precision (5) produces invalid DDL (DECIMAL(5,10)) the database rejects at startup; the reader must reject scale > precision.",
+  "expectFailure": true,
+  "expectedErrorPattern": "scale\" must be an integer between 0 and precision"
+}
