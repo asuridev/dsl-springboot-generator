@@ -32,8 +32,7 @@ const { readBcYaml } = require('../utils/bc-yaml-reader');
 const { updateContextFiles } = require('../generators/context-updater');
 const { deployToClaudeCode } = require('../utils/claude-code-deployer');
 const { readOpenApiYaml, readAsyncApiYaml, readInternalApiYaml } = require('../utils/arch-yaml-reader');
-const { validateIntegrationCoherence, reportDiagnostics } = require('../utils/integration-validator');
-const { validateOpenApiUseCases } = require('../utils/openapi-usecase-validator');
+const { validateIntegrationCoherence, reportDiagnostics, validateOpenApiUseCases } = require('@dsl/contract');
 const { validateTypeResolution } = require('../utils/type-resolution-validator');
 
 // ─── BC discovery ─────────────────────────────────────────────────────────────

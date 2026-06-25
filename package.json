@@ -34,6 +34,7 @@
     "node": ">=14.0.0"
   },
   "dependencies": {
+    "@dsl/contract": "file:../dsl-contract",
     "chalk": "^4.1.2",
     "commander": "^11.1.0",
     "ejs": "^3.1.9",

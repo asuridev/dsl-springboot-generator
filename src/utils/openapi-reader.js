@@ -3,7 +3,7 @@
 const fs = require('fs-extra');
 const path = require('path');
 const yaml = require('js-yaml');
-const { buildOpenApiOperationMap } = require('./openapi-contract');
+const { buildOpenApiOperationMap } = require('@dsl/contract');
 
 /**
  * Reads and parses arch/{bcName}/{bcName}-open-api.yaml relative to CWD.

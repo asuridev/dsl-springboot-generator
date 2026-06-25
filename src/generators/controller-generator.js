@@ -4,7 +4,7 @@ const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toCamelCase, toPackagePath } = require('../utils/naming');
 const { mapType, resolveCanonicalReturnType } = require('../utils/type-mapper');
-const { buildOpenApiOperationMap } = require('../utils/openapi-contract');
+const { buildOpenApiOperationMap } = require('@dsl/contract');
 const { escapeJavaString } = require('../utils/java');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
