@@ -1181,10 +1181,26 @@ function validate(doc, opts = {}) {
     'name', 'type', 'required', 'description', 'example', 'serializedName', 'derivedFrom',
     'precision', 'scale',
   ]);
+  // Projection-level key whitelist: every other section has one, so a typo at the
+  // projection root (e.g. "persistant" instead of "persistent") was silently ignored
+  // and produced wrong (non-persistent) generation. These are the keys the generators
+  // actually consume (grep `proj.` in src/generators + src/utils).
+  const ALLOWED_PROJECTION_KEYS = new Set([
+    'name', 'description', 'properties', 'persistent', 'source', 'keyBy',
+    'upsertStrategy', 'eventVersionField', 'additionalSources', 'tableName',
+  ]);
   const projectionNames = new Set();
   for (const proj of doc.projections || []) {
     if (!proj.name) fail('A projection entry is missing required field "name".');
     assertJavaIdentifier(proj.name, 'Projection name', fail);
+    for (const key of Object.keys(proj)) {
+      if (!ALLOWED_PROJECTION_KEYS.has(key)) {
+        fail(`Projection "${proj.name}" declares unsupported attribute "${key}". Allowed keys: ${[...ALLOWED_PROJECTION_KEYS].join(', ')}.`);
+      }
+    }
+    if (proj.persistent != null && typeof proj.persistent !== 'boolean') {
+      fail(`Projection "${proj.name}" has non-boolean "persistent" value ${JSON.stringify(proj.persistent)}. Use true or false.`);
+    }
     if (projectionNames.has(proj.name)) fail(`Duplicate projection name: "${proj.name}"`);
     if (RESERVED_PROJECTION_SUFFIX.test(proj.name)) {
       fail(`Projection "${proj.name}" uses a reserved suffix (Dto/Response/Request/Payload). Choose a name that reflects the read-model intent (e.g. ProductSummary, OrderSnapshot).`);

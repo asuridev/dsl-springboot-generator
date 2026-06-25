@@ -1,0 +1,18 @@
+system:
+  name: test-projection-unknown-key-system
+  description: Test system for projection-level key whitelist validation.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

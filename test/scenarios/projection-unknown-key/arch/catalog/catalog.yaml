@@ -1,0 +1,25 @@
+bc: catalog
+version: "1.0.0"
+
+projections:
+  - name: ProductSummary
+    description: Compact view of a product.
+    source: aggregate:Product
+    persistant: true   # typo: should be "persistent" — must be rejected, not ignored
+    properties:
+      - name: id
+        type: Uuid
+        required: true
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true

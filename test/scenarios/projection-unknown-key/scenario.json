@@ -1,0 +1,5 @@
+{
+  "description": "A projection with a typo'd root key ('persistant' instead of 'persistent') would be silently ignored and generate wrong (non-persistent) code; the reader must reject unknown projection-level keys.",
+  "expectFailure": true,
+  "expectedErrorPattern": "unsupported attribute"
+}
