@@ -202,12 +202,15 @@ El criterio de evaluación es siempre: ¿la información nueva en el YAML es suf
 ## Contrato compartido con Fase 1 (`@dsl/contract`)
 
 Los validadores de contrato cruzado **no se duplican**: `integration-validator`, `openapi-usecase-validator`
-y `openapi-contract` viven en el paquete **`@dsl/contract`** (`../dsl-contract`, dependencia `file:`) y son
-la **fuente única de verdad** compartida con `dsl-design-system` (Fase 1). No re-crear copias locales en
-`src/utils/`; importar desde `@dsl/contract` (ver `src/commands/build.js`,
+y `openapi-contract` viven en el paquete **`@dsl/contract`** y son la **fuente única de verdad** compartida
+con `dsl-design-system` (Fase 1). Se consume como **dependencia git URL** pineada a tag
+(`"@dsl/contract": "git+https://github.com/asuridev/dsl-contract.git#v0.1.0"`), así un `git clone` + `npm
+install` fresco lo resuelve desde GitHub (repo público, sin registro ni carpeta hermana). No re-crear copias
+locales en `src/utils/`; importar desde `@dsl/contract` (ver `src/commands/build.js`,
 `src/generators/controller-generator.js`, `src/utils/openapi-reader.js`).
 
-- Tras editar el paquete: `npm install` en este repo (o `npm link`) para refrescar el `file:` link.
+- Dev local del paquete: `npm link` (el git-dep no refleja ediciones locales). Release: bump versión + tag
+  `vX.Y.Z` en `dsl-contract`, luego actualizar el `#vX.Y.Z` aquí y `npm install`.
 - Las reglas de anatomía por BC **sí** siguen por repo (`bc-yaml-reader.js` aquí vs `bc-yaml-validator.js`
   en Fase 1) porque el reader está entrelazado con el modelo del generador. Su paridad se rastrea en
   `../dsl-contract/docs/contract-rule-parity.md` (matriz BC-xxx ↔ checks `[Gxx]` + tabla de campos avanzados).
