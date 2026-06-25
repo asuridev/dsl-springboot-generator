@@ -1,0 +1,5 @@
+{
+  "description": "Negative scenario for INT-028: UC-CAT-011 AddProductImage declares a storageCalls.store \"nonexistent-media\" that is not present in system.yaml#/infrastructure/objectStorage (only \"product-media\" is declared). The build must abort under --strict with an INT-028 diagnostic rather than silently generating a MinIO adapter against an undeclared store.",
+  "expectFailure": true,
+  "expectedErrorPattern": "INT-028"
+}

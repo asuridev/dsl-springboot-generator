@@ -1,0 +1,24 @@
+system:
+  name: object-storage-minio
+  description: Test system for object-storage (MinIO) generation — product media uploads.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products and their uploaded media (images).
+    aggregates:
+      - name: Product
+        root: Product
+        entities:
+          - ProductImage
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc
+  objectStorage:
+    - name: product-media
+      visibility: public
+      urlAccess: public-url
+      ownedBy: catalog
