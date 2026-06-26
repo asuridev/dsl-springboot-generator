@@ -3,7 +3,8 @@
 // Shared endpoint/region/credentials (S3-compatible / MinIO) + per-store buckets.
 // Credentials are NEVER literal — only ${ENV_VAR} placeholders.
 const defaultEndpoint = env === 'local' ? 'http://localhost:9000' : 'http://minio:9000';
-const endpoint = env === 'production' ? '${STORAGE_ENDPOINT}' : '${STORAGE_ENDPOINT:' + defaultEndpoint + '}';
+// production: blank default → real AWS S3 native endpoint resolution; set STORAGE_ENDPOINT only for S3-compatible (MinIO/R2)
+const endpoint = env === 'production' ? '${STORAGE_ENDPOINT:}' : '${STORAGE_ENDPOINT:' + defaultEndpoint + '}';
 const publicBase = env === 'production' ? '${STORAGE_PUBLIC_URL}' : '${STORAGE_PUBLIC_URL:' + defaultEndpoint + '}';
 -%>
 storage:

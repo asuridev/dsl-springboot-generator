@@ -2,7 +2,7 @@
 
 const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
-const { toPascalCase, toCamelCase, toPackagePath } = require('../utils/naming');
+const { toPascalCase, toCamelCase, toPackagePath, pluralizeWord } = require('../utils/naming');
 const { mapType, resolveCanonicalReturnType } = require('../utils/type-mapper');
 const { mapDslValidations, mergeAnnotations } = require('../utils/validation-mapper');
 const { mapRule } = require('../utils/domain-rule-mapper');
@@ -566,16 +566,86 @@ function getterName(fieldName) {
   return 'get' + fieldName.charAt(0).toUpperCase() + fieldName.slice(1);
 }
 
+// ─── Composition entities (child DTOs) ─────────────────────────────────────────
+
+// Domain field/getter name for a child entity, matching aggregate-generator.js:
+// oneToMany → camelCase(plural(name)) (e.g. ProductImage → productImages),
+// oneToOne  → camelCase(name).
+function childDomainFieldName(entity) {
+  const isOneToOne = entity.cardinality === 'oneToOne';
+  return isOneToOne ? toCamelCase(entity.name) : toCamelCase(pluralizeWord(entity.name));
+}
+
+// Resolves the composition collection field name as it must appear in the
+// serialized ResponseDto. The ResponseDto is serialized directly by the
+// controller, so its field names must match the OpenAPI contract — which is the
+// authoritative source for this name (it is NOT derivable from the entity name,
+// e.g. ProductImage → "images", not "productImages").
+function resolveCompositionFieldName(publicApiDoc, aggName, entity) {
+  const isOneToOne = entity.cardinality === 'oneToOne';
+  // No public OpenAPI for this BC → deterministic fallback to the domain field name.
+  if (!publicApiDoc) return childDomainFieldName(entity);
+
+  const schemas = (publicApiDoc.components && publicApiDoc.components.schemas) || {};
+  const respSchema = schemas[`${aggName}Response`];
+  // No "{Agg}Response" schema → no endpoint publishes this DTO, so its field names
+  // aren't bound to any contract. Fall back to the domain-derived name rather than
+  // failing. Fail-fast applies only when the schema EXISTS but omits the composition.
+  if (!respSchema || !respSchema.properties) {
+    return childDomainFieldName(entity);
+  }
+  const refSuffix = `/${entity.name}Response`;
+  for (const [propName, propSchema] of Object.entries(respSchema.properties)) {
+    if (!propSchema) continue;
+    if (isOneToOne) {
+      if (typeof propSchema.$ref === 'string' && propSchema.$ref.endsWith(refSuffix)) return propName;
+    } else if (
+      propSchema.type === 'array' &&
+      propSchema.items &&
+      typeof propSchema.items.$ref === 'string' &&
+      propSchema.items.$ref.endsWith(refSuffix)
+    ) {
+      return propName;
+    }
+  }
+  throw new Error(
+    `[application-generator] El schema "${aggName}Response" no expone una propiedad ` +
+    `${isOneToOne ? '' : 'array '}que referencie "${entity.name}Response" ` +
+    `(composición "${entity.name}" declarada en el agregado "${aggName}"). ` +
+    `Alinea {bc}-open-api.yaml con la composición del agregado.`
+  );
+}
+
 // ─── ResponseDto fields ───────────────────────────────────────────────────────
 
-function buildResponseDtoFields(agg, packageName, moduleName, voNames = new Set(), bcYaml = null) {
-  const imports = new Set();
+// Builds the scalar (non-composition) record components for a set of properties.
+// Shared by the aggregate ResponseDto and each child-entity ResponseDto.
+function buildScalarDtoFields(props, packageName, moduleName, imports, voNames, bcYaml) {
   const fields = [];
-
-  for (const prop of agg.properties || []) {
+  for (const prop of props || []) {
     if (prop.hidden || prop.internal) continue;
     const javaType = javaTypeForDto(prop.type, packageName, moduleName, imports, voNames, bcYaml);
     fields.push({ type: javaType, name: prop.name, annotations: [] });
+  }
+  return fields;
+}
+
+function buildResponseDtoFields(agg, packageName, moduleName, voNames = new Set(), bcYaml = null, publicApiDoc = null) {
+  const imports = new Set();
+  const fields = buildScalarDtoFields(agg.properties || [], packageName, moduleName, imports, voNames, bcYaml);
+
+  // Composition entities → nested response DTO fields. Field name comes from the
+  // OpenAPI response schema (the serialized contract), placed before audit fields.
+  for (const entity of agg.entities || []) {
+    const isOneToOne = entity.cardinality === 'oneToOne';
+    const fieldName = resolveCompositionFieldName(publicApiDoc, agg.name, entity);
+    const childDto = `${entity.name}ResponseDto`;
+    if (isOneToOne) {
+      fields.push({ type: childDto, name: fieldName, annotations: [] });
+    } else {
+      imports.add('java.util.List');
+      fields.push({ type: `List<${childDto}>`, name: fieldName, annotations: [] });
+    }
   }
 
   if (agg.auditable) {
@@ -589,38 +659,57 @@ function buildResponseDtoFields(agg, packageName, moduleName, voNames = new Set(
 
 // ─── Mapper fields ────────────────────────────────────────────────────────────
 
+// Builds one mapper field for a scalar property. Getter-based fields return
+// { name, getter } (the template prepends the receiver); conversion fields return
+// { name, expr } with the receiver already inlined.
+function buildScalarMapperField(prop, receiver, packageName, moduleName, voNames, bcYaml, imports) {
+  javaTypeForDto(prop.type, packageName, moduleName, imports, voNames, bcYaml); // side-effect: collect imports
+  const baseGetter = getterName(prop.name);
+  // Url type — domain holds URI, DTO expects String; emit an explicit conversion.
+  if (prop.type === 'Url') {
+    const expr = prop.required
+      ? `${receiver}.${baseGetter}().toString()`
+      : `${receiver}.${baseGetter}() != null ? ${receiver}.${baseGetter}().toString() : null`;
+    return { name: prop.name, expr };
+  }
+  // List[T] with single-prop VO inner type → stream().map(Vo::getValue).toList()
+  const listInnerMatch = /^List\[(.+)\]$/.exec(prop.type);
+  let getter;
+  if (listInnerMatch) {
+    const innerType = listInnerMatch[1];
+    const innerVo = (bcYaml?.valueObjects || []).find((v) => v.name === innerType && (v.properties || []).length === 1);
+    getter = innerVo
+      ? `${baseGetter}().stream().map(${innerType}::getValue).toList`
+      : baseGetter;
+  } else {
+    const isSingleStrVo = voNames.has(prop.type) && isSingleStringVo(prop.type, bcYaml);
+    getter = isSingleStrVo
+      ? `${baseGetter}().getValue`
+      : baseGetter;
+  }
+  return { name: prop.name, getter };
+}
+
 function buildMapperFields(agg, packageName, moduleName, voNames = new Set(), bcYaml = null) {
   const imports = new Set();
   const fields = [];
 
   for (const prop of agg.properties || []) {
     if (prop.hidden || prop.internal) continue;
-    javaTypeForDto(prop.type, packageName, moduleName, imports, voNames, bcYaml); // side-effect: collect imports
-    const baseGetter = getterName(prop.name);
-    // Url type — domain holds URI, DTO expects String; emit an explicit conversion.
-    if (prop.type === 'Url') {
-      const expr = prop.required
-        ? `domain.${baseGetter}().toString()`
-        : `domain.${baseGetter}() != null ? domain.${baseGetter}().toString() : null`;
-      fields.push({ name: prop.name, expr });
-      continue;
-    }
-    // List[T] with single-prop VO inner type → stream().map(Vo::getValue).toList()
-    const listInnerMatch = /^List\[(.+)\]$/.exec(prop.type);
-    let getter;
-    if (listInnerMatch) {
-      const innerType = listInnerMatch[1];
-      const innerVo = (bcYaml?.valueObjects || []).find((v) => v.name === innerType && (v.properties || []).length === 1);
-      getter = innerVo
-        ? `${baseGetter}().stream().map(${innerType}::getValue).toList`
-        : baseGetter;
-    } else {
-      const isSingleStrVo = voNames.has(prop.type) && isSingleStringVo(prop.type, bcYaml);
-      getter = isSingleStrVo
-        ? `${baseGetter}().getValue`
-        : baseGetter;
-    }
-    fields.push({ name: prop.name, getter });
+    fields.push(buildScalarMapperField(prop, 'domain', packageName, moduleName, voNames, bcYaml, imports));
+  }
+
+  // Composition entities → mapped via dedicated child mapper methods. Ordering
+  // (scalars, compositions, audit) must mirror buildResponseDtoFields exactly so
+  // the record's positional constructor args line up.
+  for (const entity of agg.entities || []) {
+    const isOneToOne = entity.cardinality === 'oneToOne';
+    const getter = getterName(childDomainFieldName(entity));
+    const childMethod = `to${entity.name}ResponseDto`;
+    const expr = isOneToOne
+      ? `${childMethod}(domain.${getter}())`
+      : `domain.${getter}().stream().map(this::${childMethod}).toList()`;
+    fields.push({ name: toCamelCase(entity.name), expr });
   }
 
   if (agg.auditable) {
@@ -2054,18 +2143,44 @@ async function generatePackageInfo(moduleName, packageName, bcDir, systemName) {
   );
 }
 
-async function generateResponseDto(agg, moduleName, packageName, bcDir, voNames = new Set(), bcYaml = null) {
-  const { fields, imports } = buildResponseDtoFields(agg, packageName, moduleName, voNames, bcYaml);
+async function generateResponseDto(agg, moduleName, packageName, bcDir, voNames = new Set(), bcYaml = null, publicApiDoc = null) {
+  const { fields, imports } = buildResponseDtoFields(agg, packageName, moduleName, voNames, bcYaml, publicApiDoc);
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'application', 'ResponseDto.java.ejs'),
     path.join(bcDir, 'application', 'dtos', `${agg.name}ResponseDto.java`),
     { packageName, moduleName, aggregateName: agg.name, imports, fields }
   );
+
+  // One nested ResponseDto per composition entity, built from the child entity's
+  // own scalar properties (same template as the aggregate DTO).
+  for (const entity of agg.entities || []) {
+    const childImports = new Set();
+    const childFields = buildScalarDtoFields(entity.properties || [], packageName, moduleName, childImports, voNames, bcYaml);
+    await renderAndWrite(
+      path.join(TEMPLATES_DIR, 'application', 'ResponseDto.java.ejs'),
+      path.join(bcDir, 'application', 'dtos', `${entity.name}ResponseDto.java`),
+      { packageName, moduleName, aggregateName: entity.name, imports: [...childImports].sort(), fields: childFields }
+    );
+  }
 }
 
 async function generateApplicationMapper(agg, moduleName, packageName, bcDir, voNames = new Set(), bcYaml = null) {
   const { fields, imports } = buildMapperFields(agg, packageName, moduleName, voNames, bcYaml);
   const importsSet = new Set(imports);
+
+  // Child entity mappers (composition) — one method per child entity. The parent
+  // mapper fields reference these via `this::to{Entity}ResponseDto`.
+  const childMappers = [];
+  for (const entity of agg.entities || []) {
+    importsSet.add(`${packageName}.${moduleName}.domain.entity.${entity.name}`);
+    importsSet.add(`${packageName}.${moduleName}.application.dtos.${entity.name}ResponseDto`);
+    const childFields = [];
+    for (const prop of entity.properties || []) {
+      if (prop.hidden || prop.internal) continue;
+      childFields.push(buildScalarMapperField(prop, 'child', packageName, moduleName, voNames, bcYaml, importsSet));
+    }
+    childMappers.push({ entityName: entity.name, fields: childFields });
+  }
 
   // Projection mapper methods (G2): one per projection referenced by a query UC
   // for this aggregate. Derivable projections produce a real body; the rest
@@ -2139,6 +2254,7 @@ async function generateApplicationMapper(agg, moduleName, packageName, bcDir, vo
       imports: [...importsSet].sort(),
       fields,
       projectionMethods,
+      childMappers,
     }
   );
 }
@@ -3092,7 +3208,7 @@ async function generateApplicationLayer(bcYaml, config, outputDir, internalApiDo
     const aggUseCases = allUseCases.filter((uc) => uc.aggregate === aggName);
 
     // ResponseDto + Mapper per aggregate
-    await generateResponseDto(agg, moduleName, packageName, bcDir, voNames, bcYaml);
+    await generateResponseDto(agg, moduleName, packageName, bcDir, voNames, bcYaml, publicApiDoc);
     await generateApplicationMapper(agg, moduleName, packageName, bcDir, voNames, bcYaml);
 
     // Use cases

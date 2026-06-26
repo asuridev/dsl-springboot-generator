@@ -26,6 +26,18 @@ public class <%= aggregateName %>ApplicationMapper {
     public List<<%= aggregateName %>ResponseDto> toResponseDtoList(List<<%= aggregateName %>> list) {
         return list.stream().map(this::toResponseDto).toList();
     }
+<% (childMappers || []).forEach(cm => { %>
+
+    public <%= cm.entityName %>ResponseDto to<%= cm.entityName %>ResponseDto(<%= cm.entityName %> child) {
+        return new <%= cm.entityName %>ResponseDto(
+<%- cm.fields.map((f, i) => {
+  const comma = i < cm.fields.length - 1 ? ',' : '';
+  if (f.expr !== undefined) return '            ' + f.expr + comma;
+  return '            child.' + f.getter + '()' + comma;
+}).join('\n') %>
+        );
+    }
+<% }); %>
 <% (projectionMethods || []).forEach(pm => { %>
 
     public <%= pm.projectionName %> to<%= pm.projectionName %>(<%= aggregateName %> domain) {

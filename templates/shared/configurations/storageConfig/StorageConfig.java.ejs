@@ -20,13 +20,16 @@ import software.amazon.awssdk.services.s3.presigner.S3Presigner;
  *
  * Configured against an S3-compatible endpoint (MinIO by default; swap to AWS
  * S3 / R2 / GCS-XML by changing {@code storage.*} config only — no code change).
- * Path-style access is forced because MinIO does not support virtual-host
- * bucket addressing by default.
+ *
+ * When {@code storage.endpoint} is set, an endpoint override + path-style
+ * addressing are applied (required by MinIO / R2, which lack virtual-host bucket
+ * addressing). When {@code storage.endpoint} is blank, the SDK resolves the
+ * endpoint natively (real AWS S3: virtual-host style, region-based resolution).
  */
 @Configuration
 public class StorageConfig {
 
-    @Value("${storage.endpoint}")
+    @Value("${storage.endpoint:}")
     private String endpoint;
 
     @Value("${storage.region:us-east-1}")
@@ -44,21 +47,29 @@ public class StorageConfig {
 
     @Bean
     public S3Client s3Client() {
-        return S3Client.builder()
-            .endpointOverride(URI.create(endpoint))
+        var builder = S3Client.builder()
             .region(Region.of(region))
-            .credentialsProvider(credentials())
-            .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build())
-            .build();
+            .credentialsProvider(credentials());
+        if (endpoint != null && !endpoint.isBlank()) {
+            // S3-compatible (MinIO / R2): override endpoint + path-style addressing
+            builder.endpointOverride(URI.create(endpoint))
+                .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build());
+        }
+        // endpoint blank → AWS S3 native resolution (virtual-host style, by region)
+        return builder.build();
     }
 
     @Bean
     public S3Presigner s3Presigner() {
-        return S3Presigner.builder()
-            .endpointOverride(URI.create(endpoint))
+        var builder = S3Presigner.builder()
             .region(Region.of(region))
-            .credentialsProvider(credentials())
-            .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build())
-            .build();
+            .credentialsProvider(credentials());
+        if (endpoint != null && !endpoint.isBlank()) {
+            // S3-compatible (MinIO / R2): override endpoint + path-style addressing
+            builder.endpointOverride(URI.create(endpoint))
+                .serviceConfiguration(S3Configuration.builder().pathStyleAccessEnabled(true).build());
+        }
+        // endpoint blank → AWS S3 native resolution (virtual-host style, by region)
+        return builder.build();
     }
 }

@@ -18,5 +18,24 @@
       "private List<String> tags",
       "import java.util.List"
     ]
+  },
+  "src/main/java/com/test/ordering/application/dtos/OrderLineResponseDto.java": {
+    "_comment": "Composition entity gets its own nested ResponseDto. No OrderResponse schema exists in this OpenAPI, so the collection field name falls back to the domain-derived 'orderLines'.",
+    "contains": [
+      "public record OrderLineResponseDto(UUID id, UUID productId, Integer quantity, List<String> tags)"
+    ]
+  },
+  "src/main/java/com/test/ordering/application/dtos/OrderResponseDto.java": {
+    "_comment": "Parent ResponseDto includes the composition collection field before audit fields.",
+    "contains": [
+      "List<OrderLineResponseDto> orderLines"
+    ]
+  },
+  "src/main/java/com/test/ordering/application/mappers/OrderApplicationMapper.java": {
+    "_comment": "Mapper wires the composition via a dedicated child mapper method.",
+    "contains": [
+      "domain.getOrderLines().stream().map(this::toOrderLineResponseDto).toList()",
+      "public OrderLineResponseDto toOrderLineResponseDto(OrderLine child)"
+    ]
   }
 }
