@@ -6,6 +6,11 @@ const yaml = require('js-yaml');
 const { PROHIBITED_TYPES } = require('./type-mapper');
 const { toPascalCase, toCamelCase, toSnakeCase } = require('./naming');
 const { assertJavaIdentifier } = require('./java-identifiers');
+// [GAP-1] Per-input anatomy rules (multipart/File, maxSize, source enum, max,
+// SearchText, Range, key whitelist) are the single-source-of-truth shared
+// validator. We call it per use case and surface the first error via fail() to
+// preserve the load-time "Failed to load BC …" behavior.
+const { validateUseCaseInputAnatomy } = require('@dsl/contract');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -241,24 +246,13 @@ function validate(doc, opts = {}) {
     'storageCalls',
   ]);
   const ALLOWED_UC_VALIDATION_KEYS = new Set(['id', 'expression', 'errorCode', 'description']);
-  // [G12] Enum names + scalar form-data types allowed as multipart parts alongside a File.
-  const ucEnumNames = new Set((doc.enums || []).map((e) => e.name));
-  const MULTIPART_FORM_SCALARS = new Set(['String', 'Integer', 'Long', 'Boolean', 'Decimal']);
+  // [GAP-1] Per-input anatomy (multipart parts, input-key whitelist, source enum,
+  // maxSize/partName/contentTypes, max, SearchText, Range) is validated by the
+  // shared @dsl/contract validateUseCaseInputAnatomy — see the per-UC call below.
   const ALLOWED_UC_TRIGGER_KEYS = new Set([
     'kind', 'operationId',
     // [G15] event-triggered UCs
     'event', 'channel', 'consumes', 'fromBc', 'filter',
-  ]);
-  const ALLOWED_UC_INPUT_KEYS = new Set([
-    'name', 'type', 'required', 'source', 'loadAggregate',
-    // [G11] header source
-    'headerName',
-    // [G5] defaults + numeric max
-    'default', 'max',
-    // [G12] multipart source
-    'partName', 'maxSize', 'contentTypes',
-    // [G8] SearchText fields[] (which aggregate properties to search)
-    'fields',
   ]);
   const ALLOWED_UC_FK_KEYS = new Set([
     'aggregate', 'param', 'error', 'notFoundError', 'bc', 'conditional',
@@ -269,7 +263,6 @@ function validate(doc, opts = {}) {
   ]);
   const ALLOWED_UC_TYPES = new Set(['command', 'query']);
   const ALLOWED_UC_TRIGGER_KINDS = new Set(['http', 'event']);
-  const ALLOWED_UC_INPUT_SOURCES = new Set(['body', 'path', 'query', 'authContext', 'header', 'multipart']);
   const ALLOWED_UC_PAGINATION_KEYS = new Set(['defaultSize', 'maxSize', 'sortable', 'defaultSort']);
   const ALLOWED_UC_DEFAULT_SORT_KEYS = new Set(['field', 'direction']);
   const ALLOWED_UC_SORT_DIRECTIONS = new Set(['ASC', 'DESC']);
@@ -360,122 +353,15 @@ function validate(doc, opts = {}) {
         }
       }
     }
-    if (uc.input != null) {
-      if (!Array.isArray(uc.input)) {
-        fail(`Use case "${uc.id}" "input" must be a list of input mappings.`);
-      }
-      for (const inp of uc.input) {
-        if (!inp || typeof inp !== 'object' || Array.isArray(inp)) {
-          fail(`Use case "${uc.id}" input[] contains a non-mapping entry.`);
-        }
-        for (const k of Object.keys(inp)) {
-          if (!ALLOWED_UC_INPUT_KEYS.has(k)) {
-            fail(`Use case "${uc.id}" input "${inp.name || '<unnamed>'}" declares unsupported attribute "${k}". Allowed: ${[...ALLOWED_UC_INPUT_KEYS].join(', ')}.`);
-          }
-        }
-        if (!inp.name) fail(`Use case "${uc.id}" has an input without "name".`);
-        if (!inp.type) fail(`Use case "${uc.id}" input "${inp.name}" is missing required field "type".`);
-        if (!inp.source) fail(`Use case "${uc.id}" input "${inp.name}" is missing required field "source".`);
-        if (!ALLOWED_UC_INPUT_SOURCES.has(inp.source)) {
-          fail(`Use case "${uc.id}" input "${inp.name}" has unsupported source "${inp.source}". Allowed: ${[...ALLOWED_UC_INPUT_SOURCES].join(', ')}.`);
-        }
-        // [G11] source: header requires headerName
-        if (inp.source === 'header' && (!inp.headerName || typeof inp.headerName !== 'string')) {
-          fail(`Use case "${uc.id}" input "${inp.name}" declares source: header but is missing required "headerName" (e.g. "X-Tenant-Id").`);
-        }
-        if (inp.headerName != null && inp.source !== 'header') {
-          fail(`Use case "${uc.id}" input "${inp.name}" declares "headerName" but its source is "${inp.source}". headerName is only valid for source: header.`);
-        }
-        // [G12] source: multipart cross-validation with type and sub-keys.
-        // A multipart/form-data request may carry the binary File part plus
-        // typed form-data parts (a String/enum/number sent alongside the upload).
-        // Restrict the non-File parts to scalar types that serialize cleanly as
-        // form fields; reject VOs, lists, ranges, etc.
-        if (inp.source === 'multipart') {
-          const baseType = String(inp.type || '').replace(/\(.*\)/, '').trim();
-          if (baseType !== 'File' && !MULTIPART_FORM_SCALARS.has(baseType) && !ucEnumNames.has(baseType)) {
-            fail(`Use case "${uc.id}" input "${inp.name}" declares source: multipart but type is "${inp.type}". Multipart parts must be a File or a scalar form-data type (${[...MULTIPART_FORM_SCALARS].join(', ')}, or a declared enum).`);
-          }
-        }
-        if (inp.type === 'File' && inp.source !== 'multipart') {
-          fail(`Use case "${uc.id}" input "${inp.name}" has type "File" but source is "${inp.source}". File inputs must declare source: multipart.`);
-        }
-        for (const k of ['partName', 'maxSize', 'contentTypes']) {
-          if (inp[k] != null && inp.source !== 'multipart') {
-            fail(`Use case "${uc.id}" input "${inp.name}" declares "${k}" but its source is "${inp.source}". "${k}" is only valid for source: multipart.`);
-          }
-        }
-        // [G12] maxSize/contentTypes describe the binary File part only; they are
-        // meaningless on typed form-data parts.
-        for (const k of ['maxSize', 'contentTypes']) {
-          if (inp[k] != null && inp.type !== 'File') {
-            fail(`Use case "${uc.id}" input "${inp.name}" declares "${k}" but type is "${inp.type}". "${k}" only applies to type: File.`);
-          }
-        }
-        if (inp.source === 'multipart') {
-          if (inp.partName != null && typeof inp.partName !== 'string') {
-            fail(`Use case "${uc.id}" input "${inp.name}" "partName" must be a string (the multipart form-data part identifier).`);
-          }
-          // partName is interpolated into generated Java string literals (controller
-          // guards); restrict it to a safe identifier so it cannot break the literal.
-          if (typeof inp.partName === 'string' && !/^[A-Za-z_][A-Za-z0-9_-]*$/.test(inp.partName)) {
-            fail(`Use case "${uc.id}" input "${inp.name}" "partName" "${inp.partName}" must be a safe identifier (letters, digits, underscore and hyphen; not starting with a digit or hyphen).`);
-          }
-          if (inp.maxSize != null) {
-            if (typeof inp.maxSize !== 'string' || !/^\d+(B|KB|MB|GB)$/.test(inp.maxSize)) {
-              fail(`Use case "${uc.id}" input "${inp.name}" "maxSize" must be a size string like "10MB" (units: B, KB, MB, GB).`);
-            }
-          }
-          if (inp.contentTypes != null) {
-            if (!Array.isArray(inp.contentTypes) || inp.contentTypes.length === 0 || inp.contentTypes.some((c) => typeof c !== 'string')) {
-              fail(`Use case "${uc.id}" input "${inp.name}" "contentTypes" must be a non-empty array of MIME-type strings (e.g. ["image/png", "image/jpeg"]).`);
-            }
-            // Each entry is interpolated into generated Java string literals; require a
-            // safe "type/subtype" MIME shape so it cannot break the literal.
-            for (const c of inp.contentTypes) {
-              if (typeof c === 'string' && !/^[\w.+-]+\/[\w.+-]+$/.test(c)) {
-                fail(`Use case "${uc.id}" input "${inp.name}" "contentTypes" entry "${c}" is not a valid MIME type (expected "type/subtype", e.g. "image/png").`);
-              }
-            }
-          }
-        }
-        // [G5] max only on numeric inputs
-        if (inp.max != null) {
-          if (typeof inp.max !== 'number' || !Number.isInteger(inp.max)) {
-            fail(`Use case "${uc.id}" input "${inp.name}" "max" must be an integer.`);
-          }
-          if (!/^(Integer|Long|int|long|BigDecimal)$/.test(String(inp.type))) {
-            fail(`Use case "${uc.id}" input "${inp.name}" declares "max" but type "${inp.type}" is not numeric. Allowed numeric types: Integer, Long, BigDecimal.`);
-          }
-        }
-        // [G8] SearchText requires fields[] (which aggregate properties to search).
-        if (inp.type === 'SearchText') {
-          if (!Array.isArray(inp.fields) || inp.fields.length === 0
-              || inp.fields.some((f) => typeof f !== 'string' || !f.trim())) {
-            fail(`Use case "${uc.id}" input "${inp.name}" declares type: SearchText but is missing a non-empty "fields" list (the aggregate property names to LIKE-match).`);
-          }
-        }
-        if (inp.fields != null && inp.type !== 'SearchText') {
-          fail(`Use case "${uc.id}" input "${inp.name}" declares "fields" but type is "${inp.type}". "fields" is only valid for type: SearchText.`);
-        }
-        // [G8] Range[T] builds a JPA cb.between(min, max) specification, which requires
-        // an order-comparable scalar. A non-orderable inner type (Boolean, enum, VO,
-        // or any non-scalar) produces code that does not compile / cannot be evaluated.
-        const rangeMatch = /^Range\[(.+)\]$/.exec(String(inp.type || ''));
-        if (rangeMatch) {
-          const inner = rangeMatch[1].replace(/\(.*\)/, '').trim();
-          const ORDERABLE = new Set(['Integer', 'Long', 'Decimal', 'Date', 'DateTime', 'Duration', 'String', 'Uuid']);
-          if (!ORDERABLE.has(inner)) {
-            fail(`Use case "${uc.id}" input "${inp.name}" declares "${inp.type}", but Range filters require an order-comparable scalar inner type (${[...ORDERABLE].join(', ')}). "${inner}" is not orderable.`);
-          }
-        }
-      }
-      // [G12] when any input is multipart, no other input may be source: body
-      const inputs = uc.input;
-      const hasMultipart = inputs.some((i) => i.source === 'multipart');
-      if (hasMultipart && inputs.some((i) => i.source === 'body')) {
-        fail(`Use case "${uc.id}" mixes source: multipart with source: body. When uploading a file, send any additional fields via path/query/header — Spring's @RequestPart and @RequestBody cannot share the same request.`);
-      }
+    // [GAP-1] Per-input anatomy rules (multipart/File, maxSize, source enum, max,
+    // SearchText, Range, input-key whitelist) come from the shared @dsl/contract
+    // validator. Run them for this use case and surface the first error through
+    // fail() — preserving the load-time "Failed to load BC …" behavior. (Scoped to
+    // a single-UC doc so the shared validator only checks this use case here.)
+    {
+      const inputDiags = validateUseCaseInputAnatomy({ bc: doc.bc, enums: doc.enums, useCases: [uc] });
+      const firstInputErr = inputDiags.find((d) => d.level === 'error');
+      if (firstInputErr) fail(firstInputErr.message);
     }
     // [G12] returns: BinaryStream is only valid for queries
     if (uc.returns === 'BinaryStream' && uc.type !== 'query') {
