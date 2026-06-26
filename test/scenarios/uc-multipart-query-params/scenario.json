@@ -1,0 +1,4 @@
+{
+  "description": "[G12] Multipart command with query-param metadata: UC-CAT-011 AddProductImage declares a File part (multipart) alongside scalar inputs sourced from the query string (altText: String optional, position: Integer optional, imageType: ImageType enum required). Verifies the controller declares each query-source input as a typed @RequestParam and the dispatch references those locals — previously the dispatch referenced undeclared variables (cannot find symbol).",
+  "allowNoExpected": true
+}

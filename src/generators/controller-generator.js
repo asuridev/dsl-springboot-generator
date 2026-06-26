@@ -459,6 +459,13 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
     [...inputMap.values()].filter((i) => i.source === 'multipart').map((i) => i.name)
   );
   const hasMultipart = multipartFieldNames.size > 0;
+  // [G12] Command query-param field names — `source: query` scalar inputs on a
+  // command endpoint. Bound to @RequestParam locals (like headers/multipart),
+  // never to command.field(). Queries route their query params through
+  // queryFieldsList, so this only applies to commands.
+  const commandQueryFieldNames = new Set(
+    isQuery ? [] : [...inputMap.values()].filter((i) => i.source === 'query').map((i) => i.name)
+  );
   // Fields that come from path variables (by name)
   const pathFieldNames = new Set(pathVarNames);
   // aggIdPathVar: handles the case where path var is '{aggName}Id' but field is 'id'
@@ -480,6 +487,7 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
   };
   const bodyFieldNames = allCmdFields.filter(
     (f) => resolveToPathVar(f) === null && !headerFieldNames.has(f) && !multipartFieldNames.has(f)
+      && !commandQueryFieldNames.has(f)
   );
   // commandHasPathId: true when any command field resolves to a path variable (not just 'id')
   const commandHasPathId = allCmdFields.some((f) => resolveToPathVar(f) !== null);
@@ -498,6 +506,7 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
     if (pv) return pv;
     if (headerFieldNames.has(f)) return f;
     if (multipartFieldNames.has(f)) return f;
+    if (commandQueryFieldNames.has(f)) return f;
     return viaCommand ? `command.${f}()` : f;
   };
   let dispatchCall;
@@ -523,8 +532,9 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
     // All fields from path or header (e.g., DeactivateCategory, DeleteCategory)
     const args = allCmdFields.map((f) => fieldExpr(f, false)).join(', ');
     dispatchCall = `new ${ucClassName}Command(${args})`;
-  } else if (hasRequestBody && (commandHasId || headerFieldNames.size > 0)) {
-    // Mix of path id / header + body fields — always construct explicitly so headers override null body fields
+  } else if (hasRequestBody && (commandHasId || headerFieldNames.size > 0 || commandQueryFieldNames.size > 0)) {
+    // Mix of path id / header / query param + body fields — always construct
+    // explicitly so the @RequestParam/header locals override null body fields.
     const args = allCmdFields.map((f) => fieldExpr(f, true)).join(', ');
     dispatchCall = `new ${ucClassName}Command(${args})`;
   } else {
@@ -612,6 +622,21 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
       };
     });
 
+  // [G12] Command query params — `source: query` scalar inputs on a command
+  // endpoint, bound via @RequestParam. javaType reuses the multipart part type
+  // resolver (boxed types for optional numerics so an absent param binds null).
+  const commandQueryParamsList = isQuery
+    ? []
+    : [...inputMap.values()]
+        .filter((inp) => inp.source === 'query')
+        .map((inp) => ({
+          name: inp.name,
+          requestParamName: inp.queryName && inp.queryName !== inp.name ? inp.queryName : inp.name,
+          javaType: multipartPartJavaType(inp),
+          required: inp.required !== false,
+          defaultValue: inp.default != null ? String(inp.default) : null,
+        }));
+
   // [G10] Resolve the async status endpoint path from OpenAPI when statusEndpoint is set.
   let asyncStatusPath = null;
   if (isAsyncJobTracking && uc.async.statusEndpoint && publicOpsMap) {
@@ -661,6 +686,7 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
     isAsyncFireForget,
     asyncStatusPath,
     multipartInputsList,
+    commandQueryParamsList,
     ucName: ucClassName,
     aggName: agg.name,
     // [G12] consumes attribute for the HTTP annotation when the endpoint receives multipart form-data.
@@ -939,6 +965,19 @@ function buildMethodStrings(op) {
       } else {
         params.push(`@RequestParam(value = "${mp.partName}"${reqAttr}) ${mp.javaType} ${mp.name}`);
       }
+    }
+  }
+
+  // [G12] Command query params — `source: query` scalar inputs on a command
+  // endpoint, bound via @RequestParam (covered by the web.bind.annotation.*
+  // wildcard import). Spring's ConversionService handles enum/number conversion.
+  if (op.commandQueryParamsList && op.commandQueryParamsList.length > 0) {
+    for (const qp of op.commandQueryParamsList) {
+      const parts = [`value = "${qp.requestParamName}"`];
+      if (qp.defaultValue != null) parts.push(`defaultValue = "${qp.defaultValue}"`);
+      else if (qp.required) parts.push('required = true');
+      else parts.push('required = false');
+      params.push(`@RequestParam(${parts.join(', ')}) ${qp.javaType} ${qp.name}`);
     }
   }
 
@@ -1286,6 +1325,11 @@ function buildControllerImports(operations, packageName, moduleName, bcYaml = nu
       for (const hp of op.headerParamsList || []) {
         if (enumNames.has(hp.javaType)) {
           imports.add(`${packageName}.${moduleName}.domain.enums.${hp.javaType}`);
+        }
+      }
+      for (const qp of op.commandQueryParamsList || []) {
+        if (enumNames.has(qp.javaType)) {
+          imports.add(`${packageName}.${moduleName}.domain.enums.${qp.javaType}`);
         }
       }
     }

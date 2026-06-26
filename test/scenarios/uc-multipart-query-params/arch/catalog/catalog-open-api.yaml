@@ -1,0 +1,92 @@
+openapi: "3.0.3"
+info:
+  title: Catalog API
+  version: "1.0.0"
+paths:
+  /products:
+    post:
+      operationId: createProduct
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProductRequest'
+      responses:
+        "201":
+          description: Product created.
+          content:
+            application/json:
+              schema:
+                type: string
+                format: uuid
+  /products/{productId}/images:
+    post:
+      operationId: addProductImage
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: altText
+          in: query
+          required: false
+          schema:
+            type: string
+            maxLength: 200
+        - name: position
+          in: query
+          required: false
+          schema:
+            type: integer
+        - name: imageType
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [PRIMARY, GALLERY, THUMBNAIL]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - file
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "204":
+          description: Image added.
+  /products/{productId}/images/{imageId}:
+    delete:
+      operationId: removeProductImage
+      parameters:
+        - name: productId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: imageId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Image removed.
+components:
+  schemas:
+    CreateProductRequest:
+      type: object
+      required:
+        - name
+      properties:
+        name:
+          type: string

@@ -1,0 +1,33 @@
+{
+  "src/main/java/com/test/catalog/infrastructure/rest/controllers/product/v1/ProductV1Controller.java": {
+    "_comment": "[G12] The File part binds via @RequestPart MultipartFile; query-source scalar inputs bind via typed @RequestParam (optional altText/position boxed so absent → null; required enum). The dispatch references the declared @RequestParam locals, not undeclared variables. Enum type is imported.",
+    "contains": [
+      "@PostMapping(value = \"/{productId}/images\", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)",
+      "@RequestPart(value = \"file\") MultipartFile file",
+      "@RequestParam(value = \"altText\", required = false) String altText",
+      "@RequestParam(value = \"position\", required = false) Integer position",
+      "@RequestParam(value = \"imageType\", required = true) ImageType imageType",
+      "import com.test.catalog.domain.enums.ImageType",
+      "new AddProductImageCommand(productId, file, altText, position, imageType)"
+    ],
+    "notContains": [
+      "@RequestPart(value = \"altText\")",
+      "@RequestPart(value = \"position\")",
+      "command.altText()",
+      "command.position()"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/commands/AddProductImageCommand.java": {
+    "_comment": "Query-source scalar inputs carry their real Java types in the command record (String/Integer/enum), not MultipartFile.",
+    "contains": [
+      "String altText",
+      "Integer position",
+      "ImageType imageType"
+    ],
+    "notContains": [
+      "MultipartFile altText",
+      "MultipartFile position"
+    ]
+  }
+}

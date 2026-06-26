@@ -1,0 +1,24 @@
+system:
+  name: uc-multipart-query-params
+  description: "Test system for a multipart upload command whose scalar metadata is carried as query parameters (source: query) rather than form-data parts."
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products and their uploaded media (images).
+    aggregates:
+      - name: Product
+        root: Product
+        entities:
+          - ProductImage
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc
+  objectStorage:
+    - name: product-media
+      visibility: public
+      urlAccess: public-url
+      ownedBy: catalog

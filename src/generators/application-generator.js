@@ -2987,6 +2987,9 @@ async function generateMultiAggregateCommandHandler(uc, moduleName, packageName,
       mapperFieldName: '',
       authContextFields: [],
       storagePreamble: '',
+      // The saga handler injects its dependencies via fkRepos and builds its own
+      // body; it does not use the template's "primary" repository field.
+      injectRepository: false,
       // 'full' so the template emits our body instead of the scaffold throw.
       implementation: 'full',
       body,
