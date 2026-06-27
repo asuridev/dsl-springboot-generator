@@ -785,6 +785,17 @@ function buildRequiredAnnotation(javaType, imports) {
   return ['@NotNull'];
 }
 
+/**
+ * Drops presence constraints (`notEmpty`) from a property's validations[] before
+ * they reach mapDslValidations(). On an optional or path-bound command field a
+ * presence constraint is wrong: an absent (null) value must be allowed, otherwise
+ * a partial update sending only the other fields fails with 422. Content
+ * constraints (@Size/@Pattern/@Email/min/max/…) are preserved.
+ */
+function stripPresenceValidations(validations) {
+  return (validations || []).filter((v) => Object.keys(v)[0] !== 'notEmpty');
+}
+
 // ─── Command fields ───────────────────────────────────────────────────────────
 
 function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(), bcYaml = null, eventDtoNames = new Set()) {
@@ -884,8 +895,12 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
       if (mapped.importHint) imports.add(mapped.importHint);
 
       const typeAnnotations = getTypeValidationAnnotations(voProp.type, imports);
+      // Presence constraints (notEmpty) must not survive on optional/path fields.
+      const voValidations = (isOptional || isPathField)
+        ? stripPresenceValidations(voProp.validations)
+        : (voProp.validations || []);
       const { annotations: dslAnnotations, imports: dslImports } =
-        mapDslValidations(voProp.validations || [], voProp.type);
+        mapDslValidations(voValidations, voProp.type);
       for (const imp of dslImports) imports.add(imp);
       const mergedAnnotations = mergeAnnotations(typeAnnotations, dslAnnotations);
 
@@ -911,9 +926,15 @@ function buildCommandFields(uc, agg, packageName, moduleName, voNames = new Set(
       const typeAnnotations = getTypeValidationAnnotations(rawType, imports);
       const collectionAnnotations = /^List\[/.test(rawType) ? getCollectionSizeAnnotations(input, imports) : [];
 
-      // 3. DSL validations[] from aggregate property definition
+      // 3. DSL validations[] from aggregate property definition.
+      //    Presence constraints (notEmpty) are dropped on optional/path fields so a
+      //    partial update omitting this field is not rejected with 422.
+      const skipPresence = isOptional || isPathField;
+      const effectiveValidations = skipPresence
+        ? stripPresenceValidations(propDef ? propDef.validations : [])
+        : (propDef ? propDef.validations : []);
       const { annotations: dslAnnotations, imports: dslImports } =
-        mapDslValidations(propDef ? propDef.validations : [], rawType);
+        mapDslValidations(effectiveValidations, rawType);
       for (const imp of dslImports) imports.add(imp);
 
       // 4. Merge @Size(max=n) + @Size(min=N) → @Size(min=N, max=n)

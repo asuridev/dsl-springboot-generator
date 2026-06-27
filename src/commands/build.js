@@ -585,7 +585,7 @@ async function buildCommand(options = {}) {
     if (resolvedConfig.broker) {
       const brokerSpinner = ora(`Generating shared ${resolvedConfig.broker} configuration…`).start();
       try {
-        await generateSharedBrokerConfig(resolvedConfig, outputDir);
+        await generateSharedBrokerConfig(resolvedConfig, outputDir, { outboxEnabled: !!reliabilityFlags.outbox });
         brokerSpinner.succeed(`Shared ${resolvedConfig.broker} configuration generated`);
       } catch (err) {
         brokerSpinner.fail(`Broker config generation failed: ${err.message}`);

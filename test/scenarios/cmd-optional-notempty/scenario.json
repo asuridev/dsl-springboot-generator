@@ -1,0 +1,3 @@
+{
+  "description": "Optional command fields must not carry presence constraints. A partial-update command (UpdateCategory) declares name/description as required: false while the aggregate property 'name' has validations: [{ notEmpty: true }]. Regression for the friction where @NotEmpty leaked onto optional fields, rejecting partial updates with 422. The create command (CreateCategory, required name) must still keep @NotEmpty."
+}

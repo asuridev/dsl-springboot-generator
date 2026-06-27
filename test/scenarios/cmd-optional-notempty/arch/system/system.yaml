@@ -1,0 +1,18 @@
+system:
+  name: test-cmd-optional-notempty-system
+  description: Test system for optional-field command validation generation.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Exercises presence-constraint handling on optional command fields.
+    aggregates:
+      - name: Category
+        root: Category
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

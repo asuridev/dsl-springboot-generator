@@ -1,0 +1,27 @@
+{
+  "src/main/java/com/test/catalog/application/commands/UpdateCategoryCommand.java": {
+    "_comment": "Optional fields (required: false) must keep content constraints (@Size) but NOT presence constraints. The aggregate property 'name' declares notEmpty: true, which must NOT leak onto this partial-update command.",
+    "contains": [
+      "UpdateCategoryCommand",
+      "@Size(max = 120)",
+      "String name",
+      "@Size(max = 500)",
+      "String description"
+    ],
+    "notContains": [
+      "@NotEmpty",
+      "@NotBlank",
+      "@NotNull"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/commands/CreateCategoryCommand.java": {
+    "_comment": "The fix is targeted: a required field bound to a notEmpty property still carries the presence constraint.",
+    "contains": [
+      "CreateCategoryCommand",
+      "@Size(max = 120)",
+      "@NotEmpty",
+      "String name"
+    ]
+  }
+}

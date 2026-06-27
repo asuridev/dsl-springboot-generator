@@ -1,0 +1,75 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Category
+    root: Category
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(120)
+        validations:
+          - notEmpty: true
+      - name: description
+        type: String(500)
+        required: false
+
+useCases:
+  - id: UC-CAT-001
+    name: CreateCategory
+    type: command
+    aggregate: Category
+    trigger:
+      kind: http
+      operationId: createCategory
+    input:
+      - name: id
+        type: Uuid
+        source: body
+        required: true
+      - name: name
+        type: String(120)
+        source: body
+        required: true
+    implementation: scaffold
+
+  - id: UC-CAT-002
+    name: UpdateCategory
+    type: command
+    aggregate: Category
+    trigger:
+      kind: http
+      operationId: updateCategory
+    input:
+      - name: categoryId
+        type: Uuid
+        source: path
+        required: true
+        loadAggregate: true
+      - name: name
+        type: String(120)
+        source: body
+        required: false
+      - name: description
+        type: String(500)
+        source: body
+        required: false
+    notFoundError: CATEGORY_NOT_FOUND
+    implementation: scaffold
+
+errors:
+  - code: CATEGORY_NOT_FOUND
+    httpStatus: 404
+    description: Category not found.
+
+repositories:
+  - aggregate: Category
+    methods:
+      - name: save
+        signature: "save(Category): Category"
+      - name: findById
+        signature: "findById(Uuid): Optional[Category]"

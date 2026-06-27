@@ -50,6 +50,21 @@ public class KafkaConfig {
         return new KafkaTemplate<>(kafkaProducerFactory);
     }
 
+    /**
+     * Pre-serialized JSON payloads from the transactional outbox are published as
+     * raw strings. The OutboxRelay injects this KafkaTemplate<String, String> bean;
+     * Spring resolves it by generic type, distinct from the <String, Object> bean above.
+     */
+    @Bean
+    public KafkaTemplate<String, String> stringKafkaTemplate() {
+        Map<String, Object> props = new HashMap<>(kafkaProperties.buildProducerProperties(null));
+        props.put(
+            org.apache.kafka.clients.producer.ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG,
+            org.apache.kafka.common.serialization.StringSerializer.class
+        );
+        return new KafkaTemplate<>(new DefaultKafkaProducerFactory<>(props));
+    }
+
     @Bean
     public KafkaAdmin kafkaAdmin() {
         return new KafkaAdmin(kafkaProperties.buildAdminProperties(null));

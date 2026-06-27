@@ -713,8 +713,12 @@ async function generateBcRabbitMQConfig(
 /**
  * Generates the shared KafkaConfig.java (infrastructure bean — topic definitions read from YAML).
  */
-async function generateSharedKafkaConfig(config, outputDir) {
+async function generateSharedKafkaConfig(config, outputDir, opts = {}) {
   const packageName = config.packageName;
+  // When the transactional outbox is enabled, the OutboxRelay injects a
+  // KafkaTemplate<String, String> (pre-serialized JSON payloads). Co-generate that
+  // bean so Spring can resolve it by generic type at startup.
+  const outboxEnabled = !!opts.outboxEnabled;
 
   const sharedDir = path.join(
     outputDir,
@@ -726,19 +730,19 @@ async function generateSharedKafkaConfig(config, outputDir) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'messaging', 'KafkaConfig.java.ejs'),
     path.join(sharedDir, 'infrastructure', 'configurations', 'kafkaConfig', 'KafkaConfig.java'),
-    { packageName }
+    { packageName, outboxEnabled }
   );
 }
 
 /**
  * Shared entry-point: dispatches to the correct broker-specific config generator.
  */
-async function generateSharedBrokerConfig(config, outputDir) {
+async function generateSharedBrokerConfig(config, outputDir, opts = {}) {
   if (config.broker === 'rabbitmq') {
     return generateSharedRabbitConfig(config, outputDir);
   }
   if (config.broker === 'kafka') {
-    return generateSharedKafkaConfig(config, outputDir);
+    return generateSharedKafkaConfig(config, outputDir, opts);
   }
 }
 

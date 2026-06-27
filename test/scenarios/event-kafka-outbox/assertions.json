@@ -66,5 +66,14 @@
       "deletePublishedBefore",
       "ChronoUnit"
     ]
+  },
+
+  "src/main/java/com/test/shared/infrastructure/configurations/kafkaConfig/KafkaConfig.java": {
+    "_comment": "D6: con outbox habilitado, KafkaConfig debe co-generar el bean KafkaTemplate<String, String> (StringSerializer) que inyecta OutboxRelay, además del <String, Object> de eventos.",
+    "contains": [
+      "KafkaTemplate<String, Object>",
+      "KafkaTemplate<String, String> stringKafkaTemplate()",
+      "StringSerializer.class"
+    ]
   }
 }
