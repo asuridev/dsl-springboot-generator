@@ -5,13 +5,15 @@ description: >
   pendiente (// TODO: implement business logic) en handlers Spring Boot generados por la
   Fase 2. Opera sobre un bounded context a la vez. Flujo obligatorio: (0) verifica que el
   proyecto compila y que la infraestructura Docker está operativa, corrige errores si los hay;
-  (A–E) implementa los TODO siguiendo los flujos del diseño; (F) valida cada flujo
-  implementado via CLI de contenedores antes de continuar — si falla, corrige y reintenta
-  hasta que el flujo pase. Usa este agente cuando quieras implementar un BC, completar los
-  TODO de un bounded context, finalizar la fase 3, implementar handlers con
+  (A–E) implementa los TODO siguiendo los flujos del diseño; (F) valida **todos los escenarios**
+  (A, B, C…) de cada flujo de `{bc}-flows.md` via CLI de contenedores antes de continuar — si
+  alguno falla, corrige y reintenta hasta que pase; (G) al cerrar el BC genera las colecciones
+  Postman (`postman/{bc}-collection.json` y `postman/auth-collection.json` si aún no existe) para
+  que un humano pueda revalidar los flujos. Usa este agente cuando quieras implementar un BC,
+  completar los TODO de un bounded context, finalizar la fase 3, implementar handlers con
   UnsupportedOperationException, crear domain services DDD, o completar la lógica de
   negocio del scaffold generado.
-tools: [read, edit, search, execute, todo]
+tools: [read, edit, search, execute, write, todo]
 model: "Claude Sonnet 4.5 (copilot)"
 argument-hint: "Nombre del bounded context a implementar (ej: catalog, orders)"
 ---
@@ -40,6 +42,19 @@ Tienes acceso a:
 
 Sigue el workflow de la skill paso a paso. No improvises ni inferas lógica de dominio
 que no esté especificada en los artefactos de diseño.
+
+La validación del **Paso F** debe cubrir **cada `Escenario` (A, B, C…)** de cada flujo
+`FL-{BC}-{N}` en `{bc-name}-flows.md`, no solo el camino feliz: ejecuta también los
+escenarios de error/borde y verifica el status y los side effects que el `Then` espera
+(incluida la NO emisión de eventos y las transiciones idempotentes). Un UC no se cierra
+hasta que **todos** sus escenarios pasan.
+
+Cuando **todos** los UCs del BC estén validados, ejecuta el **Paso G — Generar colecciones
+Postman** de la skill: emite `postman/{bc-name}-collection.json` (regenerándolo siempre) y
+`postman/auth-collection.json` (**solo si no existe ya** — es compartido entre BCs). Usa el
+tool Write para escribir estos JSON. Consulta
+`.agents/skills/phase3-logic-implementation/references/postman-collection-guide.md` para la
+estructura exacta.
 
 Antes de editar, ejecuta explícitamente el **Paso C2 — Auditoría obligatoria de fidelidad
 al flujo** de la skill. Para cada UC scaffold, confirma: campos opcionales/FK condicionales,

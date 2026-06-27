@@ -29,11 +29,14 @@ calidad de código que se espera de un experto.
 Fase 1: Diseño (humano + IA)  →  Fase 2: Generador determinístico  →  Fase 3: Tú
     arch/{bc-name}.yaml              scaffold + // TODO handlers            completa los TODO
     {bc-name}-flows.md               UnsupportedOperationException          siguiendo flows.md
-    contratos API/eventos            wiring generado                         auditoría de consistencia
+    contratos API/eventos            wiring generado                         valida TODOS los escenarios
+                                                                            + emite colecciones Postman
 ```
 
 El `{bc-name}-flows.md` es tu especificación ejecutable. Cada flujo Given/When/Then mapea
-directamente a los pasos que debes implementar en el handler correspondiente.
+directamente a los pasos que debes implementar en el handler correspondiente. **Cada flujo
+`FL-{BC}-{N}` puede tener varios escenarios (A, B, C…): el feliz y los de error/borde. Todos
+deben quedar implementados y validados, no solo el primero.**
 
 Las convenciones de arquitectura están en `AGENTS.md` en la raíz del proyecto. Léelo antes
 de escribir cualquier código.
@@ -211,8 +214,12 @@ Para cada handler TODO:
 6. Vuelve a revisar la checklist del Paso C2 para confirmar que no quedó ningún caso borde
     del flujo sin implementar.
 7. Ejecuta el ciclo completo del **Paso F** para este UC (F1→F2→F3). El UC **no se cierra con
-    compilación**: solo cuando F3 pasa end-to-end. No escribas ni generes tests de negocio en
-    Fase 3; los tests pertenecen a una fase posterior.
+    compilación**: solo cuando F3 pasa end-to-end **para todos los escenarios del flujo** (A, B,
+    C…), no solo el camino feliz. No escribas ni generes tests de negocio en Fase 3; los tests
+    pertenecen a una fase posterior.
+
+Cuando **todos** los UCs del BC estén cerrados (todos sus escenarios verdes en el Paso F),
+ejecuta el **Paso G — Generar colecciones Postman**.
 
 **Patrón de un handler command típico:**
 
@@ -262,10 +269,12 @@ public PagedResponse<CategoryResponseDto> handle(ListCategoriesQuery query) {
 Ejecuta este paso **después de implementar CADA UC**, antes de pasar al siguiente. El ciclo es: implementar → validar → corregir si falla → continuar solo cuando pasa.
 
 > **Regla de cierre (no negociable):** un UC **NO está "completado"** hasta que **F3 se ejecute con
-> éxito end-to-end** (request real → side effects verificados en DB/cache/broker según el flujo).
-> **La compilación limpia (F1) y el arranque de la app (F2) NO bastan.** Si F3 no se ejecutó o no
-> pasó, el UC está "en progreso", nunca "hecho". Está prohibido reportar al usuario un UC como
-> terminado, pasar al siguiente UC, o marcar la tarea como completa sin un F3 verde para ese UC.
+> éxito end-to-end para TODOS los escenarios del flujo** (A, B, C…): el camino feliz **y** cada
+> escenario de error/borde, con su request real → side effects verificados en DB/cache/broker (o la
+> ausencia de side effects cuando el flujo lo prohíbe). **La compilación limpia (F1) y el arranque de
+> la app (F2) NO bastan.** Si algún escenario no se ejecutó o no pasó, el UC está "en progreso",
+> nunca "hecho". Está prohibido reportar al usuario un UC como terminado, pasar al siguiente UC, o
+> marcar la tarea como completa sin un F3 verde para **cada** escenario de ese UC.
 
 ### F1 — Recompilar
 
@@ -330,8 +339,19 @@ El `{realm}`, `{clientId}` y `{clientSecret}` están en la configuración del pr
 > `.agents/skills/phase3-logic-implementation/references/infra-validation-guide.md` → sección Keycloak
 
 1. Consulta el flujo en `arch/{bc-name}/{bc-name}-flows.md` (FL-{BC}-{N})
-2. Traduce cada paso del **Then** a comandos HTTP y CLI de contenedores
-3. Ejecuta los comandos en el orden del flujo
+2. **Itera sobre CADA escenario del flujo** (Escenario A, B, C…), no solo el primero:
+   - El `Given` define las pre-condiciones (estado previo, rol/credencial a usar)
+   - El `When` define la request a ejecutar
+   - El `Then` define el resultado esperado: status HTTP (2xx en el feliz, 4xx en los de error),
+     side effects en DB/cache/broker, **o la ausencia de ellos** (p.ej. un escenario de error o
+     idempotente que NO debe persistir ni publicar evento)
+3. Traduce cada paso del **Then** a comandos HTTP y CLI de contenedores
+4. Ejecuta los comandos en el orden del flujo y verifica el resultado esperado de **cada** escenario
+
+> **Importante:** los escenarios de error (nombre duplicado → 409, recurso inexistente → 404,
+> permiso insuficiente → 403, validación → 400) son parte del flujo y deben ejecutarse igual que el
+> feliz. Para ellos, confirma el status de error correcto y que **no** se produjeron side effects no
+> deseados.
 
 Ejemplo completo para un UC `CreateProduct`:
 
@@ -371,6 +391,53 @@ Donde `{SYSTEM}` es el valor de `systemName` en `dsl-springboot.json`.
 5. Repite hasta `[PASS]`
 
 **Regla:** Solo avanza al siguiente UC cuando este flujo ejecuta end-to-end sin errores y los side effects (DB, cache, broker) son los esperados.
+
+---
+
+## Paso G — Generar colecciones Postman (al cerrar el BC)
+
+Ejecuta este paso **una sola vez, después de que TODOS los UCs del BC estén cerrados** (todos sus
+escenarios verdes en el Paso F). El objetivo es dejar un artefacto reutilizable para que un humano
+pueda revalidar los flujos manualmente.
+
+> **Precondición:** no generes las colecciones si algún escenario del Paso F quedó en rojo o sin
+> ejecutar. Las colecciones reflejan lo que realmente validaste.
+
+Lee `.agents/skills/phase3-logic-implementation/references/postman-collection-guide.md` para la
+estructura JSON exacta (formato Postman Collection v2.1.0), las plantillas de request y las
+convenciones de nombres de variables.
+
+Escribe los archivos con el tool **Write** dentro de un directorio `postman/` en la raíz del
+proyecto (créalo si no existe).
+
+### G1 — `postman/auth-collection.json` (compartido entre BCs)
+
+- **Si el archivo ya existe, NO lo recrees ni lo sobrescribas.** Es compartido por todos los BCs
+  del mismo sistema; recrearlo perdería ajustes manuales del usuario. Solo notifícalo y continúa.
+- Si no existe, genéralo con **una request de token por cada rol/credencial** que los flujos del BC
+  necesiten. Detecta los roles y las credenciales desde la configuración del proyecto:
+  - Keycloak: `keycloak/realm-export.json`, `docker-compose.yml` (realm, clientId, secret, usuarios)
+  - OAuth2 client-credentials: `tokenEndpoint`, clientId/secret de los parámetros del proyecto
+- Cada request guarda su token en una **global de Postman** en el script de test:
+  `pm.globals.set("token_<rol-kebab>", pm.response.json().access_token)`.
+
+### G2 — `postman/{bc-name}-collection.json` (se regenera siempre)
+
+- **Carpeta por flujo** `FL-{BC}-{N}`; dentro, **una request por cada escenario** (A, B, C…):
+  - `Authorization: Bearer {{token_<rol>}}` según el rol del `Given`
+  - método, URL (`{{baseUrl}}` + path del controller) y body derivados del `When`
+  - un script de test que asserta el resultado del `Then` (status esperado —2xx o el 4xx del
+    escenario de error— y, cuando aplique, la forma de la respuesta)
+- **Carpeta adicional "CRUD"** con los endpoints triviales del BC: los UCs **sin**
+  `implementation: scaffold` que existan en `{bc-name}-open-api.yaml`. Una request por
+  `operationId`, con body de ejemplo derivado del schema.
+- Declara `{{baseUrl}}` como variable de colección (default `http://localhost:8080`).
+
+### G3 — Reportar al usuario
+
+Indica las rutas generadas y el orden de uso en Postman:
+1. Importar `postman/auth-collection.json` y ejecutarlo para poblar las globals de token.
+2. Importar `postman/{bc-name}-collection.json` y ejecutar las carpetas de flujos.
 
 ---
 
@@ -420,4 +487,5 @@ No inferas, no completes por tu cuenta. Notifica con precisión qué falta y por
 | `.agents/skills/phase3-logic-implementation/references/virtual-threads-in-handlers.md` | El handler tiene I/O independiente en paralelo |
 | `.agents/skills/phase3-logic-implementation/references/storage-integration-patterns.md` | El UC declara `storageCalls[]` (put / delete / signUrl / get) |
 | `.agents/skills/phase3-logic-implementation/references/infra-validation-guide.md` | Comandos CLI exactos para DB, Kafka, Redis, RabbitMQ, MinIO, Keycloak o reinicio de app |
+| `.agents/skills/phase3-logic-implementation/references/postman-collection-guide.md` | Ejecutas el Paso G: estructura JSON de las colecciones Postman (`auth-collection` + `{bc}-collection`) |
 | `AGENTS.md` (raíz del proyecto) | Necesitas confirmar una convención de código o arquitectura |
