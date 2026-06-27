@@ -101,7 +101,7 @@ function getVoDef(type, bcYaml) {
  * Build the @Column annotation string for a YAML property in a JPA entity.
  * Does NOT handle Money (expanded separately) or enum fields (caller adds @Enumerated).
  */
-function buildColumnAnnotation(prop, bcYaml, { forceNullable } = {}) {
+function buildColumnAnnotation(prop, bcYaml, { forceNullable, skipColumnUnique } = {}) {
   const type = prop.type;
   const attrs = [`name = "${toSnakeCase(prop.name)}"`];
 
@@ -123,8 +123,11 @@ function buildColumnAnnotation(prop, bcYaml, { forceNullable } = {}) {
   const isRequired = prop.required === true;
   if (isRequired) attrs.push('nullable = false');
 
-  // Uniqueness
-  if (prop.unique === true) attrs.push('unique = true');
+  // Uniqueness — skip the @Column-level `unique = true` when a named uniqueness
+  // domainRule (with constraintName) already covers this field: the table-level
+  // @UniqueConstraint is the single source of truth, otherwise Hibernate emits two
+  // separate UNIQUE constraints for the same column.
+  if (prop.unique === true && !skipColumnUnique) attrs.push('unique = true');
 
   const lines = [`@Column(${attrs.join(', ')})`];
 
@@ -356,6 +359,15 @@ function buildJpaFields(properties, aggregate, bcYaml) {
   const fields = [];
   const expandedNames = collectExpandedColumnNames(properties, bcYaml);
 
+  // Fields already covered by a named table-level @UniqueConstraint (same filter as
+  // buildJpaEntityContext.uniqueConstraints). For these, @Column must not also set
+  // `unique = true`, to avoid emitting a duplicate UNIQUE constraint (D08).
+  const namedUniqueFields = new Set(
+    (aggregate.domainRules || [])
+      .filter((r) => r.type === 'uniqueness' && r.constraintName && r.field)
+      .map((r) => r.field)
+  );
+
   for (const prop of properties || []) {
     // Skip id (handled as @Id separately)
     if (prop.name === 'id') continue;
@@ -414,7 +426,7 @@ function buildJpaFields(properties, aggregate, bcYaml) {
       fields.push({
         name: prop.name,
         javaType,
-        columnAnnotation: jsonIgnorePrefix + buildColumnAnnotation(prop, bcYaml),
+        columnAnnotation: jsonIgnorePrefix + buildColumnAnnotation(prop, bcYaml, { skipColumnUnique: namedUniqueFields.has(prop.name) }),
       });
     } else if (voDef && (voDef.properties || []).length > 1) {
       const expanded = expandMultiPropertyVoField(prop, voDef, bcYaml);
@@ -432,7 +444,7 @@ function buildJpaFields(properties, aggregate, bcYaml) {
       fields.push({
         name: prop.name,
         javaType,
-        columnAnnotation: jsonIgnorePrefix + buildColumnAnnotation(prop, bcYaml),
+        columnAnnotation: jsonIgnorePrefix + buildColumnAnnotation(prop, bcYaml, { skipColumnUnique: namedUniqueFields.has(prop.name) }),
       });
     }
   }
