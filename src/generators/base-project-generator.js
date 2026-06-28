@@ -296,17 +296,24 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   const driverClass  = dbMeta.driverClass;
   const dialect      = dbMeta.dialect;
   const databaseDependency = dbMeta.gradleDependency;
+  const databaseUsername = dbMeta.defaultUser || 'postgres';
+  const databasePassword = dbMeta.defaultPassword != null ? dbMeta.defaultPassword : 'postgres';
 
-  // Build JDBC URL (H2 uses a different URL format)
+  // Build JDBC URL from the catalog pattern (engines differ structurally:
+  // postgres/mysql use `prefix://host:port/db`, SQL Server uses `;databaseName=`,
+  // Oracle uses `@//host:port/service`). H2 keeps its in-memory format.
   const buildJdbcUrl = (env) => {
     if (dbId === 'h2') {
-      return env === 'local' || env === 'test'
-        ? `jdbc:h2:mem:${dbName};DB_CLOSE_DELAY=-1;MODE=PostgreSQL`
-        : `jdbc:h2:mem:${dbName};DB_CLOSE_DELAY=-1;MODE=PostgreSQL`;
+      return `jdbc:h2:mem:${dbName};DB_CLOSE_DELAY=-1;MODE=PostgreSQL`;
     }
+    const base = (dbMeta.jdbcUrlPattern || `${dbMeta.jdbcPrefix}://{host}:{port}/{db}`)
+      .replace('{host}', 'localhost')
+      .replace('{port}', String(dbMeta.defaultPort))
+      .replace('{db}', dbName)
+      .replace('{service}', dbMeta.serviceName || dbName);
     if (env === 'production') return '${DB_URL}';
-    if (env === 'develop' || env === 'test') return `\${DB_URL:${dbMeta.jdbcPrefix}://localhost:${dbMeta.defaultPort}/${dbName}}`;
-    return `${dbMeta.jdbcPrefix}://localhost:${dbMeta.defaultPort}/${dbName}`;
+    if (env === 'develop' || env === 'test') return `\${DB_URL:${base}}`;
+    return base;
   };
 
   const brokerId = config.broker || null;
@@ -443,7 +450,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   // ── application.yaml (base — profile-agnostic) ──────────────────────────
 
   const dbName = artifactId.replace(/-/g, '_');
-  const envTemplateVars = { artifactId, packageName, dbName, driverClass, dialect, hasMessaging, hasHttpIntegrations, httpIntegrations, broker: brokerId };
+  const envTemplateVars = { artifactId, packageName, dbName, driverClass, dialect, databaseUsername, databasePassword, hasMessaging, hasHttpIntegrations, httpIntegrations, broker: brokerId };
 
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'resources', 'application.yaml.ejs'),

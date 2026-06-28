@@ -3,6 +3,7 @@
 const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPackagePath } = require('../utils/naming');
+const { getSqlDialect } = require('../utils/sql-dialect');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -62,7 +63,7 @@ async function generateAsyncJobArtifacts(bcYamls, config, outputDir) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'resources', 'db', 'migration', 'V4__async_job.sql.ejs'),
     path.join(migrationDir, 'V4__async_job.sql'),
-    {}
+    { sql: getSqlDialect(config.database) }
   );
 
   return { enabled: true, useCaseIds };

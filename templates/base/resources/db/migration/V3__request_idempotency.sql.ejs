@@ -4,14 +4,13 @@
 -- Stores responses returned for an Idempotency-Key (or other configured
 -- header) so retries within the TTL window replay the original outcome.
 
-CREATE TABLE IF NOT EXISTS idempotency_request (
-    key                   VARCHAR(255)  NOT NULL PRIMARY KEY,
-    request_hash          VARCHAR(128)  NOT NULL,
-    response_status       INTEGER       NOT NULL,
-    response_body         BYTEA,
-    response_content_type VARCHAR(128),
-    expires_at            TIMESTAMP     NOT NULL
+<%- sql.createTable('idempotency_request') %> (
+    idempotency_key       <%- sql.varchar(255) %> NOT NULL PRIMARY KEY,
+    request_hash          <%- sql.varchar(128) %> NOT NULL,
+    response_status       <%- sql.integer %>      NOT NULL,
+    response_body         <%- sql.bytea %>,
+    response_content_type <%- sql.varchar(128) %>,
+    expires_at            <%- sql.timestamp %>    NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_idempotency_request_expires_at
-    ON idempotency_request (expires_at);
+<%- sql.createIndex('idx_idempotency_request_expires_at', 'idempotency_request', 'expires_at') %>;

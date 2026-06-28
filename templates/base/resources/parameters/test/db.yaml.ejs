@@ -1,8 +1,8 @@
 spring:
   datasource:
     url: <%= jdbcUrl %>
-    username: ${DB_USERNAME:postgres}
-    password: ${DB_PASSWORD:postgres}
+    username: ${DB_USERNAME:<%= databaseUsername %>}
+    password: ${DB_PASSWORD:<%= databasePassword %>}
     driver-class-name: <%= driverClass %>
   jpa:
     hibernate:

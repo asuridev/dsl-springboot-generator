@@ -78,6 +78,49 @@ ${RUNTIME} exec ${SYSTEM}-devtools mysql -h mysql -u postgres -ppostgres ${DB} \
   -e "SELECT * FROM {table} ORDER BY created_at DESC LIMIT 1"
 ```
 
+### SQL Server
+
+> El cliente `sqlcmd` (go-sqlcmd) viene instalado en el contenedor `devtools`. El
+> usuario por defecto es `sa` y la contraseña la fija el catálogo (`Str0ng_Passw0rd!`).
+> El flag `-C` confía en el certificado autofirmado del servidor.
+
+```bash
+# Verificar conectividad
+${RUNTIME} exec ${SYSTEM}-devtools sqlcmd -S sqlserver,1433 -U sa -P 'Str0ng_Passw0rd!' -d ${DB} -C -Q "SELECT 1"
+
+# Listar tablas
+${RUNTIME} exec ${SYSTEM}-devtools sqlcmd -S sqlserver,1433 -U sa -P 'Str0ng_Passw0rd!' -d ${DB} -C \
+  -Q "SELECT name FROM sys.tables ORDER BY name"
+
+# Contar registros
+${RUNTIME} exec ${SYSTEM}-devtools sqlcmd -S sqlserver,1433 -U sa -P 'Str0ng_Passw0rd!' -d ${DB} -C \
+  -Q "SELECT COUNT(*) FROM {table}"
+
+# Ver último registro insertado
+${RUNTIME} exec ${SYSTEM}-devtools sqlcmd -S sqlserver,1433 -U sa -P 'Str0ng_Passw0rd!' -d ${DB} -C \
+  -Q "SELECT TOP 1 * FROM {table} ORDER BY created_at DESC"
+```
+
+### Oracle
+
+> A diferencia de Postgres/MySQL/SQL Server, el cliente `sqlplus` NO está en `devtools`
+> (Instant Client es pesado y glibc). Se ejecuta dentro del **propio contenedor Oracle**
+> (`${SYSTEM}-oracle`), que ya lo incluye. Usuario `appuser`, service `FREEPDB1`.
+
+```bash
+# Verificar conectividad
+${RUNTIME} exec ${SYSTEM}-oracle bash -c "echo 'SELECT 1 FROM DUAL;' | sqlplus -s appuser/Str0ng_Passw0rd1@//localhost:1521/FREEPDB1"
+
+# Listar tablas del usuario
+${RUNTIME} exec ${SYSTEM}-oracle bash -c "echo 'SELECT table_name FROM user_tables ORDER BY table_name;' | sqlplus -s appuser/Str0ng_Passw0rd1@//localhost:1521/FREEPDB1"
+
+# Contar registros
+${RUNTIME} exec ${SYSTEM}-oracle bash -c "echo 'SELECT COUNT(*) FROM {table};' | sqlplus -s appuser/Str0ng_Passw0rd1@//localhost:1521/FREEPDB1"
+
+# Ver último registro insertado
+${RUNTIME} exec ${SYSTEM}-oracle bash -c "echo 'SELECT * FROM {table} ORDER BY created_at DESC FETCH FIRST 1 ROWS ONLY;' | sqlplus -s appuser/Str0ng_Passw0rd1@//localhost:1521/FREEPDB1"
+```
+
 ### Kafka
 
 ```bash

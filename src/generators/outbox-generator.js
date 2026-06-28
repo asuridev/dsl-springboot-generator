@@ -3,6 +3,7 @@
 const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toPackagePath } = require('../utils/naming');
+const { getSqlDialect, getJpaColumnTypes } = require('../utils/sql-dialect');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -47,10 +48,11 @@ async function generateOutboxArtifacts(system, config, outputDir) {
   if (outboxEnabled) {
     const outboxDir = path.join(javaMainDir, 'shared', 'infrastructure', 'outbox');
 
+    const jpaTypes = getJpaColumnTypes(config.database);
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'shared', 'outbox', 'OutboxEventJpa.java.ejs'),
       path.join(outboxDir, 'OutboxEventJpa.java'),
-      { packageName }
+      { packageName, jpaTextType: jpaTypes.text, jpaUuidType: jpaTypes.uuid }
     );
 
     await renderAndWrite(
@@ -101,7 +103,7 @@ async function generateOutboxArtifacts(system, config, outputDir) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'resources', 'db', 'migration', 'V1__reliability.sql.ejs'),
     path.join(migrationDir, 'V1__reliability.sql'),
-    { outboxEnabled, consumerIdempotencyEnabled: idempotencyEnabled }
+    { outboxEnabled, consumerIdempotencyEnabled: idempotencyEnabled, sql: getSqlDialect(config.database) }
   );
 
   return { outboxEnabled, idempotencyEnabled, sqlGenerated: true };

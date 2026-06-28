@@ -23,6 +23,12 @@ function buildDockerContext(resolvedConfig, dockerImages, opts = {}) {
   // Database name derived from systemName: replace hyphens/spaces with underscores
   const databaseName = systemName.replace(/[-\s]/g, '_').toLowerCase();
 
+  // Credentials + Oracle service come from the database catalog entry.
+  const dbMeta = opts.dbMeta || {};
+  const databaseUsername = dbMeta.defaultUser || 'postgres';
+  const databasePassword = dbMeta.defaultPassword != null ? dbMeta.defaultPassword : 'postgres';
+  const oracleService = dbMeta.serviceName || 'FREEPDB1';
+
   const cacheProviderMeta = opts.cacheProviderMeta || null;
   const cachePort = cacheProviderMeta ? cacheProviderMeta.port : 6379;
   const cacheProviderId = resolvedConfig.cacheProvider || null;
@@ -38,8 +44,9 @@ function buildDockerContext(resolvedConfig, dockerImages, opts = {}) {
     systemName,
     databaseType,
     databaseName,
-    databaseUsername: 'postgres',
-    databasePassword: 'postgres',
+    databaseUsername,
+    databasePassword,
+    oracleService,
     javaVersion: resolvedConfig.javaVersion,
     broker: resolvedConfig.broker || null,
     authProvider: resolvedConfig.authProvider || null,
@@ -54,6 +61,8 @@ function buildDockerContext(resolvedConfig, dockerImages, opts = {}) {
     // Docker image versions (from catalog)
     postgresImage: dockerImages.postgres,
     mysqlImage: dockerImages.mysql,
+    sqlserverImage: dockerImages.sqlserver,
+    oracleImage: dockerImages.oracle,
     kafkaImage: dockerImages.kafka,
     kafkaZookeeperImage: dockerImages.kafkaZookeeper,
     kafkaUiImage: dockerImages.kafkaUi,
@@ -82,7 +91,9 @@ async function generateDockerFiles(resolvedConfig, outputDir, opts = {}) {
     throw new Error('dockerImages section missing from stack-catalog.json');
   }
 
-  const ctx = buildDockerContext(resolvedConfig, dockerImages, opts);
+  const dbId = resolvedConfig.database || 'postgresql';
+  const dbMeta = (params.databases || []).find((d) => d.id === dbId) || {};
+  const ctx = buildDockerContext(resolvedConfig, dockerImages, { ...opts, dbMeta });
 
   // ── Dockerfile (always) ──────────────────────────────────────────────────
   const dockerfileSrc = path.join(DOCKER_TEMPLATES_DIR, 'Dockerfile.ejs');
@@ -139,6 +150,15 @@ async function generateDockerFiles(resolvedConfig, outputDir, opts = {}) {
     // Declare the named volume used by the minio service.
     composeObj.volumes = composeObj.volumes || {};
     composeObj.volumes[`${ctx.systemName}-minio-data`] = null;
+  }
+
+  // 2e. Merge SQL Server init container (creates the application database, which
+  //     the mssql/server image does not auto-create).
+  if (ctx.databaseType === 'sqlserver') {
+    const sqlInitSrc = path.join(DOCKER_TEMPLATES_DIR, 'sqlserver-init.yaml.ejs');
+    const sqlInitContent = await renderTemplate(sqlInitSrc, ctx);
+    const sqlInitServices = yaml.load(sqlInitContent);
+    Object.assign(composeObj.services, sqlInitServices);
   }
 
   // 3. Merge devtools service (always present when docker-compose is generated)

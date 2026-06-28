@@ -162,6 +162,17 @@ Los artefactos YAML declaran **qué** y **para qué**. El generador decide **có
 | `type: uniqueness` en domain_rule | constraint `@Column(unique = true)` + método `findBy{Field}` en repositorio |
 | `relationship: composition` | `@OneToMany(cascade = ALL, orphanRemoval = true)` |
 
+### Motores de base de datos soportados
+
+El `build` ofrece 5 motores (`config/stack-catalog.json#/databases`): **PostgreSQL** (default),
+**MySQL**, **SQL Server**, **Oracle** y **H2**. El menú es data-driven: agregar un motor es añadir
+una entrada al catálogo (driver, dialect, `jdbcUrlPattern`, `defaultUser/Password`, imagen Docker).
+El dialecto SQL de las migraciones Flyway y los tipos `columnDefinition` de las entidades JPA viven en
+`src/utils/sql-dialect.js` (`getSqlDialect` / `getJpaColumnTypes`) y, para columnas dinámicas de
+proyecciones, en `src/utils/type-mapper.js` (`mapToSqlType`). PostgreSQL es la salida de referencia de
+los golden tests; al tocar estos módulos, mantener su salida byte-idéntica. SQL Server valida persistencia
+vía `go-sqlcmd` en el contenedor `devtools`; Oracle vía `sqlplus` dentro del contenedor `oracle`.
+
 ---
 
 ## Cómo agregar un nuevo comando CLI

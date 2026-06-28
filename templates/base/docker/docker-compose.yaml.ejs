@@ -30,6 +30,39 @@ services:
       - mysql-data:/var/lib/mysql
     networks:
       - <%= systemName %>-network
+<% } else if (databaseType === 'sqlserver') { %>
+  sqlserver:
+    image: <%= sqlserverImage %>
+    container_name: <%= systemName %>-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: <%= databasePassword %>
+      MSSQL_PID: Developer
+    ports:
+      - "1433:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - <%= systemName %>-network
+<% } else if (databaseType === 'oracle') { %>
+  oracle:
+    image: <%= oracleImage %>
+    container_name: <%= systemName %>-oracle
+    environment:
+      ORACLE_PASSWORD: <%= databasePassword %>
+      APP_USER: <%= databaseUsername %>
+      APP_USER_PASSWORD: <%= databasePassword %>
+    ports:
+      - "1521:1521"
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    networks:
+      - <%= systemName %>-network
 <% } %>
 
 volumes:
@@ -37,6 +70,10 @@ volumes:
   postgres-data:
 <% } else if (databaseType === 'mysql') { %>
   mysql-data:
+<% } else if (databaseType === 'sqlserver') { %>
+  sqlserver-data:
+<% } else if (databaseType === 'oracle') { %>
+  oracle-data:
 <% } %>
 
 networks:

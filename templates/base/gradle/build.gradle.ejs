@@ -63,6 +63,8 @@ dependencies {
     implementation 'org.flywaydb:flyway-core'
 <% if (databaseId === 'postgresql') { %>    implementation 'org.flywaydb:flyway-database-postgresql'
 <% } else if (databaseId === 'mysql') { %>    implementation 'org.flywaydb:flyway-mysql'
+<% } else if (databaseId === 'sqlserver') { %>    implementation 'org.flywaydb:flyway-sqlserver'
+<% } else if (databaseId === 'oracle') { %>    implementation 'org.flywaydb:flyway-database-oracle'
 <% } %>
 <% } %>
 <% if ((requestIdempotencyEnabled || cacheableQueriesPresent) && cacheSpringDependency) { %>

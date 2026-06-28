@@ -3,9 +3,13 @@
 const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toSnakeCase, toKebabCase, toPackagePath } = require('../utils/naming');
-const { mapType, mapToPostgres, isListType } = require('../utils/type-mapper');
+const { mapType, mapToSqlType, isListType } = require('../utils/type-mapper');
+const { getSqlDialect, getJpaColumnTypes } = require('../utils/sql-dialect');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
+
+// Engine-specific JPA columnDefinition types, set per build from config.database.
+let jpaColumnTypes = getJpaColumnTypes('postgresql');
 
 function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : ''; }
 
@@ -17,7 +21,7 @@ function buildColumnAnnotation(prop) {
   const attrs = [`name = "${toSnakeCase(prop.name)}"`];
   const type = prop.type;
   if (type === 'String' || type === 'Text' || type === 'Url') {
-    attrs.push('columnDefinition = "TEXT"');
+    attrs.push(`columnDefinition = "${jpaColumnTypes.text}"`);
   } else if (type === 'Email') {
     attrs.push('length = 254');
   } else if (/^String\(\d+\)$/.test(type)) {
@@ -94,6 +98,8 @@ function projectionQueueKey(bcName, projectionName, sourceEvent) {
  */
 async function generateProjectionUpdaters(allBcYamls, system, config, outputDir) {
   const { packageName, broker } = config;
+  const dbId = config.database || 'postgresql';
+  jpaColumnTypes = getJpaColumnTypes(dbId);
   const packagePath = toPackagePath(packageName);
   const javaMainDir = path.join(outputDir, 'src', 'main', 'java', packagePath);
   const resourcesDir = path.join(outputDir, 'src', 'main', 'resources');
@@ -250,7 +256,7 @@ async function generateProjectionUpdaters(allBcYamls, system, config, outputDir)
         const orig = properties.find((p) => p.name === f.name);
         return {
           name: toSnakeCase(f.name),
-          sqlType: mapToPostgres(orig.type, orig),
+          sqlType: mapToSqlType(orig.type, orig, dbId),
           notNull: orig.required === true,
         };
       });
@@ -259,7 +265,7 @@ async function generateProjectionUpdaters(allBcYamls, system, config, outputDir)
         projectionName: proj.name,
         tableName,
         keyColumnName: toSnakeCase(proj.keyBy),
-        keySqlType: mapToPostgres(keyProp.type, keyProp),
+        keySqlType: mapToSqlType(keyProp.type, keyProp, dbId),
         columns,
         sourceFromBc: proj.source.from,
         sourceEvent: proj.source.event,
@@ -345,7 +351,7 @@ async function generateProjectionUpdaters(allBcYamls, system, config, outputDir)
     await renderAndWrite(
       path.join(TEMPLATES_DIR, 'base', 'resources', 'db', 'migration', 'V2__projections.sql.ejs'),
       path.join(resourcesDir, 'db', 'migration', 'V2__projections.sql'),
-      { projections: sqlEntries }
+      { projections: sqlEntries, sql: getSqlDialect(dbId) }
     );
   }
 

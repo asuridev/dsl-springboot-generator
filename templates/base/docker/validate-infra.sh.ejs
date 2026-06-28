@@ -46,6 +46,16 @@ check "MySQL connectivity" \
   ${RUNTIME} exec "${SYSTEM}-devtools" \
   mysql -h mysql -u "${DB_USER}" "-p${DB_PASS}" "${DB_NAME}" -e "SELECT 1"
 
+<% } else if (databaseType === 'sqlserver') { -%>
+check "SQL Server connectivity" \
+  ${RUNTIME} exec "${SYSTEM}-devtools" \
+  sqlcmd -S sqlserver,1433 -U "${DB_USER}" -P "${DB_PASS}" -d "${DB_NAME}" -C -Q "SELECT 1"
+
+<% } else if (databaseType === 'oracle') { -%>
+check "Oracle connectivity" \
+  ${RUNTIME} exec "${SYSTEM}-oracle" \
+  bash -c "echo 'SELECT 1 FROM DUAL;' | sqlplus -s ${DB_USER}/${DB_PASS}@//localhost:1521/<%= oracleService %>"
+
 <% } -%>
 <% if (broker === 'kafka') { -%>
 check "Kafka broker reachable" \

@@ -4,8 +4,13 @@ const path = require('path');
 const { renderAndWrite } = require('../utils/template-engine');
 const { toSnakeCase, toCamelCase, pluralizeWord, toPackagePath } = require('../utils/naming');
 const { mapType, isListType, getListElementType } = require('../utils/type-mapper');
+const { getJpaColumnTypes } = require('../utils/sql-dialect');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
+
+// Engine-specific JPA columnDefinition types, set per build from config.database.
+// PostgreSQL (the default) keeps `TEXT`, so existing golden snapshots don't churn.
+let jpaColumnTypes = getJpaColumnTypes('postgresql');
 
 // Fields managed by FullAuditableEntity base class — never declared in JPA entity
 // Note: deletedAt is NOT excluded here — it must be generated explicitly for softDelete aggregates
@@ -58,12 +63,12 @@ function expandStoredObjectField(prop) {
     {
       name: keyName,
       javaType: 'String',
-      columnAnnotation: `@Column(name = "${toSnakeCase(keyName)}", columnDefinition = "TEXT"${nullableClause})`,
+      columnAnnotation: `@Column(name = "${toSnakeCase(keyName)}", columnDefinition = "${jpaColumnTypes.text}"${nullableClause})`,
     },
     {
       name: urlName,
       javaType: 'String',
-      columnAnnotation: `@Column(name = "${toSnakeCase(urlName)}", columnDefinition = "TEXT")`,
+      columnAnnotation: `@Column(name = "${toSnakeCase(urlName)}", columnDefinition = "${jpaColumnTypes.text}")`,
     },
     {
       name: ctName,
@@ -107,7 +112,7 @@ function buildColumnAnnotation(prop, bcYaml, { forceNullable, skipColumnUnique }
 
   // Column type / length constraints
   if (type === 'String' || type === 'Text' || type === 'Url') {
-    attrs.push('columnDefinition = "TEXT"');
+    attrs.push(`columnDefinition = "${jpaColumnTypes.text}"`);
   } else if (type === 'Email') {
     attrs.push('length = 254');
   } else if (/^String\(\d+\)$/.test(type)) {
@@ -897,6 +902,7 @@ function buildEmbeddableContext(voName, voDef, bcYaml, config) {
 }
 
 async function generateJpaEntities(bcYaml, config, outputDir) {
+  jpaColumnTypes = getJpaColumnTypes(config.database);
   const bc = bcYaml.bc;
   const packagePath = toPackagePath(config.packageName);
   const entitiesDir = path.join(outputDir, 'src', 'main', 'java', packagePath, bc, 'infrastructure', 'persistence', 'entities');

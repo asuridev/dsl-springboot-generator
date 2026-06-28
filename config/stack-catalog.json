@@ -20,7 +20,11 @@
       "dialect": "org.hibernate.dialect.PostgreSQLDialect",
       "defaultPort": 5432,
       "jdbcPrefix": "jdbc:postgresql",
+      "jdbcUrlPattern": "jdbc:postgresql://{host}:{port}/{db}",
+      "defaultUser": "postgres",
+      "defaultPassword": "postgres",
       "cliTool": "psql",
+      "cliVia": "devtools",
       "cliValidateCmd": "psql -h postgres -U {user} -d {db} -c 'SELECT 1' -q -t"
     },
     {
@@ -31,8 +35,43 @@
       "dialect": "org.hibernate.dialect.MySQLDialect",
       "defaultPort": 3306,
       "jdbcPrefix": "jdbc:mysql",
+      "jdbcUrlPattern": "jdbc:mysql://{host}:{port}/{db}",
+      "defaultUser": "postgres",
+      "defaultPassword": "postgres",
       "cliTool": "mysql",
+      "cliVia": "devtools",
       "cliValidateCmd": "mysql -h mysql -u {user} -p{pass} {db} -e 'SELECT 1'"
+    },
+    {
+      "id": "sqlserver",
+      "label": "SQL Server",
+      "gradleDependency": "runtimeOnly 'com.microsoft.sqlserver:mssql-jdbc'",
+      "driverClass": "com.microsoft.sqlserver.jdbc.SQLServerDriver",
+      "dialect": "org.hibernate.dialect.SQLServerDialect",
+      "defaultPort": 1433,
+      "jdbcPrefix": "jdbc:sqlserver",
+      "jdbcUrlPattern": "jdbc:sqlserver://{host}:{port};databaseName={db};encrypt=false;trustServerCertificate=true",
+      "defaultUser": "sa",
+      "defaultPassword": "Str0ng_Passw0rd!",
+      "cliTool": "sqlcmd",
+      "cliVia": "devtools",
+      "cliValidateCmd": "sqlcmd -S sqlserver,1433 -U {user} -P {pass} -d {db} -C -Q 'SELECT 1'"
+    },
+    {
+      "id": "oracle",
+      "label": "Oracle Database",
+      "gradleDependency": "runtimeOnly 'com.oracle.database.jdbc:ojdbc11'",
+      "driverClass": "oracle.jdbc.OracleDriver",
+      "dialect": "org.hibernate.dialect.OracleDialect",
+      "defaultPort": 1521,
+      "serviceName": "FREEPDB1",
+      "jdbcPrefix": "jdbc:oracle:thin:@//",
+      "jdbcUrlPattern": "jdbc:oracle:thin:@//{host}:{port}/{service}",
+      "defaultUser": "appuser",
+      "defaultPassword": "Str0ng_Passw0rd1",
+      "cliTool": "sqlplus",
+      "cliVia": "dbcontainer",
+      "cliValidateCmd": "sqlplus -s {user}/{pass}@//localhost:1521/{service}"
     },
     {
       "id": "h2",
@@ -42,7 +81,11 @@
       "dialect": "org.hibernate.dialect.H2Dialect",
       "defaultPort": null,
       "jdbcPrefix": "jdbc:h2:mem",
+      "jdbcUrlPattern": null,
+      "defaultUser": "sa",
+      "defaultPassword": "",
       "cliTool": null,
+      "cliVia": null,
       "cliValidateCmd": null
     }
   ],
@@ -86,6 +129,8 @@
   "dockerImages": {
     "postgres": "postgres:16-alpine",
     "mysql": "mysql:8.0",
+    "sqlserver": "mcr.microsoft.com/mssql/server:2022-latest",
+    "oracle": "gvenzl/oracle-free:23-slim",
     "kafka": "confluentinc/cp-kafka:7.6.0",
     "kafkaZookeeper": "confluentinc/cp-zookeeper:7.6.0",
     "kafkaUi": "provectuslabs/kafka-ui:latest",

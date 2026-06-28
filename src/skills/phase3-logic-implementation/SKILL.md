@@ -362,9 +362,15 @@ curl -s -X POST http://localhost:8080/products \
   -d '{"name":"Widget","categoryId":"uuid-aqui","price":{"amount":100,"currency":"USD"}}' \
   | jq .
 
-# 2. Verificar persistencia en DB
+# 2. Verificar persistencia en DB (según el motor — ver dsl-springboot.json#/database)
+#    PostgreSQL:
 ${RUNTIME} exec {SYSTEM}-devtools psql -h postgres -U postgres -d {dbName} \
   -c "SELECT id, name, status FROM catalog.products ORDER BY created_at DESC LIMIT 1"
+#    SQL Server (cliente sqlcmd en devtools):
+${RUNTIME} exec {SYSTEM}-devtools sqlcmd -S sqlserver,1433 -U sa -P 'Str0ng_Passw0rd!' -d {dbName} -C \
+  -Q "SELECT TOP 1 id, name, status FROM products ORDER BY created_at DESC"
+#    Oracle (sqlplus dentro del contenedor oracle):
+${RUNTIME} exec {SYSTEM}-oracle bash -c "echo 'SELECT id, name, status FROM products ORDER BY created_at DESC FETCH FIRST 1 ROWS ONLY;' | sqlplus -s appuser/Str0ng_Passw0rd1@//localhost:1521/FREEPDB1"
 
 # 3. Verificar evento publicado (si el UC emite evento Kafka)
 ${RUNTIME} exec {SYSTEM}-devtools kcat -b kafka:29092 -t catalog.product.created -o -1 -e \

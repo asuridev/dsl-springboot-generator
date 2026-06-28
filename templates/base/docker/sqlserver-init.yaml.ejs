@@ -1,0 +1,19 @@
+<%
+// SQL Server init container — the mssql/server image does NOT auto-create an
+// application database, so we wait until the server accepts connections and then
+// run a CREATE DATABASE. Reuses the server image (ships mssql-tools18/sqlcmd).
+// derived_from: dsl-springboot.json#/database = sqlserver
+-%>
+sqlserver-init:
+  image: <%= sqlserverImage %>
+  container_name: <%= systemName %>-sqlserver-init
+  depends_on:
+    - sqlserver
+  entrypoint: >
+    /bin/bash -c "
+      until /opt/mssql-tools18/bin/sqlcmd -S sqlserver,1433 -U sa -P '<%= databasePassword %>' -C -Q 'SELECT 1' >/dev/null 2>&1; do echo 'waiting for sqlserver'; sleep 3; done;
+      /opt/mssql-tools18/bin/sqlcmd -S sqlserver,1433 -U sa -P '<%= databasePassword %>' -C -Q \"IF DB_ID('<%= databaseName %>') IS NULL CREATE DATABASE [<%= databaseName %>]\";
+      echo 'sqlserver-init done';
+    "
+  networks:
+    - <%= systemName %>-network

@@ -278,26 +278,90 @@ function mapType(type, prop = {}) {
 
 /**
  * Returns the PostgreSQL column type for a canonical type.
- * Used informational / for Flyway migrations (future scope).
+ * Thin alias over mapToSqlType for backward compatibility.
  */
 function mapToPostgres(type, prop = {}) {
-  const stringMatch = STRING_N_RE.exec(type);
-  if (stringMatch) return `varchar(${stringMatch[1]})`;
+  return mapToSqlType(type, prop, 'postgresql');
+}
 
-  switch (type) {
-    case 'Uuid':      return 'uuid';
-    case 'String':    return 'text';
-    case 'Text':      return 'text';
-    case 'Integer':   return 'integer';
-    case 'Long':      return 'bigint';
-    case 'Decimal':   return `numeric(${prop.precision || 19}, ${prop.scale || 4})`;
-    case 'Boolean':   return 'boolean';
-    case 'Date':      return 'date';
-    case 'DateTime':  return 'timestamptz';
-    case 'Duration':  return 'interval';
-    case 'Email':     return 'varchar(254)';
-    case 'Url':       return 'text';
-    default:          return 'text';
+/**
+ * Returns the engine-specific SQL column type for a canonical type.
+ * Used for the dynamic projection columns emitted into Flyway V2 migrations
+ * (and kept consistent with the projection JPA entity columnDefinition).
+ *
+ * @param {string} type  canonical type (e.g. "String(100)", "Uuid", "Decimal")
+ * @param {object} prop  field metadata (precision/scale for Decimal)
+ * @param {string} dbId  database engine id (postgresql|mysql|sqlserver|oracle|h2)
+ */
+function mapToSqlType(type, prop = {}, dbId = 'postgresql') {
+  const engine = dbId === 'h2' ? 'postgresql' : dbId;
+  const stringMatch = STRING_N_RE.exec(type);
+  const n = stringMatch ? stringMatch[1] : null;
+  const dec = `${prop.precision || 19}, ${prop.scale || 4}`;
+
+  switch (engine) {
+    case 'mysql':
+      if (n) return `varchar(${n})`;
+      switch (type) {
+        case 'Uuid':     return 'char(36)';
+        case 'String':   case 'Text': case 'Url': return 'longtext';
+        case 'Integer':  return 'int';
+        case 'Long':     return 'bigint';
+        case 'Decimal':  return `decimal(${dec})`;
+        case 'Boolean':  return 'tinyint(1)';
+        case 'Date':     return 'date';
+        case 'DateTime': return 'datetime';
+        case 'Duration': return 'bigint';
+        case 'Email':    return 'varchar(254)';
+        default:         return 'longtext';
+      }
+    case 'sqlserver':
+      if (n) return `nvarchar(${n})`;
+      switch (type) {
+        case 'Uuid':     return 'uniqueidentifier';
+        case 'String':   case 'Text': case 'Url': return 'nvarchar(max)';
+        case 'Integer':  return 'int';
+        case 'Long':     return 'bigint';
+        case 'Decimal':  return `decimal(${dec})`;
+        case 'Boolean':  return 'bit';
+        case 'Date':     return 'date';
+        case 'DateTime': return 'datetimeoffset';
+        case 'Duration': return 'bigint';
+        case 'Email':    return 'nvarchar(254)';
+        default:         return 'nvarchar(max)';
+      }
+    case 'oracle':
+      if (n) return `varchar2(${n})`;
+      switch (type) {
+        case 'Uuid':     return 'raw(16)';
+        case 'String':   case 'Text': case 'Url': return 'clob';
+        case 'Integer':  return 'number(10)';
+        case 'Long':     return 'number(19)';
+        case 'Decimal':  return `number(${dec})`;
+        case 'Boolean':  return 'number(1)';
+        case 'Date':     return 'date';
+        case 'DateTime': return 'timestamp with time zone';
+        case 'Duration': return 'number(19)';
+        case 'Email':    return 'varchar2(254)';
+        default:         return 'clob';
+      }
+    case 'postgresql':
+    default:
+      if (n) return `varchar(${n})`;
+      switch (type) {
+        case 'Uuid':     return 'uuid';
+        case 'String':   case 'Text': return 'text';
+        case 'Integer':  return 'integer';
+        case 'Long':     return 'bigint';
+        case 'Decimal':  return `numeric(${dec})`;
+        case 'Boolean':  return 'boolean';
+        case 'Date':     return 'date';
+        case 'DateTime': return 'timestamptz';
+        case 'Duration': return 'interval';
+        case 'Email':    return 'varchar(254)';
+        case 'Url':      return 'text';
+        default:         return 'text';
+      }
   }
 }
 
@@ -377,4 +441,4 @@ function isCanonicalSharedVo(type) {
   return head === 'StoredObject';
 }
 
-module.exports = { mapType, mapToPostgres, mapToOpenApiFormat, PROHIBITED_TYPES, isListType, getListElementType, resolveCanonicalReturnType, isCanonicalSharedVo };
+module.exports = { mapType, mapToPostgres, mapToSqlType, mapToOpenApiFormat, PROHIBITED_TYPES, isListType, getListElementType, resolveCanonicalReturnType, isCanonicalSharedVo };

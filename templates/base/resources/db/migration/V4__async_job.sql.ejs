@@ -6,18 +6,16 @@
 -- a worker (out of scope for the generator — see the // TODO emitted by
 -- the handler) transitions the status and writes the result.
 
-CREATE TABLE IF NOT EXISTS async_job (
-    id          UUID          NOT NULL PRIMARY KEY,
-    type        VARCHAR(128)  NOT NULL,
-    status      VARCHAR(16)   NOT NULL,
-    payload     BYTEA,
-    result      BYTEA,
-    created_at  TIMESTAMP     NOT NULL,
-    updated_at  TIMESTAMP     NOT NULL
+<%- sql.createTable('async_job') %> (
+    id          <%- sql.uuid %>         NOT NULL PRIMARY KEY,
+    type        <%- sql.varchar(128) %> NOT NULL,
+    status      <%- sql.varchar(16) %>  NOT NULL,
+    payload     <%- sql.bytea %>,
+    result      <%- sql.bytea %>,
+    created_at  <%- sql.timestamp %>    NOT NULL,
+    updated_at  <%- sql.timestamp %>    NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_async_job_status
-    ON async_job (status);
+<%- sql.createIndex('idx_async_job_status', 'async_job', 'status') %>;
 
-CREATE INDEX IF NOT EXISTS idx_async_job_type
-    ON async_job (type);
+<%- sql.createIndex('idx_async_job_type', 'async_job', 'type') %>;
