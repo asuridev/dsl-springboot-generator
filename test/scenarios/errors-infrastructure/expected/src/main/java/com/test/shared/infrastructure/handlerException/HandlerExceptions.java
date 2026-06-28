@@ -26,6 +26,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseBody;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 @RestControllerAdvice
@@ -62,6 +63,24 @@ public class HandlerExceptions {
             .getConstraintViolations()
             .stream()
             .map(v -> v.getPropertyPath() + " " + v.getMessage())
+            .toList();
+        return new ErrorResponse(
+            HttpStatus.UNPROCESSABLE_ENTITY.value(),
+            "Validation Error",
+            "VALIDATION_ERROR",
+            "Constraint violation",
+            details
+        );
+    }
+
+    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    @ResponseBody
+    public ErrorResponse onHandlerMethodValidationException(HandlerMethodValidationException ex) {
+        List<String> details = ex
+            .getAllErrors()
+            .stream()
+            .map(org.springframework.context.MessageSourceResolvable::getDefaultMessage)
             .toList();
         return new ErrorResponse(
             HttpStatus.UNPROCESSABLE_ENTITY.value(),
