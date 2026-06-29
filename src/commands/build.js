@@ -686,7 +686,21 @@ async function buildCommand(options = {}) {
 
     // ── Phase 13: context files for Phase 3 agents ───────────────────────────
     logger.info('Phase 13 — generating CLAUDE.md / AGENTS.md for Phase 3 agents…');
-    await updateContextFiles(outputDir, resolvedConfig, system, allBcYamls);
+    // Describe ONLY the infra that the docker-compose actually provisions, mirroring the
+    // conditions in src/generators/docker-generator.js:115-168. Keep both in sync when adding
+    // a new engine/service, so the CLAUDE.md stack table never advertises a service that is
+    // absent from the compose (e.g. an unused cacheProvider, or Cognito which has no container).
+    const infra = {
+      database: resolvedConfig.database || 'postgresql',
+      databaseProvisioned: (resolvedConfig.database || 'postgresql') !== 'h2',
+      sqlserverInit: resolvedConfig.database === 'sqlserver',
+      broker: ['kafka', 'rabbitmq'].includes(resolvedConfig.broker) ? resolvedConfig.broker : null,
+      authProvider: resolvedConfig.authProvider === 'keycloak' ? 'keycloak' : null, // solo keycloak tiene contenedor
+      cacheProvider: cacheNeeded ? (resolvedConfig.cacheProvider || null) : null,
+      storageProvider: objectStoragePresent ? (resolvedConfig.storageProvider || null) : null,
+      objectStores,
+    };
+    await updateContextFiles(outputDir, resolvedConfig, system, allBcYamls, infra);
     logger.success('CLAUDE.md and AGENTS.md written to output directory.');
 
     console.log('');

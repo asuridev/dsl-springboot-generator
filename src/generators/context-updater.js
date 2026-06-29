@@ -5,12 +5,13 @@ const path = require('path');
 const BEGIN_MARKER = '<!-- dsl:generated:begin -->';
 const END_MARKER = '<!-- dsl:generated:end -->';
 
-async function updateContextFiles(outputDir, resolvedConfig, system, allBcYamls) {
+async function updateContextFiles(outputDir, resolvedConfig, system, allBcYamls, infra = {}) {
   const templatePath = path.join(__dirname, '../../templates/docs/phase3-claude.md.ejs');
   const generatedBlock = ejs.render(await fs.readFile(templatePath, 'utf8'), {
     resolvedConfig,
     system,
     allBcYamls,
+    infra,
   });
   const marked = `${BEGIN_MARKER}\n${generatedBlock}\n${END_MARKER}`;
 

@@ -5,15 +5,42 @@
 
 ## Stack Tecnológico
 
+> Las filas opcionales (broker, auth, cache, storage) reflejan únicamente lo que el
+> `docker-compose.yml` aprovisiona realmente. Si una tecnología aparece como `ninguno`, **no** hay
+> un servicio que levantar para ella.
+
 | Componente     | Valor                                        |
 |----------------|----------------------------------------------|
 | Java           | <%= resolvedConfig.javaVersion %>            |
 | Spring Boot    | <%= resolvedConfig.springBootVersion %>      |
 | Group ID       | <%= resolvedConfig.packageName %>            |
-| Base de datos  | <%= resolvedConfig.database || 'postgresql' %> |
-| Message broker | <%= resolvedConfig.broker || 'ninguno' %>    |
-| Auth provider  | <%= resolvedConfig.authProvider || 'ninguno' %> |
-| Cache          | <%= resolvedConfig.cacheProvider || 'ninguno' %> |
+| Base de datos  | <%= (infra && infra.database) || resolvedConfig.database || 'postgresql' %><%= (infra && infra.databaseProvisioned === false) ? ' (embebido, sin contenedor)' : '' %> |
+| Message broker | <%= (infra && infra.broker) || 'ninguno' %>  |
+| Auth provider  | <%= (infra && infra.authProvider) || 'ninguno' %> |
+| Cache          | <%= (infra && infra.cacheProvider) || 'ninguno' %> |
+| Storage        | <%= (infra && infra.storageProvider) || 'ninguno' %> |
+
+## Servicios docker-compose
+
+> Fuente de verdad de la infraestructura local generada en la Fase 2. El agente `infra-provisioner`
+> solo levanta y verifica los servicios aquí listados; nada fuera de esta lista debe aprovisionarse.
+<%
+  const svc = [];
+  if (infra && infra.databaseProvisioned) {
+    svc.push(infra.database);
+    if (infra.sqlserverInit) svc.push('sqlserver-init (creación de la base de datos)');
+  }
+  if (infra && infra.broker === 'kafka') {
+    svc.push('kafka', 'zookeeper', 'kafka-ui');
+  } else if (infra && infra.broker === 'rabbitmq') {
+    svc.push('rabbitmq');
+  }
+  if (infra && infra.authProvider === 'keycloak') svc.push('keycloak');
+  if (infra && infra.cacheProvider) svc.push(`cache (${infra.cacheProvider})`);
+  if (infra && infra.storageProvider) svc.push('minio', 'minio-createbuckets');
+  svc.push('devtools');
+%><% svc.forEach(function(s) { %>
+- `<%= s %>`<% }); %>
 
 ## Bounded Contexts
 <% (system.boundedContexts || []).forEach(function(bc) { %>
