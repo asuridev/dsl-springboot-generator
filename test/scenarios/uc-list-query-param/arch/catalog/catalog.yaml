@@ -1,0 +1,58 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+
+useCases:
+  - id: UC-CAT-001
+    name: FindProductsByIds
+    type: query
+    actor: user
+    description: >
+      Returns products for a set of ids supplied as repeated query parameters
+      (?productIds=a&productIds=b). The input is a List[Uuid] bound from the query string.
+    trigger:
+      kind: http
+      operationId: findProductsByIds
+    aggregate: Product
+    input:
+      - name: productIds
+        type: List[Uuid]
+        source: query
+        required: true
+    returns: List[Product]
+    implementation: scaffold
+
+errors:
+  - code: PRODUCT_NOT_FOUND
+    httpStatus: 404
+    description: Product not found.
+    usedFor: manual
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: save
+        signature: "save(Product): Product"
+    queryMethods:
+      - name: findByIds
+        params:
+          - name: productIds
+            type: List[Uuid]
+            required: true
+            filterOn: [id]
+            operator: IN
+        returns: List[Product]

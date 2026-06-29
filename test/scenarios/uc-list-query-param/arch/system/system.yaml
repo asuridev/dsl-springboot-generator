@@ -1,0 +1,18 @@
+system:
+  name: test-uc-list-query-param
+  description: Test system for a query use case whose input is a List[Uuid] bound from the query string.
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

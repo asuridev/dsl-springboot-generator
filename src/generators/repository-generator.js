@@ -5,6 +5,7 @@ const { renderAndWrite } = require('../utils/template-engine');
 const { toSnakeCase, toCamelCase, toPascalCase, pluralizeWord, toPackagePath } = require('../utils/naming');
 const { mapType, isListType, getListElementType } = require('../utils/type-mapper');
 const { aggregateEmittedEventNames } = require('../utils/domain-events');
+const { expandMoneyField } = require('./jpa-entity-generator');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -100,23 +101,67 @@ function unwrapYamlReturnInner(returns) {
   return wrapped ? wrapped[1].trim() : value;
 }
 
+// Build the JPQL select-list expression for a single projection property.
+//
+// A scalar/enum property (and single-property VOs, which collapse to one column
+// named after the field) maps directly to "<alias>.<propertyName>". A Money
+// property, however, is flattened in the JPA entity into two columns
+// (<name>Amount + <name>Currency, see jpa-entity-generator.expandMoneyField) and
+// the projection record holds the Money value object — so it must be rebuilt with
+// a nested constructor expression "new <Money>(<alias>.<name>Amount, …)". HQL
+// supports arbitrary (including nested) expressions inside `select new`.
+//
+// Other composite value objects (StoredObject, multi-property custom VOs) also
+// expand to multiple columns but cannot be materialized in JPQL without applying
+// logic (e.g. the StoredObject.url column↔URI bridge), so we fail-fast rather than
+// emit a query that references a non-existent column / mismatched type (CLAUDE.md
+// rule 1). The matching check in bc-yaml-reader rejects these at validation time.
+function projectionPropSelectExpr(prop, alias, bcYaml, packageName, bc) {
+  const type = prop.type;
+  if (isMoneyType(type)) {
+    const moneyFqn = `${packageName}.${bc}.domain.valueobject.Money`;
+    const cols = expandMoneyField({ name: prop.name }, bcYaml).map((f) => `${alias}.${f.name}`);
+    return `new ${moneyFqn}(${cols.join(', ')})`;
+  }
+  if (isStoredObjectType(type)) {
+    throw new Error(
+      `repository-generator: projection property "${prop.name}" has type StoredObject, which ` +
+      `expands to multiple JPA columns (including a URI↔String bridge) and cannot be materialized ` +
+      `by a JPQL constructor expression without applying logic. Expose its primitive parts in the ` +
+      `projection, or map it in the use-case handler.`
+    );
+  }
+  const voDef = (bcYaml.valueObjects || []).find((vo) => vo.name === type);
+  if (voDef && (voDef.properties || []).length > 1) {
+    throw new Error(
+      `repository-generator: projection property "${prop.name}" has multi-property value object ` +
+      `type "${type}", which expands to multiple JPA columns. The generator cannot deterministically ` +
+      `build a JPQL constructor expression for it without applying logic. Use Money (supported), ` +
+      `expose the VO's primitive parts in the projection, or map it in the use-case handler.`
+    );
+  }
+  return `${alias}.${prop.name}`;
+}
+
 // When a repository method returns a projection, the JPA query must materialize the
 // record directly via a JPQL constructor expression — Spring Data cannot auto-project
 // an entity onto a non-interface DTO. Returns a function alias => "new <FQN>(a.f1, …)",
 // or null when the (YAML-form) return type is not a projection.
 //
 // Determinism is guaranteed upstream by bc-yaml-reader's validateRepositories, which
-// rejects projections whose properties are derived or not aggregate columns. We map
-// each projection property to "<alias>.<propertyName>" in declaration order (matching
-// the record's canonical constructor).
+// rejects projections whose properties are derived or not aggregate columns. Each
+// projection property is mapped to a JPQL select expression in declaration order
+// (matching the record's canonical constructor) via projectionPropSelectExpr, which
+// expands composite value objects (Money) into nested constructor expressions.
 function buildProjectionSelectExpr(returns, bcYaml, packageName, bc) {
   const inner = unwrapYamlReturnInner(returns);
   if (!isProjectionType(inner, bcYaml)) return null;
   const projDef = (bcYaml.projections || []).find((p) => p.name === inner);
   if (!projDef) return null;
   const fqn = `${packageName}.${bc}.application.dtos.${inner}`;
-  const props = (projDef.properties || []).map((p) => p.name);
-  return (alias) => `new ${fqn}(${props.map((f) => `${alias}.${f}`).join(', ')})`;
+  const props = projDef.properties || [];
+  return (alias) =>
+    `new ${fqn}(${props.map((p) => projectionPropSelectExpr(p, alias, bcYaml, packageName, bc)).join(', ')})`;
 }
 
 // [G8] Returns true when any query UC targeting this aggregate declares a

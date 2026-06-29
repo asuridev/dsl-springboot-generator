@@ -11,6 +11,8 @@ const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
 // [G8] Range[T] declarative input — controller binds via two @RequestParam (min/max).
 const CTRL_RANGE_T_RE = /^Range\[(.+)\]$/;
+// List[T] declarative input — controller binds a multi-value @RequestParam List<…>.
+const CTRL_LIST_T_RE = /^List\[(.+)\]$/;
 
 // ─── OpenAPI parsing ──────────────────────────────────────────────────────────
 
@@ -206,6 +208,18 @@ function getQueryFields(uc, agg, repoMethods, bcYaml = null) {
     // [G8] SearchText — wire-level String; aggregate fields[] consumed by Specs builder.
     if (type === 'SearchText') {
       fields.push({ name: input.name, type: 'String', isSearchText: true });
+      continue;
+    }
+    // List[T] — multi-value query param. Spring binds repeated params (?ids=a&ids=b)
+    // into a List<…>. Inner follows the query/path convention: Uuid → String
+    // (wire-level), enum → enum class, else the canonical scalar Java type.
+    const listMatch = CTRL_LIST_T_RE.exec(type);
+    if (listMatch) {
+      const innerType = listMatch[1];
+      const innerJava = innerType === 'Uuid' ? 'String'
+        : enumNames.has(innerType) ? innerType
+        : mapType(innerType).javaType;
+      fields.push({ name: input.name, type: `List<${innerJava}>`, isList: true, innerJavaType: innerJava });
       continue;
     }
     if (type === 'Integer' && (input.name === 'page' || input.name === 'size')) {
@@ -1316,6 +1330,10 @@ function buildControllerImports(operations, packageName, moduleName, bcYaml = nu
       if (qp.isRangePart) {
         imports.add(`${packageName}.shared.application.dtos.Range`);
         if (qp.rangeImportHint) imports.add(qp.rangeImportHint);
+      }
+      // List[T] query param (e.g. List<String> productIds) needs java.util.List.
+      if (typeof qp.javaType === 'string' && qp.javaType.startsWith('List<')) {
+        imports.add('java.util.List');
       }
     }
   }

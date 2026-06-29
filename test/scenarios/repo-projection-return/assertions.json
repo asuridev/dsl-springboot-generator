@@ -1,8 +1,8 @@
 {
   "src/main/java/com/test/catalog/infrastructure/persistence/repositories/ProductJpaRepository.java": {
-    "_comment": "A repository method returning a projection is materialized via a JPQL constructor expression (SELECT new <FQN>(...)) — Spring Data cannot auto-project an entity onto a record DTO. The JPA method return type stays the projection record; properties map in declaration order to entity columns. Entity-returning methods on the same repo are unchanged.",
+    "_comment": "A repository method returning a projection is materialized via a JPQL constructor expression (SELECT new <FQN>(...)) — Spring Data cannot auto-project an entity onto a record DTO. The JPA method return type stays the projection record; properties map in declaration order to entity columns. A Money projection property is flattened in the JPA entity into <name>Amount + <name>Currency columns, so it is rebuilt with a nested constructor expression new Money(p.priceAmount, p.priceCurrency). Entity-returning methods on the same repo are unchanged.",
     "contains": [
-      "SELECT new com.test.catalog.application.dtos.ProductPriceValidation(p.id, p.status) FROM ProductJpa p WHERE p.id IN :productIds",
+      "SELECT new com.test.catalog.application.dtos.ProductPriceValidation(p.id, p.status, new com.test.catalog.domain.valueobject.Money(p.priceAmount, p.priceCurrency)) FROM ProductJpa p WHERE p.id IN :productIds",
       "List<ProductPriceValidation> findPriceValidationByProductIds",
       "import com.test.catalog.application.dtos.ProductPriceValidation;",
       "SELECT p FROM ProductJpa p WHERE p.id IN :productIds"

@@ -1,0 +1,5 @@
+{
+  "description": "A query use case input declared as List[Uuid] with source: query binds to a multi-value @RequestParam List<String> in the controller and a @NotEmpty List<String> field in the Query record (not a scalar String that captures only the first value).",
+  "expectFailure": false,
+  "allowNoExpected": true
+}

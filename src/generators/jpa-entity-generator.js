@@ -967,4 +967,4 @@ async function generateJpaEntities(bcYaml, config, outputDir) {
   }
 }
 
-module.exports = { generateJpaEntities };
+module.exports = { generateJpaEntities, expandMoneyField };

@@ -42,8 +42,9 @@ y validados, no solo el primero. Las convenciones de arquitectura están en `AGE
                 ORQUESTADOR  (pre-flight: identifica BC + ./gradlew compileJava)
         ── Fase 1 (paralelo) ───────────────────────────────────────────
         todo-implementer  (Pasos A,B,C,C2,D,E)   ║   infra-provisioner (Paso 0b)
-        ── Fase 2 (secuencial, requiere F1 verde) ──────────────────────
-        flow-validator    (Paso F: todos los escenarios, fix-loop)
+        ── Fase 2 (fan-out por flujo, requiere F1 verde) ────────────────
+        2a batch validate (paralelo, read-only):  flow-validator(FL-1) ║ … ║ flow-validator(FL-N)
+        2b fix-pass (un solo agente):              flow-validator(fix, [flujos rojos]) → corrige cada flujo secuencialmente
         ── Fase 3 (paralelo, requiere F2 verde) ────────────────────────
         java-quality-auditor (calidad Java)      ║   postman-builder (Paso G)
         ── Cierre ──────────────────────────────────────────────────────
@@ -53,10 +54,18 @@ y validados, no solo el primero. Las convenciones de arquitectura están en `AGE
 ### Invariantes del DAG
 - **Pre-flight obligatorio**: el orquestador determina el BC y deja el árbol compilando antes de
   lanzar nada. Nunca se lanza un especialista sobre código que no compila.
-- **Fase 1 → Fase 2**: `flow-validator` solo arranca cuando `todo-implementer` devolvió
+- **Fase 1 → Fase 2**: los `flow-validator` solo arrancan cuando `todo-implementer` devolvió
   `compiles: true` **y** `infra-provisioner` devolvió `status: ready`. Ambos son prerequisitos: no
   se puede validar sin código implementado ni sin infraestructura.
-- **Fase 2 → Fase 3**: la calidad y Postman solo arrancan con todos los escenarios verdes.
+- **Fan-out por flujo (Fase 2)**: el orquestador deja la app levantada **una sola vez** (compila +
+  reinicia + health) y luego lanza **un `flow-validator` por flujo** `FL-{BC}-{N}`. El batch
+  `validate` es **read-only y paralelizable** (no compila/reinicia/edita) y **debe terminar completo**
+  antes de cualquier fix. Si hubo flujos rojos, el fix-loop lo ejecuta **un único** `flow-validator`
+  en modo `fix` que recibe el **conjunto de flujos rojos** y los corrige **secuencialmente (un flujo
+  a la vez)**, porque el árbol de código, el Gradle daemon y la app son compartidos. **El orquestador
+  no edita código**; delega todos los fixes en esa única invocación. Validate precede siempre al fix.
+- **Fase 2 → Fase 3**: la calidad y Postman solo arrancan con todos los escenarios de todos los
+  flujos verdes.
 - **Paralelismo seguro en Fase 3**: `java-quality-auditor` edita `.java`; `postman-builder` solo
   escribe JSON en `postman/`. No comparten archivos, por eso corren a la vez sin conflicto.
 - **El auditor no debe romper lo validado**: solo cambios no-conductuales y re-compila al cerrar
@@ -69,7 +78,7 @@ y validados, no solo el primero. Las convenciones de arquitectura están en `AGE
 | `logic-implementation` (orquestador) | Coordina el DAG, surfacea bloqueos al usuario | esta skill (`orchestration`) |
 | `todo-implementer` | Completa los `// TODO` (Pasos A–E + C2), deja el proyecto compilando | `handler-implementation` |
 | `infra-provisioner` | Levanta y verifica la infraestructura (Paso 0b) | `infra-provisioning` |
-| `flow-validator` | Valida **todos** los escenarios de cada flujo end-to-end (Paso F) | `flow-validation` (+ `infra-provisioning`, `handler-implementation`) |
+| `flow-validator` | Valida **todos** los escenarios end-to-end (Paso F): en modo `validate` (read-only) sobre **un** flujo, o en modo `fix` (serial) sobre el **conjunto de flujos rojos**, corrigiéndolos uno a la vez | `flow-validation` (+ `infra-provisioning`, `handler-implementation`) |
 | `java-quality-auditor` | Audita y ajusta la calidad del código Java (no-conductual) | `java-quality-audit` |
 | `postman-builder` | Emite las colecciones Postman (Paso G) | `postman-authoring` |
 
@@ -86,15 +95,18 @@ orquestador** decide entonces detener el DAG y consultar al usuario.
 |---|---|---|
 | `infra-provisioner` | bc-name (contexto) | `{ status: ready\|failed, runtime, services: [{name,state}], blockers[] }` |
 | `todo-implementer` | bc-name | `{ todosImplemented, compiles, domainServices[], blockers[] }` |
-| `flow-validator` | bc-name | `{ flows: [{id, scenarios:{A,B,…}}], failures[], blockers[] }` |
+| `flow-validator` | bc-name + modo + flujo(s): en `validate` un flow id (`FL-{BC}-{N}`); en `fix` la lista de flujos rojos | `validate`: `{ flow: {id, scenarios:{A,B,…}}, failures[], blockers[] }` · `fix`: el mismo resultado por cada flujo corregido |
 | `java-quality-auditor` | bc-name | `{ issuesFixed[], compiles, remaining[] }` |
 | `postman-builder` | bc-name | `{ files[], rolesCovered[], blockers[] }` |
 
 ### Gating que aplica el orquestador
 - Tras **Fase 1**: si `todo-implementer.blockers` o `infra-provisioner.status == failed` → detener
   y `AskUserQuestion`.
-- Tras **Fase 2**: si `flow-validator.failures` no resueltos o `flow-validator.blockers` → detener
-  y llevar el detalle al usuario; no avanzar a Fase 3 con escenarios en rojo.
+- Tras **Fase 2**: espera a que **todos** los validadores del batch `validate` terminen y consolida
+  sus handoffs. Si algún flujo trae `blockers[]` → detener y `AskUserQuestion`. Si el batch dejó
+  flujos con `failures[]`, lanza **una sola** pasada `fix` (un único `flow-validator` que corrige
+  todos los flujos rojos secuencialmente, un flujo a la vez); si tras ella persisten `failures[]`,
+  detener y llevar el detalle al usuario. No avanzar a Fase 3 con escenarios en rojo.
 - Tras **Fase 3**: consolidar `java-quality-auditor.remaining` y `postman-builder` en el reporte
   final.
 
@@ -113,9 +125,15 @@ harnesses. Solo cambia el **mecanismo de spawn**.
 - Para lanzar un especialista, el orquestador usa el tool **`Task`** indicando el `subagent_type`
   correspondiente (`todo-implementer`, `infra-provisioner`, `flow-validator`,
   `java-quality-auditor`, `postman-builder`).
-- Para **paralelizar** (Fase 1 y Fase 3), emite las dos llamadas `Task` **en el mismo turno**
-  (varios tool calls en un solo mensaje). El runtime las ejecuta concurrentemente y el orquestador
-  recibe ambos resultados antes de continuar.
+- Para **paralelizar** (Fase 1, el batch `validate` de la Fase 2 y la Fase 3), emite las llamadas
+  `Task` **en el mismo turno** (varios tool calls en un solo mensaje). El runtime las ejecuta
+  concurrentemente y el orquestador recibe todos los resultados antes de continuar.
+- En la **Fase 2** el orquestador deja la app levantada una sola vez, lanza **un `Task` de
+  `flow-validator` por flujo en modo `validate`** (todos en un turno) y **espera a que todos
+  terminen**. Para los flujos que vuelvan rojos, lanza **un único `Task` de `flow-validator` en modo
+  `fix`** con la **lista de flujos rojos** (no uno por flujo); ese agente los corrige secuencialmente
+  y el orquestador espera a que termine. **El orquestador nunca edita código por su cuenta** ni
+  arranca el fix antes de que el batch `validate` haya terminado completo.
 - El orquestador recoge el resultado de cada `Task` (el mensaje final del subagente) y aplica el
   gating de arriba. Solo el orquestador habla con el usuario.
 
@@ -123,11 +141,14 @@ harnesses. Solo cambia el **mecanismo de spawn**.
 - Los mismos archivos `*.agent.md` se publican verbatim. Cada runtime mapea "lanzar el agente X" a
   su propio mecanismo de subagentes/sub-tareas.
 - La instrucción es **agnóstica**: "lanza el agente `todo-implementer` y el agente
-  `infra-provisioner` en paralelo; cuando ambos terminen y compile + infra estén listos, lanza
-  `flow-validator`; cuando todos los escenarios estén verdes, lanza `java-quality-auditor` y
-  `postman-builder` en paralelo; finalmente reporta".
-- Si un runtime no soporta paralelismo real, ejecuta los pares de Fase 1 y Fase 3 de forma
-  secuencial respetando las mismas dependencias; el resultado es equivalente.
+  `infra-provisioner` en paralelo; cuando ambos terminen y compile + infra estén listos, deja la app
+  levantada y lanza un `flow-validator` en modo `validate` por cada flujo `FL-{BC}-{N}` en paralelo;
+  cuando TODOS terminen, si hay flujos rojos lanza un único `flow-validator` en modo `fix` con la
+  lista de flujos rojos que los corrige uno a la vez; cuando todos los escenarios de todos los flujos
+  estén verdes, lanza `java-quality-auditor` y `postman-builder` en paralelo; finalmente reporta".
+- Si un runtime no soporta paralelismo real, ejecuta el batch `validate` de Fase 2 (y los pares de
+  Fase 1 y Fase 3) de forma secuencial respetando las mismas dependencias —validate antes que fix,
+  fix siempre serial—; el resultado es equivalente.
 - El rol de "único interlocutor con el usuario" lo mantiene el orquestador: los especialistas
   devuelven `blockers[]`/`failures[]` y nunca preguntan.
 

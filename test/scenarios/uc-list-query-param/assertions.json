@@ -1,0 +1,26 @@
+{
+  "src/main/java/com/test/catalog/infrastructure/rest/controllers/product/v1/ProductV1Controller.java": {
+    "_comment": "List[Uuid] query input binds to a multi-value @RequestParam List<String>, not a scalar String (which would capture only the first ?productIds= value).",
+    "contains": [
+      "import java.util.List;",
+      "@RequestParam(required = true) List<String> productIds",
+      "new FindProductsByIdsQuery(productIds)"
+    ],
+    "notContains": [
+      "@RequestParam(required = true) String productIds"
+    ]
+  },
+
+  "src/main/java/com/test/catalog/application/queries/FindProductsByIdsQuery.java": {
+    "_comment": "The Query record carries the list and validates it with @NotEmpty (List), not @NotBlank (String).",
+    "contains": [
+      "import java.util.List;",
+      "import jakarta.validation.constraints.NotEmpty;",
+      "@NotEmpty List<String> productIds"
+    ],
+    "notContains": [
+      "@NotBlank",
+      "String productIds\n"
+    ]
+  }
+}

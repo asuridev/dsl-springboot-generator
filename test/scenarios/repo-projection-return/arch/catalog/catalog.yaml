@@ -26,6 +26,9 @@ aggregates:
       - name: status
         type: ProductStatus
         required: true
+      - name: price
+        type: Money
+        required: true
     domainRules:
       - id: RULE-CAT-003
         type: sideEffect
@@ -41,6 +44,9 @@ projections:
         required: true
       - name: status
         type: ProductStatus
+        required: true
+      - name: price
+        type: Money
         required: true
 
 useCases:

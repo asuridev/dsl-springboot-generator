@@ -995,6 +995,30 @@ function buildQueryFields(uc, agg, repoMethods, bcYaml = null, packageName = nul
       continue;
     }
 
+    const listMatch = /^List\[(.+)\]$/.exec(type);
+    if (listMatch) {
+      // List[T] multi-value query param — carried as List<…> in the Query record.
+      // Inner follows the query convention: Uuid → String (wire-level), enum → enum,
+      // else the canonical scalar Java type. @NotEmpty (not @NotBlank) validates a List.
+      const innerType = listMatch[1];
+      const innerJava = innerType === 'Uuid' ? 'String'
+        : enumNames.has(innerType) ? innerType
+        : mapType(innerType).javaType;
+      imports.add('java.util.List');
+      if (innerJava !== 'String') {
+        const innerHint = mapType(innerType).importHint;
+        if (innerHint) imports.add(innerHint);
+      }
+      if (enumNames.has(innerType) && packageName && moduleName) {
+        imports.add(`${packageName}.${moduleName}.domain.enums.${innerType}`);
+      }
+      const requiredAnnotations = isOptional ? [] : (() => {
+        imports.add(`${JAKARTA}.NotEmpty`);
+        return ['@NotEmpty'];
+      })();
+      fields.push({ type: `List<${innerJava}>`, name: input.name, annotations: requiredAnnotations });
+      continue;
+    }
     if (type === 'Integer' && (input.name === 'page' || input.name === 'size')) {
       // Pagination primitives — no validation annotations
       fields.push({ type: 'int', name: input.name, annotations: [] });

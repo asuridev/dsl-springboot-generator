@@ -1874,6 +1874,15 @@ function validateRepositories(doc) {
             if (!aggFields.has(prop.name)) {
               fail(`${ctx} returns projection "${innerReturnType}" whose property "${prop.name}" is not a field of aggregate "${repo.aggregate}". The generator builds SELECT new ${innerReturnType}(...) from aggregate columns and cannot map "${prop.name}".`);
             }
+            // Composite value objects expand to multiple JPA columns. Only Money is
+            // materializable via a nested JPQL constructor expression
+            // (new Money(a.xAmount, a.xCurrency)). StoredObject (URI↔String bridge) and
+            // multi-property custom VOs cannot be produced in a query without applying
+            // logic — reject rather than let the generator emit invalid JPQL.
+            const voDef = (doc.valueObjects || []).find((vo) => vo.name === prop.type);
+            if (prop.type === 'StoredObject' || (voDef && (voDef.properties || []).length > 1)) {
+              fail(`${ctx} returns projection "${innerReturnType}" whose property "${prop.name}" has composite value-object type "${prop.type}", which expands to multiple JPA columns. The generator can only materialize Money in a JPQL constructor expression — expose the value object's primitive parts in the projection, or map it in the use-case handler.`);
+            }
           }
         }
       }
