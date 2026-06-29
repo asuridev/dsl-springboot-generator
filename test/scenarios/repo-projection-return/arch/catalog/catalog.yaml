@@ -1,0 +1,165 @@
+bc: catalog
+version: "1.0.0"
+
+enums:
+  - name: ProductStatus
+    values:
+      - value: DRAFT
+      - value: ACTIVE
+      - value: ARCHIVED
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+      - name: categoryId
+        type: Uuid
+        required: true
+      - name: status
+        type: ProductStatus
+        required: true
+    domainRules:
+      - id: RULE-CAT-003
+        type: sideEffect
+        description: A category may have active products.
+
+projections:
+  - name: ProductPriceValidation
+    description: Minimal product view for price-validation lookups.
+    source: aggregate:Product
+    properties:
+      - name: id
+        type: Uuid
+        required: true
+      - name: status
+        type: ProductStatus
+        required: true
+
+useCases:
+  - id: UC-CAT-001
+    name: SearchProducts
+    type: query
+    actor: user
+    trigger:
+      kind: http
+      operationId: searchProducts
+    aggregate: Product
+    input:
+      - name: categoryId
+        type: Uuid
+        source: query
+        required: false
+      - name: search
+        type: String(200)
+        source: query
+        required: false
+    returns: Page[ProductResponse]
+    pagination:
+      defaultSize: 20
+      maxSize: 100
+    implementation: scaffold
+
+  - id: UC-CAT-002
+    name: AdminSearchProducts
+    type: query
+    actor: admin
+    trigger:
+      kind: http
+      operationId: adminSearchProducts
+    aggregate: Product
+    input:
+      - name: categoryId
+        type: Uuid
+        source: query
+        required: false
+      - name: status
+        type: ProductStatus
+        source: query
+        required: false
+      - name: search
+        type: String(200)
+        source: query
+        required: false
+    returns: Page[ProductResponse]
+    pagination:
+      defaultSize: 20
+      maxSize: 100
+    implementation: scaffold
+
+repositories:
+  - aggregate: Product
+    queryMethods:
+      - name: searchActive
+        params:
+          - name: categoryId
+            type: Uuid
+            required: false
+          - name: search
+            type: String(200)
+            required: false
+            filterOn: [name]
+            operator: LIKE_CONTAINS
+          - name: page
+            type: PageRequest
+            required: true
+        returns: Page[Product]
+        derivedFrom: openapi:searchProducts
+      - name: searchAll
+        params:
+          - name: categoryId
+            type: Uuid
+            required: false
+          - name: status
+            type: ProductStatus
+            required: false
+          - name: search
+            type: String(200)
+            required: false
+            filterOn: [name]
+            operator: LIKE_CONTAINS
+          - name: page
+            type: PageRequest
+            required: true
+        returns: Page[Product]
+        derivedFrom: openapi:adminSearchProducts
+      - name: findByProductIds
+        params:
+          - name: productIds
+            type: List[Uuid]
+            required: true
+        returns: List[Product]
+        derivedFrom: implicit
+      - name: findPriceValidationByProductIds
+        params:
+          - name: productIds
+            type: List[Uuid]
+            required: true
+        returns: List[ProductPriceValidation]
+        derivedFrom: implicit
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: existsActiveByCategoryId
+        params:
+          - name: categoryId
+            type: Uuid
+            required: true
+        returns: Boolean
+        derivedFrom: RULE-CAT-003
+      - name: countActiveByCategoryId
+        params:
+          - name: categoryId
+            type: Uuid
+            required: true
+        returns: Long
+        derivedFrom: RULE-CAT-003
+      - name: save
+        signature: "save(Product): Product"

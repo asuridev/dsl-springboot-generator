@@ -1,0 +1,17 @@
+{
+  "src/main/java/com/test/catalog/infrastructure/persistence/repositories/ProductJpaRepository.java": {
+    "_comment": "A repository method returning a projection is materialized via a JPQL constructor expression (SELECT new <FQN>(...)) — Spring Data cannot auto-project an entity onto a record DTO. The JPA method return type stays the projection record; properties map in declaration order to entity columns. Entity-returning methods on the same repo are unchanged.",
+    "contains": [
+      "SELECT new com.test.catalog.application.dtos.ProductPriceValidation(p.id, p.status) FROM ProductJpa p WHERE p.id IN :productIds",
+      "List<ProductPriceValidation> findPriceValidationByProductIds",
+      "import com.test.catalog.application.dtos.ProductPriceValidation;",
+      "SELECT p FROM ProductJpa p WHERE p.id IN :productIds"
+    ]
+  },
+  "src/main/java/com/test/catalog/infrastructure/persistence/repositories/ProductRepositoryImpl.java": {
+    "_comment": "The impl returns the JPA result directly for projection returns (no entity->domain mapping); the constructor expression already produced the record.",
+    "contains": [
+      "return jpaRepository.findPriceValidationByProductIds(productIds);"
+    ]
+  }
+}

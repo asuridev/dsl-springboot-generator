@@ -1,0 +1,5 @@
+{
+  "description": "A repository method returning a projection whose property is computed (derivedFrom) cannot be turned into a deterministic JPQL constructor expression — the generator would have to implement logic. The YAML reader must reject it.",
+  "expectFailure": true,
+  "expectedErrorPattern": "computed property"
+}

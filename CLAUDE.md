@@ -161,6 +161,8 @@ Los artefactos YAML declaran **qué** y **para qué**. El generador decide **có
 | `indexed: true` | anotación `@Index` en entidad JPA |
 | `type: uniqueness` en domain_rule | constraint `@Column(unique = true)` + método `findBy{Field}` en repositorio |
 | `relationship: composition` | `@OneToMany(cascade = ALL, orphanRemoval = true)` |
+| `source: multipart` + `type: File` (input de UC) | `spring.servlet.multipart.max-file-size`/`max-request-size` en `application.yaml` (a partir de `maxSize`), handlers `MaxUploadSizeExceededException`→413 y `UnsupportedMediaTypeStatusException`→415 en `HandlerExceptions`, y guard de `contentTypes` que lanza 415 en el controller |
+| repository method `returns:` una projection | `@Query` con expresión constructora JPQL `SELECT new <FQN>(a.f1, …)` (Spring Data no auto-proyecta una entidad sobre un record DTO); el impl devuelve el resultado JPA directo. Propiedades `derivedFrom` o ajenas al agregado se rechazan en validación (sin inferir lógica) |
 
 ### Motores de base de datos soportados
 

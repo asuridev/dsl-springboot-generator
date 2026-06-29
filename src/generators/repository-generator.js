@@ -90,6 +90,35 @@ function isProjectionReturnType(returnType, bcYaml) {
   return isProjectionType(inner, bcYaml);
 }
 
+// Unwrap a YAML-form return ("List[ProductSummary]", "ProductSummary?", …) to its
+// inner type name. Mirrors getWrappedReturnInner but for the YAML bracket syntax.
+function unwrapYamlReturnInner(returns) {
+  const value = String(returns || '').trim();
+  const optional = value.match(/^(.+)\?$/);
+  if (optional) return optional[1].trim();
+  const wrapped = value.match(/^(?:Optional|Page|List|Slice|Stream)\[(.+)\]$/);
+  return wrapped ? wrapped[1].trim() : value;
+}
+
+// When a repository method returns a projection, the JPA query must materialize the
+// record directly via a JPQL constructor expression — Spring Data cannot auto-project
+// an entity onto a non-interface DTO. Returns a function alias => "new <FQN>(a.f1, …)",
+// or null when the (YAML-form) return type is not a projection.
+//
+// Determinism is guaranteed upstream by bc-yaml-reader's validateRepositories, which
+// rejects projections whose properties are derived or not aggregate columns. We map
+// each projection property to "<alias>.<propertyName>" in declaration order (matching
+// the record's canonical constructor).
+function buildProjectionSelectExpr(returns, bcYaml, packageName, bc) {
+  const inner = unwrapYamlReturnInner(returns);
+  if (!isProjectionType(inner, bcYaml)) return null;
+  const projDef = (bcYaml.projections || []).find((p) => p.name === inner);
+  if (!projDef) return null;
+  const fqn = `${packageName}.${bc}.application.dtos.${inner}`;
+  const props = (projDef.properties || []).map((p) => p.name);
+  return (alias) => `new ${fqn}(${props.map((f) => `${alias}.${f}`).join(', ')})`;
+}
+
 // [G8] Returns true when any query UC targeting this aggregate declares a
 // Range[T] or SearchText input — meaning the JPA repository must extend
 // JpaSpecificationExecutor to expose findAll(Specification, Pageable).
@@ -727,8 +756,23 @@ function classifyMethod(method) {
 
 /**
  * Build the @Query string for a custom JPA repository method.
+ *
+ * When the method returns a projection, the entity-level SELECT produced by
+ * buildJpqlQueryRaw is rewritten into a JPQL constructor expression
+ * ("SELECT new <FQN>(a.f1, …) FROM …") so the JPA method materializes the record
+ * directly. See buildProjectionSelectExpr.
  */
-function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml) {
+function buildJpqlQuery(method, jpaEntityName, aggregate, bcYaml, packageName, bc) {
+  const raw = buildJpqlQueryRaw(method, jpaEntityName, aggregate, bcYaml);
+  if (!raw) return raw;
+  const projSelect = buildProjectionSelectExpr(method.returns, bcYaml, packageName, bc);
+  if (!projSelect) return raw;
+  // Rewrite the leading "SELECT <alias> FROM" select list, preserving the FROM
+  // clause (entity + alias + any JOIN/WHERE/ORDER BY) untouched.
+  return raw.replace(/^SELECT\s+(\w+)\s+FROM/, (_m, alias) => `SELECT ${projSelect(alias)} FROM`);
+}
+
+function buildJpqlQueryRaw(method, jpaEntityName, aggregate, bcYaml) {
   const { name, params, returns } = method;
 
   // R13: pessimistic-lock variant of findById. Spring Data exposes the @Lock
@@ -1760,7 +1804,7 @@ function buildJpaRepoInterfaceContext(aggregateName, normalizedMethods, aggregat
       paramsStr = javaParams.map((p) => `${p.javaType} ${p.name}`).join(', ');
     }
 
-    const query = needsQuery ? buildJpqlQuery(m, jpaEntityName, aggregate, bcYaml) : null;
+    const query = needsQuery ? buildJpqlQuery(m, jpaEntityName, aggregate, bcYaml, packageName, bc) : null;
     if (needsQuery && (!query || /^\s*\/\//.test(query))) {
       throw new Error(`[repository-generator] Unsupported repository method '${aggregateName}.${m.name}'. The generator could not derive a valid JPQL @Query from the YAML declaration.`);
     }

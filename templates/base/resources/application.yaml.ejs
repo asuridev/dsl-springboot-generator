@@ -29,3 +29,9 @@ spring:
     name: <%= artifactId %>
   profiles:
     active: ${PROFILE:local}
+<% if (typeof multipart !== 'undefined' && multipart) { -%>
+  servlet:
+    multipart:
+      max-file-size: <%= multipart.maxFileSize %>
+      max-request-size: <%= multipart.maxRequestSize %>
+<% } -%>

@@ -1644,6 +1644,7 @@ function validateRepositories(doc) {
   const aggregateNames = new Set((doc.aggregates || []).map((a) => a.name));
   const aggregateByName = new Map((doc.aggregates || []).map((a) => [a.name, a]));
   const projectionNames = new Set((doc.projections || []).map((p) => p.name));
+  const projectionByName = new Map((doc.projections || []).map((p) => [p.name, p]));
   const enumNames = new Set((doc.enums || []).map((e) => e.name));
   const enumByName = new Map((doc.enums || []).map((e) => [e.name, e]));
   const valueObjectNames = new Set((doc.valueObjects || []).map((vo) => vo.name));
@@ -1856,6 +1857,24 @@ function validateRepositories(doc) {
         const innerReturnType = unwrapReturnType(m.returns);
         if (innerReturnType && !isKnownType(innerReturnType)) {
           fail(`${ctx} returns unknown type "${innerReturnType}". Declare it under aggregates[], projections[], enums[] or valueObjects[], or use a supported canonical type.`);
+        }
+
+        // A repository method returning a projection is generated as a JPQL
+        // constructor expression (SELECT new <Projection>(a.f1, …)). That is only
+        // deterministic when every projection property maps to a real column on this
+        // aggregate's entity. Reject computed (derivedFrom) or non-aggregate
+        // properties rather than infer logic (CLAUDE.md rule 1).
+        if (innerReturnType && projectionNames.has(innerReturnType)) {
+          const projDef = projectionByName.get(innerReturnType);
+          const aggFields = aggregateFieldMap(aggregate);
+          for (const prop of (projDef && projDef.properties) || []) {
+            if (prop.derivedFrom != null) {
+              fail(`${ctx} returns projection "${innerReturnType}" with computed property "${prop.name}" (derivedFrom). The generator cannot produce it in a query without implementing logic — remove it from the projection used as a repository return, or compute it in the use-case handler.`);
+            }
+            if (!aggFields.has(prop.name)) {
+              fail(`${ctx} returns projection "${innerReturnType}" whose property "${prop.name}" is not a field of aggregate "${repo.aggregate}". The generator builds SELECT new ${innerReturnType}(...) from aggregate columns and cannot map "${prop.name}".`);
+            }
+          }
         }
       }
 

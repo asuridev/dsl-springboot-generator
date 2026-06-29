@@ -1,0 +1,47 @@
+openapi: "3.0.3"
+info:
+  title: Catalog API
+  version: "1.0.0"
+paths:
+  /products:
+    get:
+      operationId: searchProducts
+      parameters:
+        - name: categoryId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: search
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: Page of products.
+          content:
+            application/json:
+              schema: { type: object }
+  /admin/products:
+    get:
+      operationId: adminSearchProducts
+      parameters:
+        - name: categoryId
+          in: query
+          required: false
+          schema: { type: string, format: uuid }
+        - name: status
+          in: query
+          required: false
+          schema: { type: string, enum: [DRAFT, ACTIVE, ARCHIVED] }
+        - name: search
+          in: query
+          required: false
+          schema: { type: string }
+      responses:
+        "200":
+          description: Page of products.
+          content:
+            application/json:
+              schema: { type: object }
+components:
+  schemas: {}

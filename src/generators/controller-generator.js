@@ -1055,7 +1055,7 @@ function buildMethodStrings(op) {
         const set = mp.contentTypes.map((c) => `"${escapeJavaString(c)}"`).join(', ');
         multipartGuards.push(
           `if (${mp.name} != null && !${mp.name}.isEmpty() && !java.util.Set.of(${set}).contains(${mp.name}.getContentType())) {\n` +
-          `            throw new BadRequestException("${partName}: unsupported content type — allowed: ${escapeJavaString(mp.contentTypes.join(', '))}");\n` +
+          `            throw new UnsupportedMediaTypeStatusException("${partName}: unsupported content type — allowed: ${escapeJavaString(mp.contentTypes.join(', '))}");\n` +
           `        }`
         );
       }
@@ -1254,6 +1254,13 @@ function buildControllerImports(operations, packageName, moduleName, bcYaml = nu
     if (hasFilePart) {
       imports.add('org.springframework.web.multipart.MultipartFile');
       imports.add(`${packageName}.shared.domain.customExceptions.BadRequestException`);
+    }
+    // Content-type rejection on a file part returns 415 Unsupported Media Type.
+    const hasContentTypeGuard = multipartOps.some(
+      (op) => op.multipartInputsList.some((mp) => mp.contentTypes && mp.contentTypes.length > 0)
+    );
+    if (hasContentTypeGuard) {
+      imports.add('org.springframework.web.server.UnsupportedMediaTypeStatusException');
     }
   }
 

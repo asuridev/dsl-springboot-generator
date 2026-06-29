@@ -269,6 +269,45 @@ async function collectPublicEndpointPaths(allBcYamls, archDir) {
   return [...result];
 }
 
+// Multipart file uploads — when any use-case input declares `source: multipart`
+// with `type: File`, the app must raise Tomcat's 1 MB/part default to the declared
+// limit. Returns { maxFileSize, maxRequestSize } as Spring DataSize labels, or null
+// when no file uploads exist (so non-multipart projects render byte-identically).
+//   max-file-size    = largest declared part maxSize (default 1MB)
+//   max-request-size = max-file-size + 1MB headroom (covers other parts/form fields)
+function buildMultipartConfig(allBcYamls) {
+  const SIZE_UNITS = { B: 1, KB: 1024, MB: 1024 * 1024, GB: 1024 * 1024 * 1024 };
+  const parse = (s) => {
+    const m = /^(\d+)(B|KB|MB|GB)$/.exec(String(s || '').trim());
+    return m ? Number(m[1]) * SIZE_UNITS[m[2]] : null;
+  };
+  let hasFilePart = false;
+  let maxBytes = 0;
+  for (const bc of allBcYamls || []) {
+    for (const uc of (bc && bc.useCases) || []) {
+      for (const inp of (uc.input || [])) {
+        if (inp && inp.source === 'multipart' && inp.type === 'File') {
+          hasFilePart = true;
+          const b = parse(inp.maxSize);
+          if (b != null && b > maxBytes) maxBytes = b;
+        }
+      }
+    }
+  }
+  if (!hasFilePart) return null;
+  const fileBytes = maxBytes > 0 ? maxBytes : SIZE_UNITS.MB;
+  const toLabel = (bytes) => {
+    if (bytes % SIZE_UNITS.GB === 0) return `${bytes / SIZE_UNITS.GB}GB`;
+    if (bytes % SIZE_UNITS.MB === 0) return `${bytes / SIZE_UNITS.MB}MB`;
+    if (bytes % SIZE_UNITS.KB === 0) return `${bytes / SIZE_UNITS.KB}KB`;
+    return `${bytes}B`;
+  };
+  return {
+    maxFileSize: toLabel(fileBytes),
+    maxRequestSize: toLabel(fileBytes + SIZE_UNITS.MB),
+  };
+}
+
 /**
  * Generates the base Spring Boot project structure:
  *   - build.gradle / settings.gradle
@@ -369,6 +408,9 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   const asyncJobPresent = (allBcYamls || []).some((bc) =>
     (bc && bc.useCases || []).some((uc) => uc && uc.async && uc.async.mode === 'jobTracking')
   );
+  // [G12] Multipart file uploads — emit spring.servlet.multipart limits + the
+  // 413/415 exception handlers when any use case declares a File part.
+  const multipart = buildMultipartConfig(allBcYamls);
   const flywayEnabled       = outboxEnabled || idempotencyEnabled || persistentProjectionsPresent || asyncJobPresent;
 
   // ── Resilience + OAuth2 flags (Phase 5) ──────────────────────────────
@@ -455,7 +497,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'base', 'resources', 'application.yaml.ejs'),
     path.join(resourcesDir, 'application.yaml'),
-    { artifactId }
+    { artifactId, multipart }
   );
 
   // ── application-{env}.yaml (Spring profile configs) ───────────────────────
@@ -640,7 +682,7 @@ async function generateBaseProject(config, system, outputDir, allBcYamls = []) {
   await renderAndWrite(
     path.join(TEMPLATES_DIR, 'shared', 'handlerException', 'HandlerExceptions.java.ejs'),
     path.join(handlerDir, 'HandlerExceptions.java'),
-    { packageName, authServerEnabled, optimisticLockingEnabled, constraintErrorMap: buildConstraintErrorMap(packageName, allBcYamls), infrastructureErrorMap: buildInfrastructureErrorMap(packageName, allBcYamls) }
+    { packageName, authServerEnabled, optimisticLockingEnabled, hasMultipart: multipart != null, constraintErrorMap: buildConstraintErrorMap(packageName, allBcYamls), infrastructureErrorMap: buildInfrastructureErrorMap(packageName, allBcYamls) }
   );
 
   // ── Shared: CQRS interfaces ───────────────────────────────────────────────
