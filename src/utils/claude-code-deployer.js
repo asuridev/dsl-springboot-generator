@@ -13,6 +13,19 @@ const TOOL_MAP = {
   // 'todo' is not a Claude Code tool — dropped
 };
 
+/**
+ * Maps a source `model:` field (Copilot-style names like "Claude Sonnet 4.5 (copilot)")
+ * to a Claude Code subagent model alias. Unknown / empty values resolve to 'inherit'
+ * (the subagent runs on the session model).
+ */
+function mapModel(modelField) {
+  const m = String(modelField || '').toLowerCase();
+  if (m.includes('opus')) return 'opus';
+  if (m.includes('sonnet')) return 'sonnet';
+  if (m.includes('haiku')) return 'haiku';
+  return 'inherit';
+}
+
 function toKebabSlug(name) {
   return name
     .normalize('NFD')
@@ -113,11 +126,13 @@ async function rewriteConventionRefsInDir(dir) {
  *   - `tools:` → `allowed-tools:` (mapped Copilot → Claude Code names)
  * `AskUserQuestion` is always added: these flows run in the main thread and
  * declare human-in-the-loop behaviour ("detente y notifica al usuario"), so the
- * command must be able to pause and ask the user.
+ * command must be able to pause and ask the user. Orchestrators additionally get
+ * `Task`, which they need to spawn the specialist subagents that make up the DAG.
  */
 function buildCommandFrontmatter(fm) {
   const tools = mapTools(fm.tools);
   if (!tools.includes('AskUserQuestion')) tools.push('AskUserQuestion');
+  if (fm.kind === 'orchestrator' && !tools.includes('Task')) tools.push('Task');
   const description = fm.description || '';
 
   let yaml = '---\n';
@@ -151,6 +166,46 @@ async function transformAndWriteCommand(srcFile, destDir) {
 }
 
 /**
+ * Builds Claude Code *subagent* frontmatter from a source agent's frontmatter.
+ * Subagents are spawned by the orchestrator via the Task tool, so they differ
+ * from slash commands:
+ *   - keep `name:`  (the Task `subagent_type` matches this)
+ *   - `tools:`  → array of mapped Claude Code tool names (omit to inherit all)
+ *   - `model:`  → mapped alias (sonnet/opus/haiku) or 'inherit'
+ * No `AskUserQuestion`: specialists are non-interactive and report blockers back
+ * to the orchestrator instead of pausing for the user.
+ */
+function buildSubagentFrontmatter(fm, slug) {
+  const tools = mapTools(fm.tools);
+  const description = fm.description || '';
+
+  let yaml = '---\n';
+  yaml += `name: ${fm.name || slug}\n`;
+  yaml += `description: >\n  ${description.replace(/\n/g, '\n  ')}\n`;
+  if (tools.length) yaml += `tools: [${tools.map((t) => `"${t}"`).join(', ')}]\n`;
+  yaml += `model: ${mapModel(fm.model)}\n`;
+  yaml += '---\n';
+  return yaml;
+}
+
+/**
+ * Transforms a specialist .agent.md file into a Claude Code subagent and writes
+ * it to destDir/<slug>.md. Subagents run in their own context when the
+ * orchestrator invokes them via the Task tool.
+ */
+async function transformAndWriteSubagent(srcFile, destDir) {
+  const content = await fs.readFile(srcFile, 'utf8');
+  const { frontmatter, body } = parseFrontmatter(content);
+
+  const slug = toKebabSlug(frontmatter.name || path.basename(srcFile, '.agent.md'));
+  const newFrontmatter = buildSubagentFrontmatter(frontmatter, slug);
+
+  const destFile = path.join(destDir, `${slug}.md`);
+  await fs.outputFile(destFile, newFrontmatter + '\n' + rewriteForClaudeCode(body));
+  return slug;
+}
+
+/**
  * Deploys Phase 3 skills and agents to the project's .claude/ directory.
  * Non-blocking: logs a warning on failure rather than throwing.
  *
@@ -173,6 +228,9 @@ async function deployToClaudeCode(agentsSrcDir, skillsSrcDir, outputDir, logger)
   if (await fs.pathExists(skillsSrcDir)) {
     const skillsDestDir = path.join(claudeDir, 'skills');
     try {
+      // emptyDir first so a re-deploy drops skill dirs that no longer exist in
+      // source (fs.copy with overwrite merges, it never deletes stale dirs).
+      await fs.emptyDir(skillsDestDir);
       await fs.copy(skillsSrcDir, skillsDestDir, { overwrite: true });
       await rewriteConventionRefsInDir(skillsDestDir);
       logger.success('Phase 3 skills deployed to .claude/skills/');
@@ -181,24 +239,36 @@ async function deployToClaudeCode(agentsSrcDir, skillsSrcDir, outputDir, logger)
     }
   }
 
-  // ── Deploy agents as slash commands ─────────────────────────────────────────
-  // Claude Code responds better to slash commands than to subagents for these
-  // human-in-the-loop flows: commands run in the main thread (AskUserQuestion
-  // works) and receive the caller's request via $ARGUMENTS.
+  // ── Deploy agents: specialists → subagents ──────────────────────────────────
+  // The Phase 3 orchestrator is a skill (src/skills/logic-implementation/),
+  // auto-discovered and run by the main thread — it is deployed by the skills
+  // copy above, not here. The specialists (`kind: specialist`) are spawned by it
+  // via the Task tool, so they deploy as subagents under .claude/agents/. Any
+  // agent without `kind` falls back to a slash command (backward compat).
   if (await fs.pathExists(agentsSrcDir)) {
     const commandsDestDir = path.join(claudeDir, 'commands');
+    const subagentsDestDir = path.join(claudeDir, 'agents');
     try {
-      await fs.ensureDir(commandsDestDir);
+      await fs.ensureDir(subagentsDestDir);
       const entries = await fs.readdir(agentsSrcDir);
       const agentFiles = entries.filter((f) => f.endsWith('.agent.md') || f.endsWith('.md'));
 
       for (const file of agentFiles) {
         const srcFile = path.join(agentsSrcDir, file);
-        const slug = await transformAndWriteCommand(srcFile, commandsDestDir);
-        logger.success(`Command "${slug}" deployed to .claude/commands/${slug}.md`);
+        const content = await fs.readFile(srcFile, 'utf8');
+        const { frontmatter } = parseFrontmatter(content);
+
+        if (frontmatter.kind === 'specialist') {
+          const slug = await transformAndWriteSubagent(srcFile, subagentsDestDir);
+          logger.success(`Subagent "${slug}" deployed to .claude/agents/${slug}.md`);
+        } else {
+          await fs.ensureDir(commandsDestDir);
+          const slug = await transformAndWriteCommand(srcFile, commandsDestDir);
+          logger.success(`Command "${slug}" deployed to .claude/commands/${slug}.md`);
+        }
       }
     } catch (err) {
-      logger.warn(`Claude Code commands deploy failed: ${err.message}`);
+      logger.warn(`Claude Code agents deploy failed: ${err.message}`);
     }
   }
 

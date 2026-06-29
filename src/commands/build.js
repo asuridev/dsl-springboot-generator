@@ -656,6 +656,9 @@ async function buildCommand(options = {}) {
     const skillsSrcDir = path.join(__dirname, '..', 'skills');
     if (await fs.pathExists(skillsSrcDir)) {
       const skillsDestDir = path.join(outputDir, '.agents', 'skills');
+      // emptyDir first so a re-deploy drops skill dirs that no longer exist in
+      // source (fs.copy with overwrite merges, it never deletes stale dirs).
+      await fs.emptyDir(skillsDestDir);
       await fs.copy(skillsSrcDir, skillsDestDir, { overwrite: true });
       logger.success('Phase 3 skills deployed to .agents/skills/');
     }
@@ -665,6 +668,17 @@ async function buildCommand(options = {}) {
       const agentsDestDir = path.join(outputDir, '.github', 'agents');
       await fs.copy(agentsSrcDir, agentsDestDir, { overwrite: true });
       logger.success('Phase 3 agents deployed to .github/agents/');
+    }
+
+    // Skills (incl. the orchestrator skill logic-implementation/) also go to the
+    // GitHub harness so it keeps an orchestrator entry point. Verbatim copy: the
+    // skills' internal `.agents/skills/...` refs resolve at the generated repo
+    // root, same as the agents already deployed to .github/agents/.
+    if (await fs.pathExists(skillsSrcDir)) {
+      const githubSkillsDestDir = path.join(outputDir, '.github', 'skills');
+      await fs.emptyDir(githubSkillsDestDir);
+      await fs.copy(skillsSrcDir, githubSkillsDestDir, { overwrite: true });
+      logger.success('Phase 3 skills deployed to .github/skills/');
     }
 
     // ── Phase 3 Claude Code project deploy (skills + slash commands) ─────────
