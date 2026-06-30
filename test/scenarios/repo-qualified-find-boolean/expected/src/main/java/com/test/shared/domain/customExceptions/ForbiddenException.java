@@ -1,0 +1,28 @@
+package com.test.shared.domain.customExceptions;
+
+import java.util.List;
+
+public class ForbiddenException extends DomainException {
+
+    protected ForbiddenException() {}
+
+    public ForbiddenException(String message) {
+        super(message);
+    }
+
+    public ForbiddenException(String message, Throwable cause) {
+        super(message, cause);
+    }
+
+    public ForbiddenException(String message, String code, Object[] args) {
+        super(message, code, args);
+    }
+
+    public ForbiddenException(String message, String code, Integer httpStatus, Object[] args) {
+        super(message, code, httpStatus, args);
+    }
+
+    public ForbiddenException(String message, String code, Integer httpStatus, Object[] args, List<String> details) {
+        super(message, code, httpStatus, args, details);
+    }
+}

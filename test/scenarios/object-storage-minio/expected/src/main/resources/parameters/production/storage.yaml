@@ -1,0 +1,9 @@
+storage:
+  endpoint: ${STORAGE_ENDPOINT:}
+  region: ${STORAGE_REGION:us-east-1}
+  access-key: ${MINIO_ROOT_USER:minioadmin}
+  secret-key: ${MINIO_ROOT_PASSWORD:minioadmin}
+  buckets:
+    product-media:
+      bucket: ${STORAGE_PRODUCT_MEDIA_BUCKET:product-media}
+      base-url: ${STORAGE_PUBLIC_URL}

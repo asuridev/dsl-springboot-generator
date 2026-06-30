@@ -102,7 +102,13 @@ public class HandlerExceptions {
     // ── Spring framework errors ────────────────────────────────────
 
     @ResponseStatus(HttpStatus.BAD_REQUEST)
-    @ExceptionHandler({ HttpMessageNotReadableException.class, MethodArgumentTypeMismatchException.class })
+    @ExceptionHandler(
+        {
+            HttpMessageNotReadableException.class,
+            MethodArgumentTypeMismatchException.class,
+            IllegalArgumentException.class
+        }
+    )
     @ResponseBody
     public ErrorResponse onMalformedRequest(Exception ex) {
         return new ErrorResponse(HttpStatus.BAD_REQUEST.value(), "Bad Request", "Malformed request");
