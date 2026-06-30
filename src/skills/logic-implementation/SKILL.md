@@ -73,12 +73,19 @@ daemon, una DB y un árbol de código, por eso el batch es **solo lectura** y lo
 única invocación que corrige **un flujo a la vez**.
 
 **Antes del batch** (responsabilidad tuya, no de los validadores): deja la app corriendo con el
-código actual y sana, **una sola vez**:
+código actual y sana, y la DB en estado limpio, **una sola vez**:
 ```bash
 ./gradlew compileJava
 # App en contenedor: ${COMPOSE} restart app   |   App local: reinicia el proceso bootRun
 curl -sf http://localhost:8080/actuator/health | jq .status
+./reset-db.sh   # trunca tablas de dominio + outbox/idempotencia (preserva el esquema)
 ```
+El reset deja la DB en el estado que asumen los `Given` de los flujos ("No existe Category con
+slug …"). Sin él, datos residuales de un run previo hacen que escenarios "create" reciban 409 en
+vez de 201 y se reporten como falsos `failures[]`. El estado de la DB lo posee **el orquestador**,
+no los validadores: truncar datos no es "editar código", así que no contradice la regla de no
+editar durante la Fase 2. Para H2 (in-memory) `reset-db.sh` no existe — reinicia la app para
+recrear el esquema vacío.
 
 **Fase 2a — batch `validate` (paralelo, read-only).** Enumera los flujos del BC y lanza **un
 `flow-validator` en modo `validate` por flujo, todas las llamadas `Task` en el mismo turno**:

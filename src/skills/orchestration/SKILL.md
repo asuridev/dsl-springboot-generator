@@ -57,9 +57,11 @@ y validados, no solo el primero. Las convenciones de arquitectura están en `AGE
 - **Fase 1 → Fase 2**: los `flow-validator` solo arrancan cuando `todo-implementer` devolvió
   `compiles: true` **y** `infra-provisioner` devolvió `status: ready`. Ambos son prerequisitos: no
   se puede validar sin código implementado ni sin infraestructura.
-- **Fan-out por flujo (Fase 2)**: el orquestador deja la app levantada **una sola vez** (compila +
-  reinicia + health) y luego lanza **un `flow-validator` por flujo** `FL-{BC}-{N}`. El batch
-  `validate` es **read-only y paralelizable** (no compila/reinicia/edita) y **debe terminar completo**
+- **Fan-out por flujo (Fase 2)**: el orquestador deja la app levantada y la DB limpia **una sola vez**
+  (compila + reinicia + health + `./reset-db.sh`) y luego lanza **un `flow-validator` por flujo**
+  `FL-{BC}-{N}`. El reset trunca dominio + outbox/idempotencia para que los `Given` de los flujos se
+  sostengan (datos residuales de un run previo causan falsos `failures[]`); no existe en H2. El batch
+  `validate` es **read-only y paralelizable** (no compila/reinicia/edita/resetea) y **debe terminar completo**
   antes de cualquier fix. Si hubo flujos rojos, el fix-loop lo ejecuta **un único** `flow-validator`
   en modo `fix` que recibe el **conjunto de flujos rojos** y los corrige **secuencialmente (un flujo
   a la vez)**, porque el árbol de código, el Gradle daemon y la app son compartidos. **El orquestador
@@ -128,7 +130,8 @@ harnesses. Solo cambia el **mecanismo de spawn**.
 - Para **paralelizar** (Fase 1, el batch `validate` de la Fase 2 y la Fase 3), emite las llamadas
   `Task` **en el mismo turno** (varios tool calls en un solo mensaje). El runtime las ejecuta
   concurrentemente y el orquestador recibe todos los resultados antes de continuar.
-- En la **Fase 2** el orquestador deja la app levantada una sola vez, lanza **un `Task` de
+- En la **Fase 2** el orquestador deja la app levantada y la DB limpia una sola vez (incluye
+  `./reset-db.sh`), lanza **un `Task` de
   `flow-validator` por flujo en modo `validate`** (todos en un turno) y **espera a que todos
   terminen**. Para los flujos que vuelvan rojos, lanza **un único `Task` de `flow-validator` en modo
   `fix`** con la **lista de flujos rojos** (no uno por flujo); ese agente los corrige secuencialmente

@@ -33,7 +33,11 @@ se comporta como manda `{bc-name}-flows.md`. En `validate` el orquestador hace *
   nada.
 - **`fix` (serial):** corres en exclusiva y eres el **único** que edita. Te asignan la **lista de
   flujos rojos** y ejecutas el fix-loop completo (F1→F4) sobre **cada flujo, uno a la vez** (revalidas
-  uno antes de pasar al siguiente), hasta dejarlos todos verdes.
+  uno antes de pasar al siguiente), hasta dejarlos todos verdes. Antes de re-ejecutar la secuencia de
+  escenarios de un flujo corre `./reset-db.sh` **una vez** (no entre escenarios): tras un intento
+  fallido el escenario "create" ya dejó datos, y sin limpiar la DB el re-run recibiría 409 en vez de
+  201 y el fix-loop nunca convergería. El reset trunca dominio + outbox/idempotencia y preserva el
+  esquema; cada flujo restablece sus propios datos vía su escenario A.
 
 ## Regla de cierre (no negociable)
 
@@ -58,8 +62,10 @@ flujo lo prohíbe). Compilar y arrancar la app **no** basta.
 
 1. **F1 — Recompilar** (`./gradlew compileJava`); si falla, corrige antes de seguir. *(solo `fix`)*
 2. **F2 — Verificar que la app levanta**: en `fix`, reinicia el contenedor `app` o el proceso
-   `bootRun` y comprueba `actuator/health`. En `validate`, **no reinicies** —el orquestador ya dejó
-   la app levantada una sola vez—; solo comprueba `actuator/health`.
+   `bootRun`, comprueba `actuator/health` y ejecuta `./reset-db.sh` una vez antes de re-validar el
+   flujo (deja la DB en el estado limpio que asumen los `Given`; para H2 no existe el script y el
+   reinicio recrea el esquema vacío). En `validate`, **no reinicies ni resetees** —el orquestador ya
+   dejó la app levantada y la DB limpia una sola vez—; solo comprueba `actuator/health`.
 3. **F3 — Ejecutar tu flujo**: si hay Keycloak, obtén el token primero; itera sobre **cada**
    escenario (A, B, C…) de **tu** flujo traduciendo el `Then` a comandos HTTP + CLI y verificando
    status + side effects (o su ausencia). Los escenarios de error (409/404/403/400) son parte del
@@ -73,3 +79,9 @@ Si una falla se debe a una contradicción de diseño (YAML↔flows), a una depen
 declarada o a un artefacto en `arch/review/` → **no inventes**: regístralo en `blockers[]`. Si tras
 un esfuerzo razonable un escenario no queda verde, regístralo en `failures[]`. No cambias firmas ni
 contratos generados por Fase 2 para "tapar" un fallo, ni escribes tests de negocio.
+
+`reset-db.sh` asume que **cada flujo es auto-contenido**: su escenario A crea los datos que los
+escenarios siguientes verifican. No hay seed de dominio (las tablas las crea Hibernate vacías). Si
+el `Given` de un flujo dependiera de datos creados por **otro** flujo (no auto-contenido), tras el
+reset esa precondición no se sostiene → regístralo en `blockers[]`; **no** siembres datos a mano
+para sortearlo.

@@ -271,7 +271,17 @@ ${COMPOSE} logs -f app
 
 # Script de validación completa de infraestructura
 ./validate-infra.sh
+
+# Reset de estado de DB entre validaciones (trunca tablas de dominio + outbox/idempotencia;
+# preserva el esquema y flyway_schema_history). Idempotente; ejecutar con la app levantada.
+./reset-db.sh
 ```
+
+> `reset-db.sh` deja la base de datos en el estado limpio que asumen los `Given` de los flujos
+> ("No existe Category con slug …"). Se ejecuta una vez antes del batch de validación y antes de
+> cada re-validación del fix-pass, **no** entre escenarios de un mismo flujo (rompería el orden
+> A→B donde el escenario A crea el dato que el B verifica como duplicado). El generador lo emite
+> para todos los motores excepto H2 (in-memory, sin contenedor).
 
 ---
 

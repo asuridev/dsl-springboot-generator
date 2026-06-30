@@ -110,4 +110,47 @@ function getJpaColumnTypes(dbId) {
   return JPA_COLUMN_TYPES[dbId] || JPA_COLUMN_TYPES.postgresql;
 }
 
-module.exports = { getSqlDialect, getJpaColumnTypes };
+/**
+ * FK-safe TRUNCATE/DELETE statements for the generated `reset-db.sh`, which wipes
+ * the domain (and idempotency/outbox) tables between flow-validation runs so the
+ * `Given` preconditions hold again. `flyway_schema_history` is never listed, so the
+ * schema survives.
+ *
+ * `tables` must be ordered child→parent (collection/child tables before aggregate
+ * roots). Only the Oracle branch relies on that ordering; PostgreSQL cascades and
+ * MySQL/SQL Server disable FK enforcement, so they are order-independent. H2 reuses
+ * the PostgreSQL form (PostgreSQL compatibility mode).
+ *
+ * @param {string} dbId
+ * @param {string[]} tables  physical table names, child→parent order
+ * @returns {string[]} SQL statements to pipe to the engine CLI (empty when no tables)
+ */
+function getTruncateStatements(dbId, tables) {
+  if (!Array.isArray(tables) || tables.length === 0) return [];
+  const id = dbId === 'h2' ? 'postgresql' : dbId;
+  switch (id) {
+    case 'mysql':
+      return [
+        'SET FOREIGN_KEY_CHECKS = 0;',
+        ...tables.map((t) => `TRUNCATE TABLE ${t};`),
+        'SET FOREIGN_KEY_CHECKS = 1;',
+      ];
+    case 'sqlserver':
+      // TRUNCATE is rejected on FK-referenced tables → DELETE with constraints
+      // disabled, then re-enable. Order-independent thanks to NOCHECK.
+      return [
+        ...tables.map((t) => `ALTER TABLE ${t} NOCHECK CONSTRAINT ALL;`),
+        ...tables.map((t) => `DELETE FROM ${t};`),
+        ...tables.map((t) => `ALTER TABLE ${t} WITH CHECK CHECK CONSTRAINT ALL;`),
+      ];
+    case 'oracle':
+      // Oracle has no portable session-wide FK toggle; delete child→parent
+      // (tables arrive in that order) so FK constraints stay satisfied.
+      return tables.map((t) => `DELETE FROM ${t};`);
+    case 'postgresql':
+    default:
+      return [`TRUNCATE TABLE ${tables.join(', ')} RESTART IDENTITY CASCADE;`];
+  }
+}
+
+module.exports = { getSqlDialect, getJpaColumnTypes, getTruncateStatements };

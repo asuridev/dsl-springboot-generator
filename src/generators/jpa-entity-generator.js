@@ -967,4 +967,41 @@ async function generateJpaEntities(bcYaml, config, outputDir) {
   }
 }
 
-module.exports = { generateJpaEntities, expandMoneyField };
+/**
+ * Collect the physical domain table names of a BC, ordered child→parent
+ * (element-collection tables and child-entity tables before aggregate roots) so
+ * engines that delete with FK enforcement on stay satisfied.
+ *
+ * Mirrors the @Table / @CollectionTable names this generator emits
+ * (`toTableName`, `${aggSnake}_${fieldSnake}`). Consumed by `reset-db-generator`
+ * to build `reset-db.sh`.
+ *
+ * @param {object} bcYaml
+ * @returns {string[]}
+ */
+function collectDomainTables(bcYaml) {
+  const aggregateTables = [];
+  const childTables = [];
+  const collectionTables = [];
+
+  for (const aggregate of bcYaml.aggregates || []) {
+    aggregateTables.push(toTableName(aggregate.name));
+    for (const prop of aggregate.properties || []) {
+      if (isListType(prop.type)) {
+        collectionTables.push(`${toSnakeCase(aggregate.name)}_${toSnakeCase(prop.name)}`);
+      }
+    }
+    for (const entity of aggregate.entities || []) {
+      childTables.push(toTableName(entity.name));
+      for (const prop of entity.properties || []) {
+        if (isListType(prop.type)) {
+          collectionTables.push(`${toSnakeCase(entity.name)}_${toSnakeCase(prop.name)}`);
+        }
+      }
+    }
+  }
+
+  return [...collectionTables, ...childTables, ...aggregateTables];
+}
+
+module.exports = { generateJpaEntities, expandMoneyField, collectDomainTables };

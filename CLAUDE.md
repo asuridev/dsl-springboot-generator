@@ -175,6 +175,22 @@ proyecciones, en `src/utils/type-mapper.js` (`mapToSqlType`). PostgreSQL es la s
 los golden tests; al tocar estos módulos, mantener su salida byte-idéntica. SQL Server valida persistencia
 vía `go-sqlcmd` en el contenedor `devtools`; Oracle vía `sqlplus` dentro del contenedor `oracle`.
 
+### Reset de estado de DB para la Fase 3 (`reset-db.sh`)
+
+El `build` emite en la raíz del proyecto un `reset-db.sh` (junto a `validate-infra.sh`), salvo para
+**H2** (in-memory, sin contenedor). El script trunca las **tablas de dominio** de todos los BC
+(`reset-db-generator.js` las recopila vía `collectDomainTables` del `jpa-entity-generator`, en orden
+hijo→padre: colecciones `@CollectionTable` → entidades hijas → agregados) más las tablas de
+**outbox/idempotencia** (`outbox_event`, `processed_event`) cuando reliability está habilitado, y
+**preserva el esquema** (incluido `flyway_schema_history`). Las sentencias FK-safe por motor las da
+`getTruncateStatements(dbId, tables)` en `src/utils/sql-dialect.js` (PostgreSQL `TRUNCATE … RESTART
+IDENTITY CASCADE`; MySQL con `FOREIGN_KEY_CHECKS=0`; SQL Server `NOCHECK`+`DELETE`; Oracle `DELETE`
+hijo→padre). Las dominio las crea Hibernate (`ddl-auto: update`), por eso reiniciar la app no las
+vacía: el reset es lo que deja la DB en el estado que asumen los `Given` de los flujos. Lo consume la
+orquestación de Fase 3 (`src/skills/logic-implementation`): el orquestador lo corre una vez antes del
+batch `validate` y el `flow-validator(fix)` antes de re-validar cada flujo. No forma parte del diff de
+golden tests (el runner solo compara `src/main/java` y `src/main/resources`).
+
 ---
 
 ## Cómo agregar un nuevo comando CLI

@@ -9,6 +9,7 @@ const { configExists, readConfig, writeConfig, loadParameters } = require('../ut
 const { readSystemYaml, validateArchDirectory } = require('../utils/system-yaml-reader');
 const { generateBaseProject, generateBrokerTopologyYaml } = require('../generators/base-project-generator');
 const { generateDockerFiles } = require('../generators/docker-generator');
+const { generateResetDbScript } = require('../generators/reset-db-generator');
 const { generateKeycloakRealm } = require('../generators/keycloak-realm-generator');
 const { generateEnums } = require('../generators/enum-generator');
 const { generateValueObjects, generateEventDtos } = require('../generators/value-object-generator');
@@ -579,6 +580,22 @@ async function buildCommand(options = {}) {
       }
     } catch (err) {
       sagaSpinner.fail(`Saga artifact generation failed: ${err.message}`);
+      throw err;
+    }
+
+    // ── 8g. DB reset script (Phase 3 flow validation) ──────────────────────
+    // Truncates domain + idempotency/outbox tables so validation runs start clean
+    // and the flows' `Given` preconditions hold again (preserves the schema).
+    const resetDbSpinner = ora('Generating reset-db.sh…').start();
+    try {
+      const resetGenerated = await generateResetDbScript(resolvedConfig, allBcYamls, reliabilityResult, outputDir);
+      if (resetGenerated) {
+        resetDbSpinner.succeed('reset-db.sh generated');
+      } else {
+        resetDbSpinner.info('Skipping reset-db.sh (H2 / no domain tables)');
+      }
+    } catch (err) {
+      resetDbSpinner.fail(`reset-db.sh generation failed: ${err.message}`);
       throw err;
     }
 
