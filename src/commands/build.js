@@ -31,6 +31,7 @@ const { generateMessagingLayer, generateDomainEventsLayer, generateSharedBrokerC
 const { readBcYaml } = require('../utils/bc-yaml-reader');
 const { updateContextFiles } = require('../generators/context-updater');
 const { deployToClaudeCode } = require('../utils/claude-code-deployer');
+const { deployToOpenCode } = require('../utils/opencode-deployer');
 const { readOpenApiYaml, readAsyncApiYaml, readInternalApiYaml } = require('../utils/arch-yaml-reader');
 const { validateIntegrationCoherence, reportDiagnostics, validateOpenApiUseCases } = require('@dsl/contract');
 const { validateTypeResolution } = require('../utils/type-resolution-validator');
@@ -683,6 +684,9 @@ async function buildCommand(options = {}) {
 
     // ── Phase 3 Claude Code project deploy (skills + slash commands) ─────────
     await deployToClaudeCode(agentsSrcDir, skillsSrcDir, outputDir, logger);
+
+    // ── Phase 3 OpenCode project deploy (skills + agents) ────────────────────
+    await deployToOpenCode(agentsSrcDir, skillsSrcDir, outputDir, logger);
 
     // ── Phase 13: context files for Phase 3 agents ───────────────────────────
     logger.info('Phase 13 — generating CLAUDE.md / AGENTS.md for Phase 3 agents…');

@@ -1880,7 +1880,7 @@ function validateRepositories(doc) {
             // multi-property custom VOs cannot be produced in a query without applying
             // logic — reject rather than let the generator emit invalid JPQL.
             const voDef = (doc.valueObjects || []).find((vo) => vo.name === prop.type);
-            if (prop.type === 'StoredObject' || (voDef && (voDef.properties || []).length > 1)) {
+            if (prop.type === 'StoredObject' || (voDef && prop.type !== 'Money' && (voDef.properties || []).length > 1)) {
               fail(`${ctx} returns projection "${innerReturnType}" whose property "${prop.name}" has composite value-object type "${prop.type}", which expands to multiple JPA columns. The generator can only materialize Money in a JPQL constructor expression — expose the value object's primitive parts in the projection, or map it in the use-case handler.`);
             }
           }
