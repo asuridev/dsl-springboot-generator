@@ -35,6 +35,7 @@ DB=${SYSTEM//-/_}
 
 ## Cheatsheet por tecnología
 
+<!-- stack:database=postgresql -->
 ### PostgreSQL
 
 ```bash
@@ -59,7 +60,9 @@ ${RUNTIME} exec ${SYSTEM}-devtools psql -h postgres -U postgres -d ${DB} \
 ${RUNTIME} exec ${SYSTEM}-devtools psql -h postgres -U postgres -d ${DB} \
   -c "\d {bc}.{table}"
 ```
+<!-- /stack -->
 
+<!-- stack:database=mysql -->
 ### MySQL
 
 ```bash
@@ -77,7 +80,9 @@ ${RUNTIME} exec ${SYSTEM}-devtools mysql -h mysql -u postgres -ppostgres ${DB} \
 ${RUNTIME} exec ${SYSTEM}-devtools mysql -h mysql -u postgres -ppostgres ${DB} \
   -e "SELECT * FROM {table} ORDER BY created_at DESC LIMIT 1"
 ```
+<!-- /stack -->
 
+<!-- stack:database=sqlserver -->
 ### SQL Server
 
 > El cliente `sqlcmd` (go-sqlcmd) viene instalado en el contenedor `devtools`. El
@@ -100,7 +105,9 @@ ${RUNTIME} exec ${SYSTEM}-devtools sqlcmd -S sqlserver,1433 -U sa -P 'Str0ng_Pas
 ${RUNTIME} exec ${SYSTEM}-devtools sqlcmd -S sqlserver,1433 -U sa -P 'Str0ng_Passw0rd!' -d ${DB} -C \
   -Q "SELECT TOP 1 * FROM {table} ORDER BY created_at DESC"
 ```
+<!-- /stack -->
 
+<!-- stack:database=oracle -->
 ### Oracle
 
 > A diferencia de Postgres/MySQL/SQL Server, el cliente `sqlplus` NO está en `devtools`
@@ -120,7 +127,9 @@ ${RUNTIME} exec ${SYSTEM}-oracle bash -c "echo 'SELECT COUNT(*) FROM {table};' |
 # Ver último registro insertado
 ${RUNTIME} exec ${SYSTEM}-oracle bash -c "echo 'SELECT * FROM {table} ORDER BY created_at DESC FETCH FIRST 1 ROWS ONLY;' | sqlplus -s appuser/Str0ng_Passw0rd1@//localhost:1521/FREEPDB1"
 ```
+<!-- /stack -->
 
+<!-- stack:broker=kafka -->
 ### Kafka
 
 ```bash
@@ -144,7 +153,9 @@ ${RUNTIME} exec ${SYSTEM}-devtools kcat -b kafka:29092 -t catalog.product.create
 ```
 
 > Nota: `-e` hace que kcat salga cuando llega al final de los mensajes (no espera indefinidamente)
+<!-- /stack -->
 
+<!-- stack:broker=rabbitmq -->
 ### RabbitMQ (vía Management HTTP API)
 
 ```bash
@@ -167,7 +178,9 @@ curl -sf -u guest:guest "http://localhost:15672/api/queues/%2F/{queue-name}/bind
 curl -sf -u guest:guest "http://localhost:15672/api/queues/%2F/{queue-name}" \
   | jq '{name: .name, messages: .messages, consumers: .consumers}'
 ```
+<!-- /stack -->
 
+<!-- stack:cache=redis,valkey -->
 ### Redis / Valkey (cache de idempotencia)
 
 ```bash
@@ -189,7 +202,9 @@ ${RUNTIME} exec ${SYSTEM}-devtools redis-cli -h cache GET "idempotency:{request-
 # Ver TTL de una clave
 ${RUNTIME} exec ${SYSTEM}-devtools redis-cli -h cache TTL "idempotency:{request-id}"
 ```
+<!-- /stack -->
 
+<!-- stack:auth=keycloak -->
 ### Keycloak
 
 ```bash
@@ -214,7 +229,9 @@ TOKEN=$(curl -s -X POST \
 curl -s http://localhost:8080/{path} \
   -H "Authorization: Bearer ${TOKEN}" | jq .
 ```
+<!-- /stack -->
 
+<!-- stack:storage=minio -->
 ### MinIO / Object Storage (S3-compatible, vía cliente `mc`)
 
 > El generador solo soporta **MinIO** como proveedor; el código de la app es agnóstico
@@ -248,6 +265,7 @@ curl -sI "http://localhost:9000/{store}/{storageKey}" | head -1
 
 > Consola web de MinIO: `http://localhost:9001` (usuario/clave = `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`).
 > Para stores `signed-url` la URL pública NO funciona: la app emite una presigned URL en el endpoint de lectura.
+<!-- /stack -->
 
 ---
 
@@ -335,25 +353,45 @@ ${COMPOSE} logs --tail=100 app
 ${COMPOSE} logs -f app
 
 # Base de datos
+<!-- stack:database=postgresql -->
 ${COMPOSE} logs --tail=50 postgres
+<!-- /stack -->
+<!-- stack:database=mysql -->
 ${COMPOSE} logs --tail=50 mysql
+<!-- /stack -->
+<!-- stack:database=sqlserver -->
+${COMPOSE} logs --tail=50 sqlserver
+<!-- /stack -->
+<!-- stack:database=oracle -->
+${COMPOSE} logs --tail=50 oracle
+<!-- /stack -->
 
+<!-- stack:broker=kafka -->
 # Kafka
 ${COMPOSE} logs --tail=50 kafka
 ${COMPOSE} logs --tail=50 zookeeper
+<!-- /stack -->
 
+<!-- stack:broker=rabbitmq -->
 # RabbitMQ
 ${COMPOSE} logs --tail=50 rabbitmq
+<!-- /stack -->
 
+<!-- stack:cache=redis,valkey -->
 # Cache
 ${COMPOSE} logs --tail=50 cache
+<!-- /stack -->
 
+<!-- stack:auth=keycloak -->
 # Keycloak
 ${COMPOSE} logs --tail=50 keycloak
+<!-- /stack -->
 
+<!-- stack:storage=minio -->
 # MinIO (object storage) + init de buckets
 ${COMPOSE} logs --tail=50 minio
 ${COMPOSE} logs --tail=50 minio-createbuckets
+<!-- /stack -->
 
 # Todos los servicios a la vez
 ${COMPOSE} logs --tail=30

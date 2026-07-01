@@ -58,16 +58,28 @@ continúa con `{bc-name}-collection.json`.
 
 ### De dónde sacar realm / clientId / secret / usuarios
 
+<!-- stack:auth=keycloak -->
 - **Keycloak:** `keycloak/realm-export.json` y `docker-compose.yml` — realm, `clientId`, secret,
   y los usuarios sembrados con sus roles. Endpoint de token:
   `http://localhost:8180/realms/{realm}/protocol/openid-connect/token`.
+<!-- /stack -->
+<!-- stack:auth=cognito -->
+- **AWS Cognito:** no hay contenedor local; usa un User Pool real. Del `application.yaml`
+  (`spring.security.oauth2.resourceserver.jwt.issuer-uri`) sacas la región y el `userPoolId`. El
+  `appClientId` (app client con `USER_PASSWORD_AUTH` habilitado, sin secret para pruebas), los
+  usuarios y sus grupos (`cognito:groups` → roles) los defines en la consola de Cognito. El token
+  se pide al endpoint `InitiateAuth`: `https://cognito-idp.{region}.amazonaws.com/`.
+<!-- /stack -->
 - **OAuth2 client-credentials:** `tokenEndpoint`, `clientId`/`clientSecret` desde los parámetros
   del proyecto (`parameters/{env}/oauth2.yaml`).
 
 ### Una request por rol/credencial
 
 Crea una request por cada rol distinto que los flujos del BC necesiten. Cada una guarda su token en
-una global. Plantilla (Keycloak password grant para un usuario con `ROLE_ADMIN`):
+una global.
+
+<!-- stack:auth=keycloak -->
+Plantilla (Keycloak password grant para un usuario con `ROLE_ADMIN`):
 
 ```json
 {
@@ -107,6 +119,49 @@ una global. Plantilla (Keycloak password grant para un usuario con `ROLE_ADMIN`)
 Variante **client-credentials** (sin usuario): `grant_type=client_credentials` y sin
 `username`/`password`. Cuando un solo client emite todos los roles, igual genera una entrada por
 rol apuntando al mismo token si el diseño no distingue credenciales.
+<!-- /stack -->
+
+<!-- stack:auth=cognito -->
+Plantilla (Cognito `InitiateAuth` con `USER_PASSWORD_AUTH` para un usuario en el grupo `admin`).
+El grupo del usuario viaja en el claim `cognito:groups` y mapea al rol. Guarda el **access token**
+(`AuthenticationResult.AccessToken`), que es el que valida el resource server:
+
+```json
+{
+  "name": "Token — admin",
+  "request": {
+    "method": "POST",
+    "header": [
+      { "key": "Content-Type", "value": "application/x-amz-json-1.1" },
+      { "key": "X-Amz-Target", "value": "AWSCognitoIdentityProviderService.InitiateAuth" }
+    ],
+    "url": "https://cognito-idp.{region}.amazonaws.com/",
+    "body": {
+      "mode": "raw",
+      "raw": "{\n  \"AuthFlow\": \"USER_PASSWORD_AUTH\",\n  \"ClientId\": \"{appClientId}\",\n  \"AuthParameters\": {\n    \"USERNAME\": \"{adminUser}\",\n    \"PASSWORD\": \"{adminPassword}\"\n  }\n}"
+    }
+  },
+  "event": [
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('token 200', () => pm.response.to.have.status(200));",
+          "pm.globals.set('token_admin', pm.response.json().AuthenticationResult.AccessToken);"
+        ]
+      }
+    }
+  ]
+}
+```
+
+Notas Cognito: el app client debe tener habilitado el flujo `USER_PASSWORD_AUTH`. Si el app client
+tiene *secret*, `InitiateAuth` exige además un `SECRET_HASH` en `AuthParameters` (usa un app client
+sin secret para pruebas de Postman). Para flujos máquina-a-máquina usa un app client de tipo
+*client-credentials* contra el dominio hospedado: `POST https://{userPoolDomain}/oauth2/token` con
+`grant_type=client_credentials` (Cognito no soporta `password` grant en el endpoint `/oauth2/token`).
+<!-- /stack -->
 
 ---
 

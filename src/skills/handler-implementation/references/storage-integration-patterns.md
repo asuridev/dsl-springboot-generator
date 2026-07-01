@@ -284,11 +284,16 @@ curl -s -X DELETE "http://localhost:8080/products/{id}/images/{imageId}" \
 ${RUNTIME} exec ${SYSTEM}-devtools mc ls --recursive local/{store-name}
 # La clave borrada no debe aparecer
 
+<!-- stack:database=postgresql -->
 # 4. Verificar que el registro fue removido de la DB
 ${RUNTIME} exec ${SYSTEM}-devtools psql -h postgres -U postgres -d {db} \
   -c "SELECT id FROM {bc}.product_images WHERE id = '{imageId}'"
 # Debe retornar 0 filas
+<!-- /stack -->
 ```
+
+> Para el comando exacto de verificación en DB según el motor seleccionado (MySQL, SQL Server,
+> Oracle), usa la sección correspondiente de `references/infra-validation-guide.md`.
 
 **Si MinIO no responde o el bucket no existe:**
 ```bash

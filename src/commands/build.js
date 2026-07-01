@@ -33,6 +33,7 @@ const { readBcYaml } = require('../utils/bc-yaml-reader');
 const { updateContextFiles } = require('../generators/context-updater');
 const { deployToClaudeCode } = require('../utils/claude-code-deployer');
 const { deployToOpenCode } = require('../utils/opencode-deployer');
+const { filterStackMarkersInDir } = require('../utils/skill-reference-filter');
 const { readOpenApiYaml, readAsyncApiYaml, readInternalApiYaml } = require('../utils/arch-yaml-reader');
 const { validateIntegrationCoherence, reportDiagnostics, validateOpenApiUseCases } = require('@dsl/contract');
 const { validateTypeResolution } = require('../utils/type-resolution-validator');
@@ -671,7 +672,21 @@ async function buildCommand(options = {}) {
     }
 
     // ── Phase 3 skill + agent deployment ────────────────────────────────────
-    const skillsSrcDir = path.join(__dirname, '..', 'skills');
+    // Las referencias de las skills marcan sus bloques tech-específicos con
+    // comentarios `<!-- stack:dim=val -->`. Se stagean una vez en un dir temporal
+    // y se filtran según el stack seleccionado; todos los destinos (.agents/,
+    // .github/, .claude/, .opencode/) copian desde el dir staged, así heredan el
+    // contenido condicionado sin transformar cada destino por separado.
+    const skillsSrcDirRaw = path.join(__dirname, '..', 'skills');
+    let skillsSrcDir = skillsSrcDirRaw;
+    let skillsStagedDir = null;
+    if (await fs.pathExists(skillsSrcDirRaw)) {
+      skillsStagedDir = path.join(outputDir, '.dsl-tmp', 'skills');
+      await fs.emptyDir(skillsStagedDir);
+      await fs.copy(skillsSrcDirRaw, skillsStagedDir, { overwrite: true });
+      await filterStackMarkersInDir(skillsStagedDir, resolvedConfig);
+      skillsSrcDir = skillsStagedDir;
+    }
     if (await fs.pathExists(skillsSrcDir)) {
       const skillsDestDir = path.join(outputDir, '.agents', 'skills');
       // emptyDir first so a re-deploy drops skill dirs that no longer exist in
@@ -704,6 +719,11 @@ async function buildCommand(options = {}) {
 
     // ── Phase 3 OpenCode project deploy (skills + agents) ────────────────────
     await deployToOpenCode(agentsSrcDir, skillsSrcDir, outputDir, logger);
+
+    // Limpiar el staging temporal de skills (ya copiado a los 4 destinos).
+    if (skillsStagedDir) {
+      await fs.remove(path.join(outputDir, '.dsl-tmp'));
+    }
 
     // ── Phase 13: context files for Phase 3 agents ───────────────────────────
     logger.info('Phase 13 — generating CLAUDE.md / AGENTS.md for Phase 3 agents…');
