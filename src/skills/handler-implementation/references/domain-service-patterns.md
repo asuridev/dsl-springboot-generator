@@ -75,13 +75,25 @@ src/main/java/{package}/{bc-name}/domain/services/
 
 > El directorio `domain/services/` **no es generado por la Fase 2**. Lo creas tú en la Fase 3.
 
+> **Inyección sin Spring en el dominio.** El generador emite dos anotaciones marcador en
+> `{package}.shared.domain.annotations`: `@ApplicationComponent` (la llevan los handlers) y
+> `@DomainComponent` (para domain services que necesitan inyección). `UseCaseConfig` las registra
+> como beans vía `@ComponentScan(includeFilters = …)`. Este es el mecanismo canónico: usar
+> `@DomainComponent` en un domain service lo hace inyectable **sin** importar `@Component`/`@Service`
+> de Spring en la capa de dominio.
+
 ### Convenciones (extraídas de AGENTS.md)
 
 - **Sin Lombok** en clases de dominio
 - **Stateless** — sin campos de instancia mutables
-- **Sin anotaciones de Spring** (`@Service`, `@Component`) directamente — salvo que necesites
-  inyección de repositorios, en cuyo caso puedes usar `@Component` al ser un servicio que
-  coordina puertos de salida
+- **Sin anotaciones de Spring** (`@Service`, `@Component`) — el dominio no debe importar Spring.
+  Si el service necesita **inyección** de puertos (repositorios), anótalo con **`@DomainComponent`**
+  (`{package}.shared.domain.annotations.DomainComponent`): es la anotación marcador que emite el
+  generador y que `UseCaseConfig` component-scanea (`includeFilters`), por lo que el service se
+  registra como bean de Spring **sin** que el dominio dependa de Spring. Es el análogo de
+  `@ApplicationComponent`, que ya usan todos los handlers. Un service puro sin dependencias no
+  necesita anotación (se instancia con `new`); si prefieres que sea bean, también puede llevar
+  `@DomainComponent`.
 - **Sin dependencias de infraestructura** (JPA, HTTP, mensajería) — solo interfaces de dominio
 - Nombre: `{ConceptName}Service` o `{ConceptName}DomainService` si hay ambigüedad con la capa de aplicación
 
@@ -120,7 +132,7 @@ public class SlugGeneratorService {
 **Uso en el handler:**
 ```java
 // En CreateCategoryCommandHandler (application/usecases)
-private final SlugGeneratorService slugGenerator; // new SlugGeneratorService() o @Component
+private final SlugGeneratorService slugGenerator; // new SlugGeneratorService() o bean vía @DomainComponent
 
 public void handle(CreateCategoryCommand command) {
     String slug = slugGenerator.generate(command.name());
@@ -136,7 +148,9 @@ Para lógica que necesita consultar persistencia pero coordina múltiples aggreg
 
 ```java
 // domain/services/CategoryAvailabilityService.java
-@Component  // necesario para inyección de ProductRepository
+import {package}.shared.domain.annotations.DomainComponent;
+
+@DomainComponent  // registrado por UseCaseConfig → inyectable sin acoplar el dominio a Spring
 public class CategoryAvailabilityService {
 
     private final ProductRepository productRepository;
@@ -187,7 +201,7 @@ public void handle(DeactivateCategoryCommand command) {
 - [ ] ¿El servicio depende solo de interfaces de dominio (repositorios como puertos), no de JPA ni HTTP?
 - [ ] ¿El flujo en `flows.md` hace referencia implícita o explícita a esta lógica compartida?
 - [ ] ¿Todos los imports compilan: repositorios de dominio, errores tipados, value objects,
-      `UUID`, `Instant`, `BigDecimal`, `Normalizer`, `Component`, etc.?
+      `UUID`, `Instant`, `BigDecimal`, `Normalizer`, `DomainComponent` (si el service es bean), etc.?
 - [ ] ¿El handler que lo inyecta importa el service y conserva las firmas generadas?
 
 Si todas son verdaderas → crea el domain service.
