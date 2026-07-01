@@ -29,11 +29,11 @@ public class <%= controllerName %> {
 %>
 
     /**
-     * <%= op.summary %>
+     * <%- op.summary %>
      */
     @<%- op.httpAnnotation %>(<%- pathArg %>)
 <% if (!(op.returnType && op.returnType.indexOf('ResponseEntity<') === 0)) { %>    @ResponseStatus(<%= op.httpStatus %>)
-<% } %>    <% if (op.isInternal) { %>@Operation(hidden = true)<% } else { %>@Operation(summary = "<%= op.summary %>")<% } %>
+<% } %>    <% if (op.isInternal) { %>@Operation(hidden = true)<% } else { %>@Operation(summary = <%- op.summaryLiteral %>)<% } %>
 <% if (op.preAuthorize) { %>    @PreAuthorize("<%- op.preAuthorize %>")
 <% } %><% if (op.idempotency) { %>    @Idempotent(header = "<%- op.idempotency.header %>", ttl = "<%- op.idempotency.ttl %>")
 <% } %>    public <%- op.returnType %> <%= op.methodName %>(<%- op.methodParams %>) {

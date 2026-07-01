@@ -5,7 +5,7 @@ const { renderAndWrite } = require('../utils/template-engine');
 const { toPascalCase, toCamelCase, toPackagePath } = require('../utils/naming');
 const { mapType, resolveCanonicalReturnType } = require('../utils/type-mapper');
 const { buildOpenApiOperationMap } = require('@dsl/contract');
-const { escapeJavaString } = require('../utils/java');
+const { escapeJavaString, javaStringLiteral } = require('../utils/java');
 
 const TEMPLATES_DIR = path.join(__dirname, '..', '..', 'templates');
 
@@ -51,7 +51,7 @@ function buildOpsMap(openApiDoc) {
       queryParams,
       hasRequestBody: !!operation.requestBody,
       primaryResponseCode: parseInt(primaryCode, 10),
-      summary: operation.summary || operationId,
+      summary: (operation.summary || operationId).replace(/\s+/g, ' ').trim(),
       responseSchemaRef,
       isResponseArray,
     });
@@ -676,6 +676,7 @@ function buildOperation(uc, agg, openApiOp, commonPrefix, repoMethods, bcYaml = 
     httpStatus: httpStatus((isAsyncJobTracking || isAsyncFireForget) ? 202 : primaryResponseCode),
     methodName: toCamelCase(uc.trigger.operationId),
     summary,
+    summaryLiteral: javaStringLiteral(summary),
     isCommand: !isQuery,
     isScaffold,
     returnType: effectiveReturnType,
@@ -926,6 +927,7 @@ function buildInternalOperation(uc, internalApiOp, commonPrefix, agg, repoMethod
     httpStatus: httpStatus(primaryResponseCode),
     methodName: toCamelCase(uc.trigger.operationId),
     summary,
+    summaryLiteral: javaStringLiteral(summary),
     isCommand,
     isScaffold: true,
     returnType,
