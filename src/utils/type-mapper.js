@@ -291,10 +291,11 @@ function mapToPostgres(type, prop = {}) {
  *
  * @param {string} type  canonical type (e.g. "String(100)", "Uuid", "Decimal")
  * @param {object} prop  field metadata (precision/scale for Decimal)
- * @param {string} dbId  database engine id (postgresql|mysql|sqlserver|oracle|h2)
+ * @param {string} dbId  database engine id (postgresql|mysql|mariadb|sqlserver|oracle|h2)
  */
 function mapToSqlType(type, prop = {}, dbId = 'postgresql') {
-  const engine = dbId === 'h2' ? 'postgresql' : dbId;
+  // H2 runs in PostgreSQL compat mode; MariaDB is SQL-compatible with MySQL.
+  const engine = dbId === 'h2' ? 'postgresql' : dbId === 'mariadb' ? 'mysql' : dbId;
   const stringMatch = STRING_N_RE.exec(type);
   const n = stringMatch ? stringMatch[1] : null;
   const dec = `${prop.precision || 19}, ${prop.scale || 4}`;

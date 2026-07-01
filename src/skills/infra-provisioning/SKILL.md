@@ -27,7 +27,7 @@ sus CLI tools respondan.
 
 | Guía (`references/`) | Contenido |
 |---|---|
-| `infra-validation-guide.md` | Cheatsheet de comandos CLI exactos por servicio: PostgreSQL, MySQL, SQL Server, Oracle, Kafka, RabbitMQ, Redis, Keycloak, MinIO y reinicio/health de la app Spring Boot; patrones del contenedor `devtools` |
+| `infra-validation-guide.md` | Cheatsheet de comandos CLI exactos por servicio: PostgreSQL, MySQL, MariaDB, SQL Server, Oracle, Kafka, RabbitMQ, Redis, Keycloak, MinIO y reinicio/health de la app Spring Boot; patrones del contenedor `devtools` |
 
 ## Flujo de verificación (Paso 0b)
 

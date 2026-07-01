@@ -10,6 +10,8 @@ devtools:
     - postgres
 <% } else if (databaseType === 'mysql') { %>
     - mysql
+<% } else if (databaseType === 'mariadb') { %>
+    - mariadb
 <% } else if (databaseType === 'sqlserver') { %>
     - sqlserver
 <% } else if (databaseType === 'oracle') { %>

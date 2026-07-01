@@ -1,0 +1,4 @@
+{
+  "description": "DB engine = MariaDB. Same arch as db-mysql. MariaDB uses a dedicated driver/dialect/URL (mariadb-java-client, MariaDBDialect, jdbc:mariadb) in build.gradle + application*.yaml, but reuses MySQL's SQL dialect via aliasing, so the JPA columnDefinition and the V1 reliability Flyway migration DDL are byte-identical to db-mysql. Flyway support comes from the flyway-mysql module.",
+  "compileGeneratedJava": false
+}

@@ -1,0 +1,4 @@
+{
+  "description": "DB engine = MySQL. Reuses the outbox+idempotency arch to exercise the MySQL SQL dialect: build.gradle (mysql-connector-j + flyway-mysql), application*.yaml (MySQLDialect + jdbc:mysql URL), JPA columnDefinition (LONGTEXT text, omitted uuid columnDefinition), and the V1 reliability Flyway migration DDL (CHAR(36)/LONGTEXT/DATETIME/TINYINT(1), plain CREATE INDEX). First golden parametrized by DB engine — validates MySQL support end to end.",
+  "compileGeneratedJava": false
+}

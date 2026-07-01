@@ -35,6 +35,9 @@ run_sql() {
 <% } else if (databaseType === 'mysql') { -%>
   ${RUNTIME} exec -i "${SYSTEM}-devtools" \
     mysql -h mysql -u "${DB_USER}" "-p${DB_PASS}" "${DB_NAME}"
+<% } else if (databaseType === 'mariadb') { -%>
+  ${RUNTIME} exec -i "${SYSTEM}-devtools" \
+    mariadb -h mariadb -u "${DB_USER}" "-p${DB_PASS}" "${DB_NAME}"
 <% } else if (databaseType === 'sqlserver') { -%>
   ${RUNTIME} exec -i "${SYSTEM}-devtools" \
     sqlcmd -S sqlserver,1433 -U "${DB_USER}" -P "${DB_PASS}" -d "${DB_NAME}" -C -b

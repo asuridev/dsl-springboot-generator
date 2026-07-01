@@ -2,6 +2,7 @@
 const packages = ['bash', 'curl', 'jq', 'netcat-openbsd'];
 if (databaseType === 'postgresql') packages.push('postgresql-client');
 if (databaseType === 'mysql') packages.push('mysql-client');
+if (databaseType === 'mariadb') packages.push('mariadb-client');
 if (requestIdempotencyEnabled) packages.push('redis');
 if (broker === 'kafka') packages.push('kcat');
 const packageLines = packages.map((p, i) =>

@@ -30,6 +30,21 @@ services:
       - mysql-data:/var/lib/mysql
     networks:
       - <%= systemName %>-network
+<% } else if (databaseType === 'mariadb') { %>
+  mariadb:
+    image: <%= mariadbImage %>
+    container_name: <%= systemName %>-mariadb
+    environment:
+      MARIADB_DATABASE: <%= databaseName %>
+      MARIADB_USER: <%= databaseUsername %>
+      MARIADB_PASSWORD: <%= databasePassword %>
+      MARIADB_ROOT_PASSWORD: <%= databasePassword %>
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+    networks:
+      - <%= systemName %>-network
 <% } else if (databaseType === 'sqlserver') { %>
   sqlserver:
     image: <%= sqlserverImage %>
@@ -70,6 +85,8 @@ volumes:
   postgres-data:
 <% } else if (databaseType === 'mysql') { %>
   mysql-data:
+<% } else if (databaseType === 'mariadb') { %>
+  mariadb-data:
 <% } else if (databaseType === 'sqlserver') { %>
   sqlserver-data:
 <% } else if (databaseType === 'oracle') { %>

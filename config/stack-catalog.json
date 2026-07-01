@@ -43,6 +43,21 @@
       "cliValidateCmd": "mysql -h mysql -u {user} -p{pass} {db} -e 'SELECT 1'"
     },
     {
+      "id": "mariadb",
+      "label": "MariaDB",
+      "gradleDependency": "runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'",
+      "driverClass": "org.mariadb.jdbc.Driver",
+      "dialect": "org.hibernate.dialect.MariaDBDialect",
+      "defaultPort": 3306,
+      "jdbcPrefix": "jdbc:mariadb",
+      "jdbcUrlPattern": "jdbc:mariadb://{host}:{port}/{db}",
+      "defaultUser": "postgres",
+      "defaultPassword": "postgres",
+      "cliTool": "mariadb",
+      "cliVia": "devtools",
+      "cliValidateCmd": "mariadb -h mariadb -u {user} -p{pass} {db} -e 'SELECT 1'"
+    },
+    {
       "id": "sqlserver",
       "label": "SQL Server",
       "gradleDependency": "runtimeOnly 'com.microsoft.sqlserver:mssql-jdbc'",
@@ -129,6 +144,7 @@
   "dockerImages": {
     "postgres": "postgres:16-alpine",
     "mysql": "mysql:8.0",
+    "mariadb": "mariadb:11",
     "sqlserver": "mcr.microsoft.com/mssql/server:2022-latest",
     "oracle": "gvenzl/oracle-free:23-slim",
     "kafka": "confluentinc/cp-kafka:7.6.0",

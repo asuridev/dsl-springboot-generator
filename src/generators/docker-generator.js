@@ -61,6 +61,7 @@ function buildDockerContext(resolvedConfig, dockerImages, opts = {}) {
     // Docker image versions (from catalog)
     postgresImage: dockerImages.postgres,
     mysqlImage: dockerImages.mysql,
+    mariadbImage: dockerImages.mariadb,
     sqlserverImage: dockerImages.sqlserver,
     oracleImage: dockerImages.oracle,
     kafkaImage: dockerImages.kafka,

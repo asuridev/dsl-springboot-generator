@@ -71,13 +71,15 @@ const DIALECTS = {
 /**
  * Returns the dialect token bundle for a database id.
  * H2 runs in PostgreSQL compatibility mode (MODE=PostgreSQL), so it reuses the
- * PostgreSQL tokens. Unknown ids fall back to PostgreSQL.
+ * PostgreSQL tokens. MariaDB is SQL-compatible with MySQL, so it reuses the MySQL
+ * tokens. Unknown ids fall back to PostgreSQL.
  *
  * @param {string} dbId
  * @returns {object}
  */
 function getSqlDialect(dbId) {
   if (dbId === 'h2') return DIALECTS.postgresql;
+  if (dbId === 'mariadb') return DIALECTS.mysql;
   return DIALECTS[dbId] || DIALECTS.postgresql;
 }
 
@@ -107,6 +109,7 @@ const JPA_COLUMN_TYPES = {
 
 function getJpaColumnTypes(dbId) {
   if (dbId === 'h2') return JPA_COLUMN_TYPES.postgresql;
+  if (dbId === 'mariadb') return JPA_COLUMN_TYPES.mysql;
   return JPA_COLUMN_TYPES[dbId] || JPA_COLUMN_TYPES.postgresql;
 }
 
@@ -119,7 +122,7 @@ function getJpaColumnTypes(dbId) {
  * `tables` must be ordered child→parent (collection/child tables before aggregate
  * roots). Only the Oracle branch relies on that ordering; PostgreSQL cascades and
  * MySQL/SQL Server disable FK enforcement, so they are order-independent. H2 reuses
- * the PostgreSQL form (PostgreSQL compatibility mode).
+ * the PostgreSQL form (PostgreSQL compatibility mode); MariaDB reuses the MySQL form.
  *
  * @param {string} dbId
  * @param {string[]} tables  physical table names, child→parent order
@@ -127,7 +130,7 @@ function getJpaColumnTypes(dbId) {
  */
 function getTruncateStatements(dbId, tables) {
   if (!Array.isArray(tables) || tables.length === 0) return [];
-  const id = dbId === 'h2' ? 'postgresql' : dbId;
+  const id = dbId === 'h2' ? 'postgresql' : dbId === 'mariadb' ? 'mysql' : dbId;
   switch (id) {
     case 'mysql':
       return [

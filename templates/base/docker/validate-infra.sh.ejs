@@ -46,6 +46,11 @@ check "MySQL connectivity" \
   ${RUNTIME} exec "${SYSTEM}-devtools" \
   mysql -h mysql -u "${DB_USER}" "-p${DB_PASS}" "${DB_NAME}" -e "SELECT 1"
 
+<% } else if (databaseType === 'mariadb') { -%>
+check "MariaDB connectivity" \
+  ${RUNTIME} exec "${SYSTEM}-devtools" \
+  mariadb -h mariadb -u "${DB_USER}" "-p${DB_PASS}" "${DB_NAME}" -e "SELECT 1"
+
 <% } else if (databaseType === 'sqlserver') { -%>
 check "SQL Server connectivity" \
   ${RUNTIME} exec "${SYSTEM}-devtools" \

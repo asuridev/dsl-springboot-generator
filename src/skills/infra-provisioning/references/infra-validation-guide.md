@@ -82,6 +82,26 @@ ${RUNTIME} exec ${SYSTEM}-devtools mysql -h mysql -u postgres -ppostgres ${DB} \
 ```
 <!-- /stack -->
 
+<!-- stack:database=mariadb -->
+### MariaDB
+
+```bash
+# Verificar conectividad
+${RUNTIME} exec ${SYSTEM}-devtools mariadb -h mariadb -u postgres -ppostgres ${DB} -e "SELECT 1"
+
+# Listar tablas
+${RUNTIME} exec ${SYSTEM}-devtools mariadb -h mariadb -u postgres -ppostgres ${DB} -e "SHOW TABLES"
+
+# Contar registros
+${RUNTIME} exec ${SYSTEM}-devtools mariadb -h mariadb -u postgres -ppostgres ${DB} \
+  -e "SELECT COUNT(*) FROM {table}"
+
+# Ver último registro
+${RUNTIME} exec ${SYSTEM}-devtools mariadb -h mariadb -u postgres -ppostgres ${DB} \
+  -e "SELECT * FROM {table} ORDER BY created_at DESC LIMIT 1"
+```
+<!-- /stack -->
+
 <!-- stack:database=sqlserver -->
 ### SQL Server
 
@@ -358,6 +378,9 @@ ${COMPOSE} logs --tail=50 postgres
 <!-- /stack -->
 <!-- stack:database=mysql -->
 ${COMPOSE} logs --tail=50 mysql
+<!-- /stack -->
+<!-- stack:database=mariadb -->
+${COMPOSE} logs --tail=50 mariadb
 <!-- /stack -->
 <!-- stack:database=sqlserver -->
 ${COMPOSE} logs --tail=50 sqlserver

@@ -1,0 +1,8 @@
+{
+  "packageName": "com.test",
+  "javaVersion": "21",
+  "springBootVersion": "3.4.5",
+  "database": "mysql",
+  "broker": "kafka",
+  "systemName": "test-event-system"
+}
