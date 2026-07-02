@@ -42,8 +42,8 @@ y validados, no solo el primero. Las convenciones de arquitectura están en `AGE
                 ORQUESTADOR  (pre-flight: identifica BC + ./gradlew compileJava)
         ── Fase 1 (paralelo) ───────────────────────────────────────────
         todo-implementer  (Pasos A,B,C,C2,D,E)   ║   infra-provisioner (Paso 0b)
-        ── Fase 2 (fan-out por flujo, requiere F1 verde) ────────────────
-        2a batch validate (paralelo, read-only):  flow-validator(FL-1) ║ … ║ flow-validator(FL-N)
+        ── Fase 2 (validación secuencial por flujo, requiere F1 verde) ──
+        2a validate (secuencial, reset por flujo): flow-validator(validate, [todos los flujos]) → valida FL-1..N uno a uno
         2b fix-pass (un solo agente):              flow-validator(fix, [flujos rojos]) → corrige cada flujo secuencialmente
         ── Fase 3 (paralelo, requiere F2 verde) ────────────────────────
         java-quality-auditor (calidad Java)      ║   postman-builder (Paso G)
@@ -57,15 +57,17 @@ y validados, no solo el primero. Las convenciones de arquitectura están en `AGE
 - **Fase 1 → Fase 2**: los `flow-validator` solo arrancan cuando `todo-implementer` devolvió
   `compiles: true` **y** `infra-provisioner` devolvió `status: ready`. Ambos son prerequisitos: no
   se puede validar sin código implementado ni sin infraestructura.
-- **Fan-out por flujo (Fase 2)**: el orquestador deja la app levantada y la DB limpia **una sola vez**
-  (compila + reinicia + health + `./reset-db.sh`) y luego lanza **un `flow-validator` por flujo**
-  `FL-{BC}-{N}`. El reset trunca dominio + outbox/idempotencia para que los `Given` de los flujos se
-  sostengan (datos residuales de un run previo causan falsos `failures[]`); no existe en H2. El batch
-  `validate` es **read-only y paralelizable** (no compila/reinicia/edita/resetea) y **debe terminar completo**
-  antes de cualquier fix. Si hubo flujos rojos, el fix-loop lo ejecuta **un único** `flow-validator`
-  en modo `fix` que recibe el **conjunto de flujos rojos** y los corrige **secuencialmente (un flujo
-  a la vez)**, porque el árbol de código, el Gradle daemon y la app son compartidos. **El orquestador
-  no edita código**; delega todos los fixes en esa única invocación. Validate precede siempre al fix.
+- **Validación secuencial por flujo (Fase 2)**: el orquestador deja la app levantada y sana **una
+  sola vez** (compila + reinicia + health) y luego lanza **un único `flow-validator`** con **la lista
+  de todos los flujos** `FL-{BC}-{N}`. Ese validador corre `./reset-db.sh` **antes de cada flujo**
+  (trunca dominio + outbox/idempotencia para que los `Given` se sostengan; validar secuencial con
+  reset por flujo evita además colisiones de clave única y lecturas del "último global" entre flujos;
+  no existe en H2 → reinicia la app entre flujos). La pasada `validate` **no compila/edita** (solo
+  resetea la DB) y **debe terminar** antes de cualquier fix. Si hubo flujos rojos, el fix-loop lo
+  ejecuta **un único** `flow-validator` en modo `fix` que recibe el **conjunto de flujos rojos** y los
+  corrige **secuencialmente (un flujo a la vez)**, porque el árbol de código, el Gradle daemon y la
+  app son compartidos. **El orquestador no edita código**; delega todos los fixes en esa única
+  invocación. Validate precede siempre al fix.
 - **Fase 2 → Fase 3**: la calidad y Postman solo arrancan con todos los escenarios de todos los
   flujos verdes.
 - **Paralelismo seguro en Fase 3**: `java-quality-auditor` edita `.java`; `postman-builder` solo
@@ -80,7 +82,7 @@ y validados, no solo el primero. Las convenciones de arquitectura están en `AGE
 | `logic-implementation` (orquestador) | Coordina el DAG, surfacea bloqueos al usuario | esta skill (`orchestration`) |
 | `todo-implementer` | Completa los `// TODO` (Pasos A–E + C2), deja el proyecto compilando | `handler-implementation` |
 | `infra-provisioner` | Levanta y verifica la infraestructura (Paso 0b) | `infra-provisioning` |
-| `flow-validator` | Valida **todos** los escenarios end-to-end (Paso F): en modo `validate` (read-only) sobre **un** flujo, o en modo `fix` (serial) sobre el **conjunto de flujos rojos**, corrigiéndolos uno a la vez | `flow-validation` (+ `infra-provisioning`, `handler-implementation`) |
+| `flow-validator` | Valida **todos** los escenarios end-to-end (Paso F): en modo `validate` (secuencial, reset por flujo) sobre la **lista de todos los flujos**, o en modo `fix` (serial) sobre el **conjunto de flujos rojos**, corrigiéndolos uno a la vez | `flow-validation` (+ `infra-provisioning`, `handler-implementation`) |
 | `java-quality-auditor` | Audita y ajusta la calidad del código Java (no-conductual) | `java-quality-audit` |
 | `postman-builder` | Emite las colecciones Postman (Paso G) | `postman-authoring` |
 
@@ -97,15 +99,15 @@ orquestador** decide entonces detener el DAG y consultar al usuario.
 |---|---|---|
 | `infra-provisioner` | bc-name (contexto) | `{ status: ready\|failed, runtime, services: [{name,state}], blockers[] }` |
 | `todo-implementer` | bc-name | `{ todosImplemented, compiles, domainServices[], blockers[] }` |
-| `flow-validator` | bc-name + modo + flujo(s): en `validate` un flow id (`FL-{BC}-{N}`); en `fix` la lista de flujos rojos | `validate`: `{ flow: {id, scenarios:{A,B,…}}, failures[], blockers[] }` · `fix`: el mismo resultado por cada flujo corregido |
+| `flow-validator` | bc-name + modo + flujos: en `validate` la lista de todos los flujos del BC; en `fix` la lista de flujos rojos | `validate`/`fix`: por cada flujo `{ flow: {id, scenarios:{A,B,…}}, failures[], blockers[] }` |
 | `java-quality-auditor` | bc-name | `{ issuesFixed[], compiles, remaining[] }` |
 | `postman-builder` | bc-name | `{ files[], rolesCovered[], blockers[] }` |
 
 ### Gating que aplica el orquestador
 - Tras **Fase 1**: si `todo-implementer.blockers` o `infra-provisioner.status == failed` → detener
   y `AskUserQuestion`.
-- Tras **Fase 2**: espera a que **todos** los validadores del batch `validate` terminen y consolida
-  sus handoffs. Si algún flujo trae `blockers[]` → detener y `AskUserQuestion`. Si el batch dejó
+- Tras **Fase 2**: espera a que la pasada `validate` (único `flow-validator`) termine y consolida su
+  handoff por flujo. Si algún flujo trae `blockers[]` → detener y `AskUserQuestion`. Si quedaron
   flujos con `failures[]`, lanza **una sola** pasada `fix` (un único `flow-validator` que corrige
   todos los flujos rojos secuencialmente, un flujo a la vez); si tras ella persisten `failures[]`,
   detener y llevar el detalle al usuario. No avanzar a Fase 3 con escenarios en rojo.
@@ -127,16 +129,17 @@ harnesses. Solo cambia el **mecanismo de spawn**.
 - Para lanzar un especialista, el orquestador usa el tool **`Task`** indicando el `subagent_type`
   correspondiente (`todo-implementer`, `infra-provisioner`, `flow-validator`,
   `java-quality-auditor`, `postman-builder`).
-- Para **paralelizar** (Fase 1, el batch `validate` de la Fase 2 y la Fase 3), emite las llamadas
-  `Task` **en el mismo turno** (varios tool calls en un solo mensaje). El runtime las ejecuta
-  concurrentemente y el orquestador recibe todos los resultados antes de continuar.
-- En la **Fase 2** el orquestador deja la app levantada y la DB limpia una sola vez (incluye
-  `./reset-db.sh`), lanza **un `Task` de
-  `flow-validator` por flujo en modo `validate`** (todos en un turno) y **espera a que todos
-  terminen**. Para los flujos que vuelvan rojos, lanza **un único `Task` de `flow-validator` en modo
+- Para **paralelizar** (Fase 1 y Fase 3), emite las llamadas `Task` **en el mismo turno** (varios
+  tool calls en un solo mensaje). El runtime las ejecuta concurrentemente y el orquestador recibe
+  todos los resultados antes de continuar. **La Fase 2 no se paraleliza**: `validate` es una sola
+  `Task` secuencial.
+- En la **Fase 2** el orquestador deja la app levantada y sana una sola vez (compila + reinicia +
+  health; el reset de la DB lo hace el validador por flujo), lanza **un único `Task` de
+  `flow-validator` en modo `validate`** con la **lista de todos los flujos** y **espera a que
+  termine**. Para los flujos que vuelvan rojos, lanza **un único `Task` de `flow-validator` en modo
   `fix`** con la **lista de flujos rojos** (no uno por flujo); ese agente los corrige secuencialmente
   y el orquestador espera a que termine. **El orquestador nunca edita código por su cuenta** ni
-  arranca el fix antes de que el batch `validate` haya terminado completo.
+  arranca el fix antes de que la pasada `validate` haya terminado.
 - El orquestador recoge el resultado de cada `Task` (el mensaje final del subagente) y aplica el
   gating de arriba. Solo el orquestador habla con el usuario.
 
@@ -145,13 +148,14 @@ harnesses. Solo cambia el **mecanismo de spawn**.
   su propio mecanismo de subagentes/sub-tareas.
 - La instrucción es **agnóstica**: "lanza el agente `todo-implementer` y el agente
   `infra-provisioner` en paralelo; cuando ambos terminen y compile + infra estén listos, deja la app
-  levantada y lanza un `flow-validator` en modo `validate` por cada flujo `FL-{BC}-{N}` en paralelo;
-  cuando TODOS terminen, si hay flujos rojos lanza un único `flow-validator` en modo `fix` con la
-  lista de flujos rojos que los corrige uno a la vez; cuando todos los escenarios de todos los flujos
-  estén verdes, lanza `java-quality-auditor` y `postman-builder` en paralelo; finalmente reporta".
-- Si un runtime no soporta paralelismo real, ejecuta el batch `validate` de Fase 2 (y los pares de
-  Fase 1 y Fase 3) de forma secuencial respetando las mismas dependencias —validate antes que fix,
-  fix siempre serial—; el resultado es equivalente.
+  levantada y lanza un único `flow-validator` en modo `validate` con la lista de todos los flujos
+  `FL-{BC}-{N}`, que los recorre uno a uno reseteando la DB antes de cada flujo; cuando termine, si
+  hay flujos rojos lanza un único `flow-validator` en modo `fix` con la lista de flujos rojos que los
+  corrige uno a la vez; cuando todos los escenarios de todos los flujos estén verdes, lanza
+  `java-quality-auditor` y `postman-builder` en paralelo; finalmente reporta".
+- Si un runtime no soporta paralelismo real, ejecuta también los pares de Fase 1 y Fase 3 de forma
+  secuencial respetando las mismas dependencias —validate (ya secuencial) antes que fix, fix siempre
+  serial—; el resultado es equivalente.
 - El rol de "único interlocutor con el usuario" lo mantiene el orquestador: los especialistas
   devuelven `blockers[]`/`failures[]` y nunca preguntan.
 

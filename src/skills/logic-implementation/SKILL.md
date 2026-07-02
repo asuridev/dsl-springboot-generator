@@ -4,9 +4,10 @@ description: >
   Punto de entrada de la Fase 3 del pipeline DSL: orquesta la implementación completa de un bounded
   context generado por la Fase 2 lanzando agentes especialistas en un DAG (Fase 1 en paralelo:
   `todo-implementer` completa los `// TODO: implement business logic` e `infra-provisioner` levanta la
-  infraestructura; Fase 2: fan-out de un `flow-validator` por flujo —batch `validate` paralelo
-  read-only + una única pasada `fix` secuencial que un solo agente aplica sobre todos los flujos
-  rojos— que valida todos los escenarios de cada flujo; Fase 3 en
+  infraestructura; Fase 2: un `flow-validator` en modo `validate` recorre secuencialmente todos los
+  flujos —reseteando la DB antes de cada uno— y, si hay rojos, una única pasada `fix` secuencial que
+  un solo agente aplica sobre todos los flujos rojos, validando todos los escenarios de cada flujo;
+  Fase 3 en
   paralelo: `java-quality-auditor` audita la calidad Java y `postman-builder` emite las colecciones
   Postman). Es el único interlocutor con el usuario. Esta skill debe usarse cuando el usuario diga
   "implementa el BC X", "completa los TODO del bounded context Y", "fase 3 para el BC Z", "implementa
@@ -64,42 +65,42 @@ Espera a que **ambos** terminen. Revisa sus handoffs:
 - Si `infra-provisioner` devuelve `status: failed` → **detente** y reporta al usuario el
   servicio que no levanta. No avances a la Fase 2 sin infra operativa.
 
-### Fase 2 — fan-out por flujo (requiere Fase 1 verde)
+### Fase 2 — validación secuencial por flujo (requiere Fase 1 verde)
 
-La Fase 2 se valida con **un `flow-validator` por flujo** `FL-{BC}-{N}`, en dos sub-pasos: un batch
-paralelo read-only y, si hace falta, **una sola pasada de fix secuencial** que un único agente
-aplica sobre todos los flujos rojos. Los validadores comparten una sola app corriendo, un Gradle
-daemon, una DB y un árbol de código, por eso el batch es **solo lectura** y los fixes ocurren en una
-única invocación que corrige **un flujo a la vez**.
+La Fase 2 se valida con **un solo `flow-validator`** que recibe **todos los flujos** `FL-{BC}-{N}` del
+BC, en dos sub-pasos: una pasada `validate` que recorre los flujos **uno a la vez** (reseteando la DB
+antes de cada uno) y, si hace falta, **una sola pasada de fix secuencial** que aplica los arreglos
+sobre todos los flujos rojos. Todo comparte una sola app corriendo, un Gradle daemon, una DB y un
+árbol de código, por eso `validate` **no edita ni compila** (solo resetea la DB entre flujos) y los
+fixes ocurren en una única invocación que corrige **un flujo a la vez**.
 
-**Antes del batch** (responsabilidad tuya, no de los validadores): deja la app corriendo con el
-código actual y sana, y la DB en estado limpio, **una sola vez**:
+**Antes de validar** (responsabilidad tuya): deja la app corriendo con el código actual y sana,
+**una sola vez** (el reset de la DB ya no va aquí — lo hace el validador por flujo):
 ```bash
 ./gradlew compileJava
 # App en contenedor: ${COMPOSE} restart app   |   App local: reinicia el proceso bootRun
 curl -sf http://localhost:8080/actuator/health | jq .status
-./reset-db.sh   # trunca tablas de dominio + outbox/idempotencia (preserva el esquema)
 ```
-El reset deja la DB en el estado que asumen los `Given` de los flujos ("No existe Category con
-slug …"). Sin él, datos residuales de un run previo hacen que escenarios "create" reciban 409 en
-vez de 201 y se reporten como falsos `failures[]`. El estado de la DB lo posee **el orquestador**,
-no los validadores: truncar datos no es "editar código", así que no contradice la regla de no
-editar durante la Fase 2. Para H2 (in-memory) `reset-db.sh` no existe — reinicia la app para
-recrear el esquema vacío.
+El validador corre `./reset-db.sh` **antes de cada flujo**, dejando la DB en el estado que asumen los
+`Given` ("No existe Category con slug …"). Sin ese reset, datos de un flujo previo (o de un run
+anterior) harían que escenarios "create" reciban 409 en vez de 201 y se reporten como falsos
+`failures[]`; validar secuencial con reset por flujo también evita que dos flujos colisionen sobre la
+misma clave única. Truncar datos no es "editar código", así que no contradice la regla de no editar
+durante la Fase 2. Para H2 (in-memory) `reset-db.sh` no existe — el validador reinicia la app entre
+flujos para recrear el esquema vacío.
 
-**Fase 2a — batch `validate` (paralelo, read-only).** Enumera los flujos del BC y lanza **un
-`flow-validator` en modo `validate` por flujo, todas las llamadas `Task` en el mismo turno**:
+**Fase 2a — pasada `validate` (secuencial, un solo agente).** Enumera los flujos del BC y lanza **una
+sola** `Task` de `flow-validator` en modo `validate` con **la lista de todos los flujos**:
 ```bash
 grep '^## FL-' arch/{bc-name}/{bc-name}-flows.md
 ```
-Cada validador ejecuta las requests de su flujo y verifica side effects **sin compilar, reiniciar ni
-editar**, y devuelve `{ flow: {id, scenarios}, failures[], blockers[] }`. **Espera a que TODOS los
-validadores terminen** y consolida el estado por flujo **antes de tocar nada**. No arranques ningún
-fix mientras quede un validador corriendo: comparten la misma app, el mismo Gradle daemon y el mismo
-árbol de código, y editar/recompilar a media validación los rompe.
+Ese validador recorre los flujos **uno a la vez** (reset por flujo), ejecuta las requests de cada uno
+y verifica side effects **sin compilar ni editar**, y devuelve por flujo
+`{ flow: {id, scenarios}, failures[], blockers[] }`. **Espera a que termine** y consolida el estado
+por flujo **antes de tocar nada**.
 
 **Fase 2b — fix-pass `fix` (un solo agente, secuencial, solo si hubo rojos).** Cuando ya tengas
-consolidados los reportes de **todos** los validadores, si hubo flujos con `failures[]` lanza **UNA
+consolidado el reporte del validador, si hubo flujos con `failures[]` lanza **UNA
 sola** invocación de `flow-validator` en modo `fix`, pasándole la **lista de todos los flujos rojos**
 y sus `failures[]`. Ese único agente corre el fix-loop (compila/reinicia/edita/revalida) sobre
 **cada flujo, uno a la vez** (sin solaparlos), hasta dejarlos todos verdes. No lances varios `fix` en
@@ -133,9 +134,9 @@ Las **reglas inviolables** y los criterios de **"cuándo detenerse"** están en 
 orquestador, además:
 
 - **No implementas lógica de negocio tú mismo** — delegas en los especialistas.
-- **No editas código tú mismo — nunca**, ni siquiera durante el fix-pass de la Fase 2. Recoges los
-  reportes de los validadores y delegas TODOS los fixes en la única invocación `flow-validator(fix)`.
-  No arrancas un fix hasta que **todos** los validadores del batch `validate` hayan terminado.
+- **No editas código tú mismo — nunca**, ni siquiera durante el fix-pass de la Fase 2. Recoges el
+  reporte del validador y delegas TODOS los fixes en la única invocación `flow-validator(fix)`.
+  No arrancas un fix hasta que la pasada `validate` haya terminado.
 - **Eres el único que pregunta al usuario.** Los especialistas son no-interactivos: si encuentran
   un bloqueo lo devuelven en `blockers[]` y terminan. Tú decides cuándo detener el DAG y consultar.
 - **No saltas fases.** Fase 2 solo arranca con Fase 1 verde; Fase 3 solo con Fase 2 verde.
