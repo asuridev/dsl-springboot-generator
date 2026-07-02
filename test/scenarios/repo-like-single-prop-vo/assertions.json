@@ -1,0 +1,17 @@
+{
+  "src/main/java/com/test/catalog/infrastructure/persistence/entities/ProductJpa.java": {
+    "_comment": "A LIKE_CONTAINS filter over a single-property value object (SKU -> String(50)) is allowed: the VO flattens to one scalar column named after the field, so the JPQL LIKE is unambiguous. Guards the @dsl/contract validateRepositoryFilters relaxation (v0.3.1) end-to-end against real generator output.",
+    "contains": [
+      "@Column(name = \"sku\", nullable = false)",
+      "private String sku;"
+    ]
+  },
+  "src/main/java/com/test/catalog/infrastructure/persistence/repositories/ProductJpaRepository.java": {
+    "contains": [
+      "LOWER(p.name) LIKE LOWER(CONCAT('%', CAST(:search AS string), '%')) OR LOWER(CAST(p.sku AS string)) LIKE LOWER(CONCAT('%', CAST(:search AS string), '%'))"
+    ],
+    "notContains": [
+      "// TODO: write @Query"
+    ]
+  }
+}
