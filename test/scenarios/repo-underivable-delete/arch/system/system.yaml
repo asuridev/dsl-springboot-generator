@@ -1,0 +1,18 @@
+system:
+  name: test-repo-underivable-delete-system
+  description: Test system for repository method-derivability validation (BC-167).
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

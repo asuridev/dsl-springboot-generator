@@ -60,4 +60,33 @@ function assertJavaIdentifier(name, context, fail) {
   }
 }
 
-module.exports = { JAVA_RESERVED, JAVA_IDENTIFIER_RE, assertJavaIdentifier };
+// Mirror naming.js toPascalCase (kept local to avoid a circular require).
+function toPascalCaseLocal(str) {
+  return String(str)
+    .replace(/[-_\s]+(.)?/g, (_, c) => (c ? c.toUpperCase() : ''))
+    .replace(/^(.)/, (c) => c.toUpperCase());
+}
+
+/**
+ * Throw via `fail` if `name`, once PascalCased, is not a usable Java identifier.
+ *
+ * Unlike assertJavaIdentifier this is for names the generator TRANSFORMS before
+ * emitting — a use case name becomes `${PascalCase(name)}CommandHandler` /
+ * `…QueryHandler`, DTO and Result class names, etc. Spaces/hyphens/underscores are
+ * stripped by PascalCasing, so only the resulting token is validated (no
+ * reserved-word check: the emitted name is always suffixed). Catches e.g.
+ * "Search Products (Public)" → "SearchProducts(Public)".
+ */
+function assertDerivedJavaIdentifier(name, context, fail) {
+  if (typeof name !== 'string' || name.length === 0) return; // presence handled by caller
+  const derived = toPascalCaseLocal(name);
+  if (!JAVA_IDENTIFIER_RE.test(derived)) {
+    fail(
+      `${context} "${name}" does not yield a valid Java class name (it PascalCases to "${derived}"). ` +
+      `Use only letters, digits, spaces, hyphens or underscores and start with a letter — the generator ` +
+      `derives class names such as "${derived}CommandHandler"/"${derived}QueryHandler" from it.`
+    );
+  }
+}
+
+module.exports = { JAVA_RESERVED, JAVA_IDENTIFIER_RE, assertJavaIdentifier, assertDerivedJavaIdentifier };

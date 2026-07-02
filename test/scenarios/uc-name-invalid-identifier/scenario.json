@@ -1,0 +1,5 @@
+{
+  "description": "A use case name that PascalCases to an invalid Java class name (parentheses survive toPascalCase) would emit an unparseable handler class; the reader must reject it at load time (BC-098) instead of producing SearchProducts(Public)QueryHandler.java.",
+  "expectFailure": true,
+  "expectedErrorPattern": "does not yield a valid Java class name"
+}

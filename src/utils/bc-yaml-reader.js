@@ -5,12 +5,12 @@ const path = require('path');
 const yaml = require('js-yaml');
 const { PROHIBITED_TYPES } = require('./type-mapper');
 const { toPascalCase, toCamelCase, toSnakeCase } = require('./naming');
-const { assertJavaIdentifier } = require('./java-identifiers');
+const { assertJavaIdentifier, assertDerivedJavaIdentifier } = require('./java-identifiers');
 // [GAP-1] Per-input anatomy rules (multipart/File, maxSize, source enum, max,
 // SearchText, Range, key whitelist) are the single-source-of-truth shared
 // validator. We call it per use case and surface the first error via fail() to
 // preserve the load-time "Failed to load BC …" behavior.
-const { validateUseCaseInputAnatomy, validateRepositoryFilters } = require('@dsl/contract');
+const { validateUseCaseInputAnatomy, validateRepositoryFilters, validateRepositoryMethodDerivability } = require('@dsl/contract');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -300,6 +300,8 @@ function validate(doc, opts = {}) {
     }
     if (!uc.id) fail(`A useCases[] entry is missing required field "id".`);
     if (!uc.name) fail(`Use case "${uc.id}" is missing required field "name".`);
+    // The use case name is PascalCased into the handler/DTO class names.
+    assertDerivedJavaIdentifier(uc.name, `Use case "${uc.id || '<unnamed>'}" name`, fail);
     if (!uc.type) fail(`Use case "${uc.id}" is missing required field "type".`);
     if (!ALLOWED_UC_TYPES.has(uc.type)) {
       fail(`Use case "${uc.id}" has unsupported type "${uc.type}". Allowed: ${[...ALLOWED_UC_TYPES].join(', ')}.`);
@@ -1617,6 +1619,16 @@ function validateRepositories(doc) {
   {
     const filterErr = validateRepositoryFilters(doc).find((d) => d.level === 'error');
     if (filterErr) fail(filterErr.message);
+  }
+
+  // Method derivability is the shared @dsl/contract validateRepositoryMethodDerivability
+  // (BC-167, single source of truth with Phase 1): reject any repository method the
+  // generator cannot realize into a JPQL query (e.g. a bare `delete` with the wrong
+  // arity, or an invented name). This turns the runtime throw in repository-generator.js
+  // ("Unsupported repository method …") into a load-time "Failed to load BC …" error.
+  {
+    const derivErr = validateRepositoryMethodDerivability(doc).find((d) => d.level === 'error');
+    if (derivErr) fail(derivErr.message);
   }
 
   const ALLOWED_REPO_KEYS = new Set(['aggregate', 'queryMethods', 'methods', 'bulkOperations', 'autoDerive',

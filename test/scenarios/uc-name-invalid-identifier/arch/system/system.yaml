@@ -1,0 +1,18 @@
+system:
+  name: test-uc-name-invalid-identifier-system
+  description: Test system for use-case-name Java-identifier validation (BC-098).
+  domainType: core
+
+boundedContexts:
+  - name: catalog
+    type: core
+    purpose: Manages products.
+    aggregates:
+      - name: Product
+        root: Product
+        entities: []
+
+infrastructure:
+  database:
+    type: relational
+    isolationStrategy: schema-per-bc

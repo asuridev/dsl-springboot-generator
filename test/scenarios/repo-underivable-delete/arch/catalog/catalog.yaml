@@ -1,0 +1,32 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+
+repositories:
+  - aggregate: Product
+    methods:
+      - name: findById
+        signature: "findById(Uuid): Product?"
+      - name: save
+        signature: "save(Product): Product"
+      # Underivable: `delete` is inherited as deleteById only with exactly one param.
+      # With two params it has no derivable @Query -> BC-167.
+      - name: delete
+        params:
+          - name: id
+            type: Uuid
+          - name: actorId
+            type: Uuid
+        returns: void

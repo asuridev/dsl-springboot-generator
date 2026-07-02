@@ -1,0 +1,27 @@
+bc: catalog
+version: "1.0.0"
+
+aggregates:
+  - name: Product
+    root: Product
+    auditable: false
+    properties:
+      - name: id
+        type: Uuid
+        readOnly: true
+        defaultValue: generated
+      - name: name
+        type: String(200)
+        required: true
+
+useCases:
+  # The parentheses survive toPascalCase -> "SearchProducts(Public)" -> invalid Java
+  # class name. Must be rejected at load time (BC-098).
+  - id: UC-CAT-001
+    name: Search Products (Public)
+    type: query
+    aggregate: Product
+    trigger:
+      kind: http
+      operationId: searchProductsPublic
+    returns: Product?

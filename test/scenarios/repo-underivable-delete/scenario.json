@@ -1,0 +1,5 @@
+{
+  "description": "A repository method named `delete` with an arity other than one is not the inherited JpaRepository.deleteById and has no derivable @Query; the reader must reject it at load time (BC-167) instead of throwing deep in repository-generator.",
+  "expectFailure": true,
+  "expectedErrorPattern": "cannot derive into a JPQL query"
+}
