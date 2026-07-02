@@ -10,7 +10,7 @@ const { assertJavaIdentifier } = require('./java-identifiers');
 // SearchText, Range, key whitelist) are the single-source-of-truth shared
 // validator. We call it per use case and surface the first error via fail() to
 // preserve the load-time "Failed to load BC …" behavior.
-const { validateUseCaseInputAnatomy } = require('@dsl/contract');
+const { validateUseCaseInputAnatomy, validateRepositoryFilters } = require('@dsl/contract');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -1611,6 +1611,14 @@ function validateRepositories(doc) {
     fail(`"repositories" must be a list of repository entries, one per aggregate.`);
   }
 
+  // LIKE-only-on-scalar-fields is the shared @dsl/contract validateRepositoryFilters
+  // (single source of truth with Phase 1). Surface its first error via fail() to
+  // preserve the load-time "Failed to load BC …" behavior.
+  {
+    const filterErr = validateRepositoryFilters(doc).find((d) => d.level === 'error');
+    if (filterErr) fail(filterErr.message);
+  }
+
   const ALLOWED_REPO_KEYS = new Set(['aggregate', 'queryMethods', 'methods', 'bulkOperations', 'autoDerive',
     // marks repo as belonging to a readModel aggregate — generator skips write-method validation
     'readModel',
@@ -1695,12 +1703,6 @@ function validateRepositories(doc) {
     map.set('updatedAt', 'DateTime');
     map.set('deletedAt', 'DateTime');
     return map;
-  };
-
-  const isScalarComparableType = (type) => {
-    const base = typeBase(type);
-    const comparableCanonicalTypes = new Set(['Uuid', 'String', 'Text', 'Email', 'Integer', 'Long', 'Boolean', 'Decimal', 'DateTime', 'Date', 'Url']);
-    return comparableCanonicalTypes.has(base) || enumNames.has(base);
   };
 
   const resolveStatusQualifier = (qualifier, aggregate, ctx) => {
@@ -1970,13 +1972,10 @@ function validateRepositories(doc) {
                 if (!fieldMap.has(field)) {
                   fail(`${ctx} param "${p.name}" filterOn references unknown aggregate field "${field}".`);
                 }
-                if (p.operator && p.operator.startsWith('LIKE_')) {
-                  const fieldType = fieldMap.get(field);
-                  if (!isScalarComparableType(fieldType)) {
-                    fail(`${ctx} param "${p.name}" uses ${p.operator} on field "${field}" of type "${fieldType}". LIKE filters are supported only on scalar aggregate fields.`);
-                  }
-                }
               }
+              // LIKE-only-on-scalar-fields is validated by the shared @dsl/contract
+              // validateRepositoryFilters (single source of truth with Phase 1) —
+              // called once below and surfaced via fail().
             }
             if (p.type && /^List\[/.test(p.type) && p.operator && p.operator !== 'IN') {
               fail(`${ctx} param "${p.name}" is ${p.type}; list parameters require operator: IN.`);

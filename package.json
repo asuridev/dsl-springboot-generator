@@ -34,7 +34,7 @@
     "node": ">=14.0.0"
   },
   "dependencies": {
-    "@dsl/contract": "github:asuridev/dsl-contract#v0.2.0",
+    "@dsl/contract": "github:asuridev/dsl-contract#v0.3.0",
     "chalk": "^4.1.2",
     "commander": "^11.1.0",
     "ejs": "^3.1.9",
